@@ -1,0 +1,10 @@
+export { getInstanceConfig, isGlobalInstance, getGlobalInstanceId, resetInstanceConfig } from './instance-config';
+export type { InstanceConfig, InstanceType } from './instance-config';
+export { resolveHomeInstance, listInstances } from './resolution';
+export type { HomeInstanceInfo } from './resolution';
+export { emitDomainEvent, EVENT_TYPES } from './domain-events';
+export type { DomainEvent, EventType } from './domain-events';
+export { UpdateFacade, updateFacade } from './update-facade';
+export type { Mutation, MutationResult } from './update-facade';
+export { QueryFacade, queryFacade } from './query-facade';
+export type { QueryResult, DataSource } from './query-facade';
