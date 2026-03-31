@@ -30,6 +30,7 @@ import { HomeLocaleSelector } from "@/components/home-locale-selector";
 import { Textarea } from "@/components/ui/textarea";
 import { ImageUpload } from "@/components/image-upload";
 import type { FederationIdentityStatus } from "@/lib/federation-identities";
+import type { AppReleaseStatus } from "@/lib/app-release";
 
 export type SettingsInitialData = {
   name: string;
@@ -268,9 +269,11 @@ function VisibilityScopeRow({
 export function SettingsForm({
   initialData,
   initialFederationStatus,
+  initialAppReleaseStatus,
 }: {
   initialData: SettingsInitialData;
   initialFederationStatus: FederationIdentityStatus | null;
+  initialAppReleaseStatus: AppReleaseStatus | null;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -525,6 +528,82 @@ export function SettingsForm({
         </Button>
         <h1 className="text-2xl font-bold">Settings</h1>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5" />
+            App Version
+          </CardTitle>
+          <CardDescription>
+            This deployment advertises its current build and, when available, the latest upstream release so sovereign instances can stay in sync.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {initialAppReleaseStatus ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant={initialAppReleaseStatus.updateAvailable ? "destructive" : "secondary"}>
+                  {initialAppReleaseStatus.updateAvailable ? "Update Available" : "Up To Date"}
+                </Badge>
+                <span className="text-muted-foreground">
+                  Current <span className="font-medium text-foreground">{initialAppReleaseStatus.currentVersion}</span>
+                </span>
+                {initialAppReleaseStatus.latestVersion ? (
+                  <span className="text-muted-foreground">
+                    Latest <span className="font-medium text-foreground">{initialAppReleaseStatus.latestVersion}</span>
+                  </span>
+                ) : null}
+                <span className="text-muted-foreground">
+                  Channel <span className="font-medium text-foreground">{initialAppReleaseStatus.releaseChannel}</span>
+                </span>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-lg border p-3 text-sm">
+                  <p className="font-medium">Upstream Repo</p>
+                  <p className="mt-1 break-all text-muted-foreground">{initialAppReleaseStatus.upstreamRepo}</p>
+                </div>
+                <div className="rounded-lg border p-3 text-sm">
+                  <p className="font-medium">Deployment URL</p>
+                  <p className="mt-1 break-all text-muted-foreground">{initialAppReleaseStatus.deploymentUrl ?? "Not declared"}</p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                {initialAppReleaseStatus.latestUrl ? (
+                  <a
+                    href={initialAppReleaseStatus.latestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex"
+                  >
+                    <Button variant={initialAppReleaseStatus.updateAvailable ? "default" : "outline"}>
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      {initialAppReleaseStatus.updateAvailable ? "Update This Instance" : "View Releases"}
+                    </Button>
+                  </a>
+                ) : null}
+                {initialAppReleaseStatus.changelogUrl ? (
+                  <a
+                    href={initialAppReleaseStatus.changelogUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex"
+                  >
+                    <Button variant="ghost">
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      Changelog
+                    </Button>
+                  </a>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">Release metadata is unavailable for this deployment.</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="account" className="space-y-4">
         <TabsList className="grid grid-cols-6">

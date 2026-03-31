@@ -22,6 +22,7 @@ import { db } from "@/db";
 import { agents } from "@/db/schema";
 import { SettingsForm, type SettingsInitialData } from "./settings-form";
 import { buildFederationIdentityStatus, type FederationIdentityStatus } from "@/lib/federation-identities";
+import { buildAppReleaseStatus, type AppReleaseStatus } from "@/lib/app-release";
 
 /**
  * Generates a URL-safe fallback username from the user's display name.
@@ -118,5 +119,22 @@ export default async function SettingsPage() {
     initialFederationStatus = null;
   }
 
-  return <SettingsForm initialData={initialData} initialFederationStatus={initialFederationStatus} />;
+  let initialAppReleaseStatus: AppReleaseStatus | null = null;
+  try {
+    initialAppReleaseStatus = await buildAppReleaseStatus({
+      appName: "rivr-group",
+      defaultVersion: "0.1.0",
+      defaultUpstreamRepo: "rivr-social/rivr-group",
+    });
+  } catch {
+    initialAppReleaseStatus = null;
+  }
+
+  return (
+    <SettingsForm
+      initialData={initialData}
+      initialFederationStatus={initialFederationStatus}
+      initialAppReleaseStatus={initialAppReleaseStatus}
+    />
+  );
 }
