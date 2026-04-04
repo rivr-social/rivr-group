@@ -574,6 +574,32 @@ export async function getDocumentsForGroup(groupId: string, limit = 200): Promis
     .map((r) => resourceToDocument(r, groupId));
 }
 
+/**
+ * Returns the transcript document associated with an event, if one exists.
+ *
+ * The transcript is a regular group-owned document resource tagged with
+ * `resourceSubtype = event-transcript` and `metadata.eventId`.
+ */
+export async function getEventTranscriptDocument(eventId: string): Promise<Document | null> {
+  const result = await db.execute(sql`
+    SELECT r.*
+    FROM resources r
+    WHERE r.deleted_at IS NULL
+      AND r.type = 'document'
+      AND r.metadata->>'resourceSubtype' = 'event-transcript'
+      AND r.metadata->>'eventId' = ${eventId}
+    ORDER BY r.updated_at DESC
+    LIMIT 1
+  `);
+
+  const row = (result as Record<string, unknown>[])[0];
+  if (!row) return null;
+
+  const resource = rowToResource(row);
+  const metadata = (resource.metadata ?? {}) as Record<string, unknown>;
+  return resourceToDocument(resource, typeof metadata.groupId === "string" ? metadata.groupId : "");
+}
+
 // ─── Badge Helper Functions (Ledger-Backed) ──────────────────────────────────
 
 /**

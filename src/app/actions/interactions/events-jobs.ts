@@ -9,10 +9,130 @@ import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import {
   getCurrentUserId,
+  resolveInteractionTargetAgentId,
   toggleLedgerInteraction,
 } from "./helpers";
 import type { ActionResult, EventAttendee } from "./types";
 import { isUuid } from "./types";
+import { createDocumentResourceAction, updateResource } from "@/app/actions/create-resources";
+import { hasGroupWriteAccess } from "@/app/actions/resource-creation/helpers";
+
+async function hasActiveEventRsvp(userId: string, eventId: string): Promise<boolean> {
+  const rows = await db.execute(sql`
+    SELECT 1
+    FROM ledger
+    WHERE subject_id = ${userId}::uuid
+      AND verb = 'join'
+      AND is_active = true
+      AND metadata->>'interactionType' = 'rsvp'
+      AND metadata->>'targetId' = ${eventId}
+    LIMIT 1
+  `);
+
+  return (rows as Array<Record<string, unknown>>).length > 0;
+}
+
+async function resolveEventTranscriptContext(eventId: string) {
+  const [event] = await db
+    .select({
+      id: resources.id,
+      name: resources.name,
+      ownerId: resources.ownerId,
+      metadata: resources.metadata,
+      content: resources.content,
+    })
+    .from(resources)
+    .where(and(eq(resources.id, eventId), eq(resources.type, "event"), sql`${resources.deletedAt} IS NULL`))
+    .limit(1);
+
+  if (!event) return null;
+
+  const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
+  const groupId =
+    typeof eventMetadata.groupId === "string" && eventMetadata.groupId.trim()
+      ? eventMetadata.groupId
+      : event.ownerId;
+
+  const transcriptDocumentId =
+    typeof eventMetadata.transcriptDocumentId === "string" && eventMetadata.transcriptDocumentId.trim()
+      ? eventMetadata.transcriptDocumentId
+      : null;
+
+  return {
+    event,
+    eventMetadata,
+    groupId,
+    transcriptDocumentId,
+  };
+}
+
+async function ensureEventTranscriptDocument(userId: string, eventId: string) {
+  const context = await resolveEventTranscriptContext(eventId);
+  if (!context) {
+    return {
+      success: false,
+      message: "Event not found.",
+      error: { code: "NOT_FOUND" },
+    } as ActionResult;
+  }
+
+  const canWrite = await hasGroupWriteAccess(userId, context.groupId);
+  if (!canWrite) {
+    return {
+      success: false,
+      message: "You do not have permission to write group transcripts for this event.",
+      error: { code: "FORBIDDEN" },
+    } as ActionResult;
+  }
+
+  if (context.transcriptDocumentId) {
+    return {
+      success: true,
+      message: "Transcript document already exists.",
+      resourceId: context.transcriptDocumentId,
+    } as ActionResult;
+  }
+
+  const transcriptTitle = `${context.event.name} Transcript`;
+  const docResult = await createDocumentResourceAction({
+    groupId: context.groupId,
+    title: transcriptTitle,
+    description: `Collaborative transcript for ${context.event.name}.`,
+    content: `# ${transcriptTitle}\n\nCollaborative transcript for this meeting.\n`,
+    category: "meeting-transcript",
+    tags: ["meeting", "transcript", eventId],
+    showOnAbout: false,
+  });
+
+  if (!docResult.success || !docResult.resourceId) {
+    return docResult;
+  }
+
+  await updateResource({
+    resourceId: docResult.resourceId,
+    metadataPatch: {
+      resourceSubtype: "event-transcript",
+      eventId,
+      linkedPostId:
+        typeof context.eventMetadata.linkedPostId === "string" ? context.eventMetadata.linkedPostId : null,
+      transcriptUpdatedAt: new Date().toISOString(),
+      transcriptContributorIds: [userId],
+    },
+  });
+
+  await updateResource({
+    resourceId: eventId,
+    metadataPatch: {
+      transcriptDocumentId: docResult.resourceId,
+      transcriptionEnabled: true,
+    },
+  });
+
+  return {
+    ...docResult,
+    linkedDocumentId: docResult.resourceId,
+  } as ActionResult;
+}
 
 /**
  * Sets or clears RSVP status for an event.
@@ -35,12 +155,13 @@ export async function setEventRsvp(
 
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
+  const targetAgentId = await resolveInteractionTargetAgentId(eventId, "event", userId);
 
   const facadeResult = await updateFacade.execute(
     {
       type: 'setEventRsvp',
       actorId: userId,
-      targetAgentId: isUuid(eventId) ? eventId : userId,
+      targetAgentId,
       payload: { eventId, status },
     },
     async () => {
@@ -119,12 +240,13 @@ export async function applyToJob(jobId: string): Promise<ActionResult> {
 
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
+  const targetAgentId = await resolveInteractionTargetAgentId(jobId, "resource", userId);
 
   const facadeResult = await updateFacade.execute(
     {
       type: 'applyToJob',
       actorId: userId,
-      targetAgentId: userId,
+      targetAgentId,
       payload: { jobId },
     },
     async () => {
@@ -261,6 +383,93 @@ export async function fetchEventAttendees(eventId: string): Promise<EventAttende
     avatar: typeof row.avatar === "string" ? row.avatar : null,
     status: String(row.status ?? "going"),
   }));
+}
+
+export async function appendEventTranscriptAction(input: {
+  eventId: string;
+  text: string;
+  speakerLabel?: string | null;
+  source?: "manual" | "whisper" | "whisper-gateway";
+}): Promise<ActionResult> {
+  const userId = await getCurrentUserId();
+  if (!userId) return { success: false, message: "You must be logged in to update the transcript." };
+  if (!input.eventId?.trim() || !input.text?.trim()) {
+    return { success: false, message: "eventId and text are required." };
+  }
+
+  const context = await resolveEventTranscriptContext(input.eventId);
+  if (!context) {
+    return { success: false, message: "Event not found." };
+  }
+
+  const canWriteGroup = await hasGroupWriteAccess(userId, context.groupId);
+  const joinedEvent = await hasActiveEventRsvp(userId, input.eventId);
+  if (!canWriteGroup || !joinedEvent) {
+    return {
+      success: false,
+      message: "Only group members with an active RSVP can add transcript segments.",
+    };
+  }
+
+  const transcriptDocument =
+    context.transcriptDocumentId
+      ? { success: true, resourceId: context.transcriptDocumentId }
+      : await ensureEventTranscriptDocument(userId, input.eventId);
+
+  if (!transcriptDocument.success || !transcriptDocument.resourceId) {
+    return {
+      success: false,
+      message: "Unable to create the transcript document for this event.",
+      resourceId: transcriptDocument.resourceId,
+    };
+  }
+
+  const [documentRow] = await db
+    .select({
+      id: resources.id,
+      content: resources.content,
+      metadata: resources.metadata,
+    })
+    .from(resources)
+    .where(and(eq(resources.id, transcriptDocument.resourceId), sql`${resources.deletedAt} IS NULL`))
+    .limit(1);
+
+  if (!documentRow) {
+    return { success: false, message: "Transcript document not found." };
+  }
+
+  const existingMetadata = (documentRow.metadata ?? {}) as Record<string, unknown>;
+  const contributorIds = Array.isArray(existingMetadata.transcriptContributorIds)
+    ? existingMetadata.transcriptContributorIds.filter((value): value is string => typeof value === "string")
+    : [];
+  const timestamp = new Date().toISOString();
+  const label = input.speakerLabel?.trim() || "Member";
+  const source = input.source ?? "manual";
+  const segment = `\n\n## ${new Date(timestamp).toLocaleString()}\n**${label}** (${source})\n\n${input.text.trim()}\n`;
+  const nextContent = `${documentRow.content ?? ""}${segment}`;
+
+  const updateResult = await updateResource({
+    resourceId: transcriptDocument.resourceId,
+    content: nextContent,
+    metadataPatch: {
+      transcriptUpdatedAt: timestamp,
+      transcriptContributorIds: Array.from(new Set([...contributorIds, userId])),
+      eventId: input.eventId,
+      resourceSubtype: "event-transcript",
+      linkedPostId:
+        typeof context.eventMetadata.linkedPostId === "string" ? context.eventMetadata.linkedPostId : null,
+    },
+  });
+
+  if (!updateResult.success) {
+    return updateResult;
+  }
+
+  return {
+    ...updateResult,
+    resourceId: transcriptDocument.resourceId,
+    linkedDocumentId: transcriptDocument.resourceId,
+  };
 }
 
 /**

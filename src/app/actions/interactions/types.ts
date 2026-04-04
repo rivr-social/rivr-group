@@ -3,6 +3,8 @@ export type ActionResult = {
   message: string;
   active?: boolean;
   resourceId?: string;
+  linkedEventId?: string;
+  linkedDocumentId?: string;
   reactionType?: ReactionType | null;
 };
 

@@ -3,8 +3,9 @@
 import { and, eq, sql } from "drizzle-orm";
 import { auth } from "@/auth";
 import { db } from "@/db";
-import { ledger } from "@/db/schema";
+import { agents, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
+import { getFederationExecutionContext } from "@/lib/federation/execution-context";
 
 import type { ActionResult, TargetType } from "./types";
 import { isUuid } from "./types";
@@ -13,6 +14,11 @@ import { isUuid } from "./types";
  * Resolves the authenticated user ID from the active session.
  */
 export async function getCurrentUserId() {
+  const federationContext = getFederationExecutionContext();
+  if (federationContext?.actorId) {
+    return federationContext.actorId;
+  }
+
   const session = await auth();
   return session?.user?.id ?? null;
 }
@@ -78,4 +84,42 @@ export async function toggleLedgerInteraction(
     message: `${interactionType} added`,
     active: true,
   };
+}
+
+export async function resolveInteractionTargetAgentId(
+  targetId: string,
+  targetType: TargetType,
+  fallbackAgentId: string,
+): Promise<string> {
+  if (!isUuid(targetId)) {
+    return fallbackAgentId;
+  }
+
+  if (targetType === "person" || targetType === "group" || targetType === "ring") {
+    const [agent] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.id, targetId))
+      .limit(1);
+
+    return agent?.id ?? fallbackAgentId;
+  }
+
+  if (targetType === "comment") {
+    const [comment] = await db
+      .select({ subjectId: ledger.subjectId })
+      .from(ledger)
+      .where(eq(ledger.id, targetId))
+      .limit(1);
+
+    return comment?.subjectId ?? fallbackAgentId;
+  }
+
+  const [resource] = await db
+    .select({ ownerId: resources.ownerId })
+    .from(resources)
+    .where(eq(resources.id, targetId))
+    .limit(1);
+
+  return resource?.ownerId ?? fallbackAgentId;
 }

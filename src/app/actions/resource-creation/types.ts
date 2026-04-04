@@ -4,6 +4,8 @@ export interface ActionResult {
   success: boolean;
   message: string;
   resourceId?: string;
+  linkedEventId?: string;
+  linkedDocumentId?: string;
   error?: {
     code: string;
     details?: string;

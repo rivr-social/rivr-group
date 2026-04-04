@@ -25,8 +25,117 @@ import {
   createResourceWithLedger,
 } from "./helpers";
 import type { ActionResult } from "./types";
+import { createEventResource } from "./events";
+import { createDocumentResourceAction, updateResource } from "./lifecycle";
 
 const MAX_POST_CONTENT_LENGTH = 50000;
+
+async function maybeCreateLinkedMeetingBundle(params: {
+  actorId: string;
+  postId: string;
+  title: string;
+  content: string;
+  groupId?: string;
+  liveLocation?: { lat: number; lng: number } | null;
+  localeId?: string | null;
+  scopedLocaleIds?: string[];
+  scopedGroupIds?: string[];
+  scopedUserIds?: string[];
+  isGlobal?: boolean;
+}): Promise<Pick<ActionResult, "linkedEventId" | "linkedDocumentId" | "message"> | null> {
+  if (!params.groupId) return null;
+
+  const meetingTitle = params.title.trim() ? `Meeting: ${params.title.trim()}` : "Live Invite Meeting";
+  const start = new Date();
+  const meetingLocation = params.liveLocation
+    ? `Live location shared (${params.liveLocation.lat.toFixed(5)}, ${params.liveLocation.lng.toFixed(5)})`
+    : "Live location shared";
+
+  const eventResult = await createEventResource({
+    title: meetingTitle,
+    description: params.content.trim(),
+    date: start.toISOString().slice(0, 10),
+    time: start.toISOString(),
+    location: meetingLocation,
+    eventType: "in-person",
+    ownerId: params.groupId,
+    groupId: params.groupId,
+    localeId: params.localeId ?? null,
+    scopedLocaleIds: params.scopedLocaleIds,
+    scopedGroupIds: Array.from(new Set([params.groupId, ...(params.scopedGroupIds ?? [])])),
+    scopedUserIds: params.scopedUserIds,
+    isGlobal: params.isGlobal,
+  });
+
+  if (!eventResult.success || !eventResult.resourceId) {
+    return {
+      message: "Post created, but linked meeting creation failed.",
+    };
+  }
+
+  const transcriptResult = await createDocumentResourceAction({
+    groupId: params.groupId,
+    title: `${meetingTitle} Transcript`,
+    description: `Collaborative transcript for ${meetingTitle}.`,
+    content: `# ${meetingTitle} Transcript\n\nCollaborative transcript for this meeting.\n`,
+    category: "meeting-transcript",
+    tags: ["meeting", "transcript", eventResult.resourceId],
+    showOnAbout: false,
+  });
+
+  const transcriptDocumentId = transcriptResult.success ? transcriptResult.resourceId ?? undefined : undefined;
+
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+  await updateResource({
+    resourceId: params.postId,
+    metadataPatch: {
+      eventId: eventResult.resourceId,
+      linkedEventId: eventResult.resourceId,
+      transcriptDocumentId: transcriptDocumentId ?? null,
+      liveInviteMeetingCreatedAt: start.toISOString(),
+    },
+  });
+
+  await updateResource({
+    resourceId: eventResult.resourceId,
+    metadataPatch: {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      location: params.liveLocation
+        ? {
+            name: "Live location shared",
+            address: meetingLocation,
+            coordinates: params.liveLocation,
+          }
+        : meetingLocation,
+      linkedPostId: params.postId,
+      transcriptDocumentId: transcriptDocumentId ?? null,
+      transcriptionEnabled: Boolean(transcriptDocumentId),
+      meetingKind: "live-invite",
+    },
+  });
+
+  if (transcriptDocumentId) {
+    await updateResource({
+      resourceId: transcriptDocumentId,
+      metadataPatch: {
+        resourceSubtype: "event-transcript",
+        eventId: eventResult.resourceId,
+        linkedPostId: params.postId,
+        transcriptUpdatedAt: start.toISOString(),
+      },
+    });
+  }
+
+  return {
+    linkedEventId: eventResult.resourceId,
+    linkedDocumentId: transcriptDocumentId,
+    message: transcriptDocumentId
+      ? "Post created successfully with a linked meeting and transcript."
+      : "Post created successfully with a linked meeting.",
+  };
+}
 
 export async function createPostResource(input: {
   title?: string;
@@ -186,6 +295,23 @@ export async function createPostResource(input: {
   const actionResult = facadeResult.data as ActionResult;
 
   if (actionResult?.success && actionResult.resourceId) {
+    const linkedBundle =
+      isLive && input.groupId && !input.eventId
+        ? await maybeCreateLinkedMeetingBundle({
+            actorId: userId,
+            postId: actionResult.resourceId,
+            title: input.title?.trim() || fallbackTitle,
+            content: input.content,
+            groupId: input.groupId,
+            liveLocation: input.liveLocation,
+            localeId: input.localeId ?? null,
+            scopedLocaleIds,
+            scopedGroupIds,
+            scopedUserIds,
+            isGlobal: wantsGlobal,
+          })
+        : null;
+
     emitDomainEvent({
       eventType: EVENT_TYPES.POST_CREATED,
       entityType: "resource",
@@ -193,6 +319,15 @@ export async function createPostResource(input: {
       actorId: userId,
       payload: { postType: input.postType ?? "social", groupId: input.groupId ?? null },
     }).catch(() => {});
+
+    if (linkedBundle) {
+      return {
+        ...actionResult,
+        linkedEventId: linkedBundle.linkedEventId,
+        linkedDocumentId: linkedBundle.linkedDocumentId,
+        message: linkedBundle.message,
+      };
+    }
   }
 
   return actionResult;

@@ -7,12 +7,15 @@ import { fetchEventDetail, fetchAgent } from "@/app/actions/graph"
 import { fetchEventRsvpCount, fetchEventAttendees } from "@/app/actions/interactions"
 import { agentToEvent } from "@/lib/graph-adapters"
 import { buildResourcePageMetadata } from "@/lib/object-metadata"
+import { getEventTranscriptDocument } from "@/lib/queries/resources"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { EventDetailActions } from "@/components/event-detail-actions"
+import { EventTranscriptPanel } from "@/components/event-transcript-panel"
 import { EventToolbar } from "@/components/event-toolbar"
 import { EventDetailTabs } from "@/components/event-detail-tabs"
 import { buildEventStructuredData, serializeJsonLd } from "@/lib/structured-data"
+import { isTranscriptionConfigured } from "@/lib/transcription"
 
 /**
  * Event detail page with a two-column layout matching the demo design.
@@ -157,13 +160,14 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
   const organizerId = event.organizer || ""
   const creatorId = event.creator || ""
 
-  const [rsvpCount, attendees, organizer, creator] = await Promise.all([
+  const [rsvpCount, attendees, organizer, creator, transcriptDocument] = await Promise.all([
     fetchEventRsvpCount(id),
     fetchEventAttendees(id),
     organizerId ? fetchAgent(organizerId).catch(() => null) : Promise.resolve(null),
     creatorId && creatorId !== organizerId
       ? fetchAgent(creatorId).catch(() => null)
       : Promise.resolve(null),
+    getEventTranscriptDocument(id),
   ])
 
   // When creator and organizer are the same person, reuse the organizer fetch.
@@ -172,6 +176,9 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
     visibility: agent.visibility ?? null,
     organizerName: organizer?.name ?? undefined,
   })
+  const eventGroupId = typeof agent.metadata?.groupId === "string" ? agent.metadata.groupId : null
+  const transcriptionEnabled =
+    eventGroupId != null && (((agent.metadata ?? {}) as Record<string, unknown>).transcriptionEnabled === true || isTranscriptionConfigured())
 
   return (
     <div className="min-h-screen w-full flex flex-col items-center py-8 px-4">
@@ -367,6 +374,15 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
               />
             </div>
           </div>
+
+          {eventGroupId ? (
+            <EventTranscriptPanel
+              eventId={event.id}
+              initialTranscript={transcriptDocument?.content ?? ""}
+              transcriptDocumentId={transcriptDocument?.id ?? null}
+              transcriptionAvailable={transcriptionEnabled}
+            />
+          ) : null}
 
           {/* Tabbed content: About, Attendees, Feed, Announcements */}
           <EventDetailTabs

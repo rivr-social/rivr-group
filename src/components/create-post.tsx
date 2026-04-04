@@ -490,7 +490,7 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
       onPostCreated?.(newPost)
       handleCancel()
       setIsSubmitting(false)
-      toast({ title: "Post created successfully!" })
+      toast({ title: result.message || "Post created successfully!" })
       router.refresh()
     } catch {
       setIsSubmitting(false)
