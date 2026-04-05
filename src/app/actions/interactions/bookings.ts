@@ -7,7 +7,7 @@ import { resources, ledger } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { consumeBookingSlot, isBookingSlotAvailable } from "@/lib/booking-slots";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
 import { getCurrentUserId } from "./helpers";
 import type { ActionResult } from "./types";
 import { isUuid } from "./types";
@@ -70,7 +70,7 @@ export async function createBookingAction(input: {
       return { success: false, message: "You cannot book your own offering." };
     }
 
-    const facadeResult = await updateFacade.execute(
+    const facadeResult = await federatedWrite(
       {
         type: 'createBookingAction',
         actorId: userId,

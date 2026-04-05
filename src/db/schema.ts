@@ -1423,3 +1423,34 @@ export type NewGroupMatrixRoom = typeof groupMatrixRooms.$inferInsert;
 
 export type ContractRule = typeof contractRules.$inferSelect;
 export type NewContractRule = typeof contractRules.$inferInsert;
+
+/**
+ * MCP provenance log — append-only audit trail for every MCP tool invocation.
+ * Records actor, tool, args summary, result status, and timing.
+ */
+export const mcpProvenanceLog = pgTable(
+  'mcp_provenance_log',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    toolName: text('tool_name').notNull(),
+    actorId: uuid('actor_id').notNull(),
+    actorType: text('actor_type').notNull(),
+    authMode: text('auth_mode').notNull(),
+    controllerId: uuid('controller_id'),
+    argsSummary: jsonb('args_summary').$type<Record<string, unknown>>().default({}),
+    resultStatus: text('result_status').notNull(),
+    errorMessage: text('error_message'),
+    durationMs: integer('duration_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('mcp_provenance_log_tool_name_idx').on(table.toolName),
+    index('mcp_provenance_log_actor_id_idx').on(table.actorId),
+    index('mcp_provenance_log_actor_type_idx').on(table.actorType),
+    index('mcp_provenance_log_created_at_idx').on(table.createdAt),
+    index('mcp_provenance_log_result_status_idx').on(table.resultStatus),
+  ]
+);
+
+export type McpProvenanceLogRecord = typeof mcpProvenanceLog.$inferSelect;
+export type NewMcpProvenanceLogRecord = typeof mcpProvenanceLog.$inferInsert;

@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
 import {
   getCurrentUserId,
   resolveInteractionTargetAgentId,
@@ -157,7 +157,7 @@ export async function setEventRsvp(
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
   const targetAgentId = await resolveInteractionTargetAgentId(eventId, "event", userId);
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'setEventRsvp',
       actorId: userId,
@@ -242,7 +242,7 @@ export async function applyToJob(jobId: string): Promise<ActionResult> {
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
   const targetAgentId = await resolveInteractionTargetAgentId(jobId, "resource", userId);
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'applyToJob',
       actorId: userId,
@@ -505,7 +505,7 @@ export async function cancelEventAction(eventId: string): Promise<ActionResult> 
     return { success: false, message: "You do not have permission to cancel this event." };
   }
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'cancelEventAction',
       actorId: userId,

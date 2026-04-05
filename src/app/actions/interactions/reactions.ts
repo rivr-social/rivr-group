@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { ledger } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
 import {
   getCurrentUserId,
   toggleLedgerInteraction,
@@ -45,11 +45,11 @@ export async function toggleLikeOnTarget(
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  const facadeResult = await updateFacade.execute(
+  const writeResult = await federatedWrite(
     {
       type: 'toggleLikeOnTarget',
       actorId: userId,
-      targetAgentId: userId,
+      targetAgentId: targetId,
       payload: { targetId, targetType },
     },
     async () => {
@@ -59,8 +59,8 @@ export async function toggleLikeOnTarget(
     },
   );
 
-  if (!facadeResult.success) {
-    return { success: false, message: facadeResult.error ?? "Failed to toggle like." };
+  if (!writeResult.success) {
+    return { success: false, message: writeResult.error ?? "Failed to toggle like." };
   }
 
   emitDomainEvent({
@@ -71,7 +71,7 @@ export async function toggleLikeOnTarget(
     payload: { reactionType: 'like' },
   }).catch(() => {});
 
-  return facadeResult.data ?? { success: true, message: "like toggled" };
+  return writeResult.data ?? { success: true, message: "like toggled" };
 }
 
 export async function setReactionOnTarget(
@@ -85,11 +85,11 @@ export async function setReactionOnTarget(
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  const facadeResult = await updateFacade.execute(
+  const writeResult = await federatedWrite(
     {
       type: 'setReactionOnTarget',
       actorId: userId,
-      targetAgentId: userId,
+      targetAgentId: targetId,
       payload: { targetId, targetType, reactionType },
     },
     async () => {
@@ -149,8 +149,8 @@ export async function setReactionOnTarget(
     },
   );
 
-  if (!facadeResult.success) {
-    return { success: false, message: facadeResult.error ?? "Failed to set reaction." };
+  if (!writeResult.success) {
+    return { success: false, message: writeResult.error ?? "Failed to set reaction." };
   }
 
   emitDomainEvent({
@@ -158,10 +158,10 @@ export async function setReactionOnTarget(
     entityType: targetType,
     entityId: targetId,
     actorId: userId,
-    payload: { reactionType, active: facadeResult.data?.active },
+    payload: { reactionType, active: writeResult.data?.active },
   }).catch(() => {});
 
-  return facadeResult.data ?? { success: true, message: `${reactionType} toggled` };
+  return writeResult.data ?? { success: true, message: `${reactionType} toggled` };
 }
 
 export async function fetchReactionSummaries(
@@ -232,11 +232,11 @@ export async function toggleThankOnTarget(
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  const facadeResult = await updateFacade.execute(
+  const writeResult = await federatedWrite(
     {
       type: 'toggleThankOnTarget',
       actorId: userId,
-      targetAgentId: userId,
+      targetAgentId: targetId,
       payload: { targetId, targetType },
     },
     async () => {
@@ -244,8 +244,8 @@ export async function toggleThankOnTarget(
     },
   );
 
-  if (!facadeResult.success) {
-    return { success: false, message: facadeResult.error ?? "Failed to toggle thank." };
+  if (!writeResult.success) {
+    return { success: false, message: writeResult.error ?? "Failed to toggle thank." };
   }
 
   emitDomainEvent({
@@ -256,5 +256,5 @@ export async function toggleThankOnTarget(
     payload: { reactionType: 'thank' },
   }).catch(() => {});
 
-  return facadeResult.data ?? { success: true, message: "thank toggled" };
+  return writeResult.data ?? { success: true, message: "thank toggled" };
 }

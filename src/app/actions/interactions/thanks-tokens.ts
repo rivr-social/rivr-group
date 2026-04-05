@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
 import {
   getCurrentUserId,
 } from "./helpers";
@@ -31,11 +31,11 @@ export async function sendThanksTokenAction(
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  const result = await updateFacade.execute(
+  const result = await federatedWrite(
     {
       type: 'sendThanksTokenAction',
       actorId: userId,
-      targetAgentId: userId,
+      targetAgentId: recipientId,
       payload: { tokenId, recipientId, message, contextId },
     },
     async () => {

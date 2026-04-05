@@ -7,7 +7,7 @@ import { agents, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry, NewResource } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { updateProfileAction } from "@/app/actions/settings";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
 import {
   getCurrentUserId,
   toggleLedgerInteraction,
@@ -40,7 +40,7 @@ export async function updateMyProfile(payload: {
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, message: "You must be logged in to update your profile." };
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'updateMyProfile',
       actorId: userId,
@@ -126,7 +126,7 @@ export async function toggleSaveListing(listingId: string): Promise<ActionResult
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'toggleSaveListing',
       actorId: userId,
@@ -183,7 +183,7 @@ export async function createGalleryAction(input: {
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'createGalleryAction',
       actorId: userId,

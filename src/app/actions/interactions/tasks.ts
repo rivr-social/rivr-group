@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
 import {
   getCurrentUserId,
   toggleLedgerInteraction,
@@ -41,7 +41,7 @@ export async function claimTasksAction(taskIds: string[]): Promise<ActionResult>
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'claimTasksAction',
       actorId: userId,
@@ -181,7 +181,7 @@ export async function updateTaskStatus(
     statusPatch.completed = false;
   }
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: 'updateTaskStatus',
       actorId: userId,

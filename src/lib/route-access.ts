@@ -46,6 +46,8 @@ const PUBLIC_API_PREFIXES = [
   "/api/locations/suggest",
   "/.well-known/matrix",
   "/.well-known/universal-manifest.json",
+  "/.well-known/mcp",
+  "/api/mcp",
 ];
 
 export function isPublicPageRoute(pathname: string): boolean {

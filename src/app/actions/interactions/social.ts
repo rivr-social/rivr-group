@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { agents, ledger } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { inviteToGroupRoom, removeFromGroupRoom } from "@/lib/matrix-groups";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
 import {
   getCurrentUserId,
   toggleLedgerInteraction,
@@ -27,12 +27,12 @@ export async function toggleFollowAgent(agentId: string): Promise<ActionResult> 
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, message: "You must be logged in to connect with people." };
 
-  const facadeResult = await updateFacade.execute(
+  const writeResult = await federatedWrite(
     {
       type: "toggleFollowAgent",
       actorId: userId,
-      targetAgentId: userId,
-      payload: {},
+      targetAgentId: agentId,
+      payload: { agentId },
     },
     async () => {
       const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
@@ -42,11 +42,11 @@ export async function toggleFollowAgent(agentId: string): Promise<ActionResult> 
     }
   );
 
-  if (facadeResult.success && facadeResult.data) {
-    return facadeResult.data as ActionResult;
+  if (writeResult.success && writeResult.data) {
+    return writeResult.data as ActionResult;
   }
 
-  return { success: false, message: facadeResult.error ?? "Failed to toggle follow." };
+  return { success: false, message: writeResult.error ?? "Failed to toggle follow." };
 }
 
 /**
@@ -65,12 +65,12 @@ export async function toggleJoinGroup(groupId: string, type: "group" | "ring" = 
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, message: "You must be logged in to join." };
 
-  const facadeResult = await updateFacade.execute(
+  const writeResult = await federatedWrite(
     {
       type: "toggleJoinGroup",
       actorId: userId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { type },
     },
     async () => {
       const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
@@ -119,8 +119,8 @@ export async function toggleJoinGroup(groupId: string, type: "group" | "ring" = 
     }
   );
 
-  if (facadeResult.success && facadeResult.data) {
-    const data = facadeResult.data as ActionResult;
+  if (writeResult.success && writeResult.data) {
+    const data = writeResult.data as ActionResult;
     if (data.success) {
       await emitDomainEvent({
         eventType: data.active ? EVENT_TYPES.GROUP_MEMBER_JOINED : EVENT_TYPES.GROUP_MEMBER_LEFT,
@@ -133,7 +133,7 @@ export async function toggleJoinGroup(groupId: string, type: "group" | "ring" = 
     return data;
   }
 
-  return { success: false, message: facadeResult.error ?? "Failed to toggle group membership." };
+  return { success: false, message: writeResult.error ?? "Failed to toggle group membership." };
 }
 
 /**
@@ -210,16 +210,32 @@ export async function toggleHiddenContent(
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, message: "You must be logged in to hide content." };
 
-  const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
-  if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
+  const writeResult = await federatedWrite(
+    {
+      type: "toggleHiddenContent",
+      actorId: userId,
+      targetAgentId: targetId,
+      payload: { targetId, targetType, mode },
+    },
+    async () => {
+      const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
+      if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." } as ActionResult;
 
-  return toggleLedgerInteraction(
-    userId,
-    "view",
-    mode === "author" ? "hide-author" : "hide-post",
-    targetId,
-    targetType
+      return toggleLedgerInteraction(
+        userId,
+        "view",
+        mode === "author" ? "hide-author" : "hide-post",
+        targetId,
+        targetType
+      );
+    }
   );
+
+  if (writeResult.success && writeResult.data) {
+    return writeResult.data as ActionResult;
+  }
+
+  return { success: false, message: writeResult.error ?? "Failed to toggle hidden content." };
 }
 
 export async function fetchHiddenContentPreferences(): Promise<HiddenContentPreferences> {
