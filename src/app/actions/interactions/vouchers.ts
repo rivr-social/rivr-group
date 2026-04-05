@@ -7,7 +7,8 @@ import { agents, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry, NewResource } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { consumeBookingSlot, hasBookableSchedule, isBookingSlotAvailable, type BookingSelection } from "@/lib/booking-slots";
-import { emitDomainEvent, EVENT_TYPES, federatedWrite } from "@/lib/federation";
+import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { federatedWrite } from "@/lib/federation/remote-write";
 import {
   getCurrentUserId,
 } from "./helpers";
