@@ -1,0 +1,77 @@
+name: PR Metadata Guard
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+jobs:
+  validate-pr-metadata:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Validate required PR metadata
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.setFailed("No pull request payload found.");
+              return;
+            }
+
+            const body = pr.body || "";
+            const extract = (pattern) => {
+              const match = body.match(pattern);
+              return match ? match[1].trim().toLowerCase() : null;
+            };
+
+            const classification = extract(/^\s*`?change-classification`?\s*:\s*([a-z-]+)\s*$/im);
+            const promote = extract(/^\s*`?promote-to-monorepo`?\s*:\s*([a-z\/-]+)\s*$/im);
+            const affected = extract(/^\s*`?affected-sovereignty-types`?\s*:\s*(\[[^\]]+\])\s*$/im);
+            const interop = extract(/^\s*`?interop-impact`?\s*:\s*([a-z-]+)\s*$/im);
+
+            const allowedClassification = new Set(["shared-contract", "sovereign-specific", "deployment-only"]);
+            const allowedPromote = new Set(["yes", "no", "n/a"]);
+            const allowedInterop = new Set(["none", "schema", "federation", "permissions", "data-contract"]);
+
+            const errors = [];
+
+            if (!classification || !allowedClassification.has(classification)) {
+              errors.push("Missing/invalid `change-classification`.");
+            }
+
+            if (!promote || !allowedPromote.has(promote)) {
+              errors.push("Missing/invalid `promote-to-monorepo`.");
+            }
+
+            if (!affected || !/^\[[^\]]+\]$/.test(affected)) {
+              errors.push("Missing/invalid `affected-sovereignty-types` list.");
+            }
+
+            if (!interop || !allowedInterop.has(interop)) {
+              errors.push("Missing/invalid `interop-impact`.");
+            }
+
+            if (classification === "shared-contract" && promote === "n/a") {
+              errors.push("`promote-to-monorepo` cannot be `n/a` when `change-classification` is `shared-contract`.");
+            }
+
+            if (errors.length > 0) {
+              core.setFailed(
+                [
+                  "PR metadata requirements failed:",
+                  ...errors.map((e) => `- ${e}`),
+                  "",
+                  "Add these lines to the PR body using allowed values:",
+                  "`change-classification`: shared-contract|sovereign-specific|deployment-only",
+                  "`promote-to-monorepo`: yes|no|n/a",
+                  "`affected-sovereignty-types`: [global, person, group, family, locale, bioregional]",
+                  "`interop-impact`: none|schema|federation|permissions|data-contract",
+                ].join("\n"),
+              );
+              return;
+            }
+
+            core.info("PR metadata validation passed.");
