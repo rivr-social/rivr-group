@@ -38,6 +38,7 @@ export async function GET(request: Request) {
     homeBaseUrl: session.homeBaseUrl,
     displayName: actor?.name ?? "Federated user",
     image: actor?.image ?? null,
+    persona: session.persona ?? null,
     sessionToken: cookieToken,
   });
 }

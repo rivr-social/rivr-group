@@ -50,6 +50,7 @@ export async function POST(request: Request) {
       valid: true,
       displayName: validation.payload.displayName ?? null,
       manifestUrl: validation.payload.manifestUrl ?? null,
+      persona: validation.payload.persona ?? null,
       scope: validation.payload.scope,
       context: validation.payload["@context"],
       type: validation.payload["@type"],

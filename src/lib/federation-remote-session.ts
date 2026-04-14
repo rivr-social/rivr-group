@@ -13,6 +13,13 @@ export type RemoteViewerSessionPayload = {
   issuedAt: string;
   expiresAt: string;
   nonce: string;
+  persona?: FederatedAssertionPersonaContext;
+};
+
+export type FederatedAssertionPersonaContext = {
+  personaId: string;
+  personaDisplayName?: string;
+  parentAgentId: string;
 };
 
 export type FederatedAssertionPayload = {
@@ -26,6 +33,7 @@ export type FederatedAssertionPayload = {
   nonce: string;
   manifestUrl?: string;
   displayName?: string;
+  persona?: FederatedAssertionPersonaContext;
   scope: {
     login: true;
     capabilities: string[];
@@ -77,6 +85,7 @@ export function createFederatedAssertion(params: {
   audienceBaseUrl: string;
   manifestUrl?: string;
   displayName?: string;
+  persona?: FederatedAssertionPersonaContext;
   capabilityScopes?: string[];
   consentScopes?: string[];
   spatialFabricRefs?: string[];
@@ -95,6 +104,7 @@ export function createFederatedAssertion(params: {
     nonce: randomUUID(),
     manifestUrl: params.manifestUrl,
     displayName: params.displayName,
+    ...(params.persona ? { persona: params.persona } : {}),
     scope: {
       login: true,
       capabilities: params.capabilityScopes ?? ["federation.login", "federation.mutate"],
@@ -146,6 +156,7 @@ export function createRemoteViewerToken(params: {
   actorId: string;
   homeBaseUrl: string;
   localInstanceId: string;
+  persona?: FederatedAssertionPersonaContext;
   ttlMs?: number;
 }): string {
   const now = Date.now();
@@ -157,6 +168,7 @@ export function createRemoteViewerToken(params: {
     issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + (params.ttlMs ?? REMOTE_VIEWER_TTL_MS)).toISOString(),
     nonce: randomUUID(),
+    ...(params.persona ? { persona: params.persona } : {}),
   };
   return signPackedPayload(payload as unknown as Record<string, unknown>);
 }

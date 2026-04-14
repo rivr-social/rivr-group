@@ -7,6 +7,7 @@ import {
   createRemoteViewerToken,
   REMOTE_VIEWER_COOKIE_NAME,
   REMOTE_VIEWER_TTL_MS,
+  type FederatedAssertionPersonaContext,
 } from "@/lib/federation-remote-session";
 import { resolveRequestOrigin } from "@/lib/request-origin";
 
@@ -32,6 +33,7 @@ type RemoteAuthResult = {
   actorId?: string;
   homeBaseUrl?: string;
   displayName?: string;
+  persona?: FederatedAssertionPersonaContext;
   error?: string;
   errorCode?: string;
   bootstrap?: {
@@ -45,6 +47,7 @@ type VerificationResult = {
   valid: boolean;
   displayName?: string;
   manifestUrl?: string;
+  persona?: FederatedAssertionPersonaContext;
   error?: string;
 };
 
@@ -152,10 +155,29 @@ async function verifyActorAssertionWithHome(
       };
     }
 
+    // Extract persona context if present in the verification response
+    let persona: FederatedAssertionPersonaContext | undefined;
+    if (
+      data.persona &&
+      typeof data.persona === "object" &&
+      typeof (data.persona as Record<string, unknown>).personaId === "string" &&
+      typeof (data.persona as Record<string, unknown>).parentAgentId === "string"
+    ) {
+      const p = data.persona as Record<string, unknown>;
+      persona = {
+        personaId: p.personaId as string,
+        parentAgentId: p.parentAgentId as string,
+        ...(typeof p.personaDisplayName === "string"
+          ? { personaDisplayName: p.personaDisplayName }
+          : {}),
+      };
+    }
+
     return {
       valid: true,
       displayName: typeof data.displayName === "string" ? data.displayName : undefined,
       manifestUrl: typeof data.manifestUrl === "string" ? data.manifestUrl : undefined,
+      persona,
     };
   } catch (error) {
     return {
@@ -435,6 +457,7 @@ async function authenticateActor(
     actorId: context.actorId,
     homeBaseUrl: context.homeBaseUrl,
     localInstanceId: config.instanceId,
+    persona: verification.persona,
   });
 
   const primary = config.primaryAgentId
@@ -496,6 +519,7 @@ async function authenticateActor(
       actorId: context.actorId,
       homeBaseUrl: context.homeBaseUrl,
       displayName: verification.displayName,
+      persona: verification.persona,
       bootstrap,
     },
   };

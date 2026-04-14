@@ -7,7 +7,11 @@ import { resolveHomeInstance } from "@/lib/federation/resolution";
 import { authorizeFederationRequest } from "@/lib/federation-auth";
 import { runWithFederationExecutionContext } from "@/lib/federation/execution-context";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation/domain-events";
-import { REMOTE_VIEWER_COOKIE_NAME, validateRemoteViewerToken } from "@/lib/federation-remote-session";
+import {
+  REMOTE_VIEWER_COOKIE_NAME,
+  validateRemoteViewerToken,
+  type FederatedAssertionPersonaContext,
+} from "@/lib/federation-remote-session";
 import type {
   FederatedActorContext,
   FederatedInteractionAction,
