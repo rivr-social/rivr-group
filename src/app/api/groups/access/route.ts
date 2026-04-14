@@ -29,13 +29,13 @@
  * @see src/app/actions/group-admin.ts - admin-level group management
  */
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import {
   challengeGroupAccess,
   checkGroupMembership,
   revokeGroupMembership,
   renewGroupMembership,
 } from "@/app/actions/group-access";
+import { getAuthenticatedActorId } from "@/lib/server-auth";
 import {
   STATUS_BAD_REQUEST,
   STATUS_UNAUTHORIZED,
@@ -68,8 +68,8 @@ const UUID_RE =
  * ```
  */
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await getAuthenticatedActorId();
+  if (!actorId) {
     return NextResponse.json(
       { error: "Authentication required" },
       { status: STATUS_UNAUTHORIZED }
@@ -135,8 +135,8 @@ export async function POST(request: Request) {
  * ```
  */
 export async function GET(request: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await getAuthenticatedActorId();
+  if (!actorId) {
     return NextResponse.json(
       { error: "Authentication required" },
       { status: STATUS_UNAUTHORIZED }
@@ -178,8 +178,8 @@ export async function GET(request: Request) {
  * ```
  */
 export async function DELETE(request: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await getAuthenticatedActorId();
+  if (!actorId) {
     return NextResponse.json(
       { error: "Authentication required" },
       { status: STATUS_UNAUTHORIZED }
@@ -243,8 +243,8 @@ export async function DELETE(request: Request) {
  * ```
  */
 export async function PATCH(request: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await getAuthenticatedActorId();
+  if (!actorId) {
     return NextResponse.json(
       { error: "Authentication required" },
       { status: STATUS_UNAUTHORIZED }

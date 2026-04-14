@@ -9,7 +9,6 @@
  * `@node-rs/bcrypt`, `next/headers`, `drizzle-orm`
  */
 
-import { auth } from "@/auth";
 import { db } from "@/db";
 import { agents, ledger } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
@@ -19,6 +18,7 @@ import { headers } from "next/headers";
 import { rateLimit } from "@/lib/rate-limit";
 import { JoinType, type GroupJoinSettings, type JoinRequest } from "@/lib/types";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { getAuthenticatedActorId } from "@/lib/server-auth";
 
 // =============================================================================
 // Constants
@@ -72,6 +72,10 @@ type JoinRequestListResult = {
   requests?: JoinRequestRecord[];
 };
 
+async function requireActorId(): Promise<string | null> {
+  return getAuthenticatedActorId();
+}
+
 // =============================================================================
 // Server actions
 // =============================================================================
@@ -96,8 +100,8 @@ export async function challengeGroupAccess(
   groupId: string,
   password: string
 ): Promise<GroupAccessResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -109,14 +113,12 @@ export async function challengeGroupAccess(
     return { success: false, error: "Password is required." };
   }
 
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "challengeGroupAccess",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { password },
     },
     async () => {
   // Throttle brute-force attempts by combining network and account identity in the key.
@@ -238,8 +240,8 @@ export async function revokeGroupMembership(
   groupId: string,
   memberId: string
 ): Promise<GroupAccessResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -251,14 +253,12 @@ export async function revokeGroupMembership(
     return { success: false, error: "Invalid member identifier." };
   }
 
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "revokeGroupMembership",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { memberId },
     },
     async () => {
   // Only the member themselves or an admin of the group can revoke
@@ -332,8 +332,8 @@ export async function revokeGroupMembership(
 export async function renewGroupMembership(
   groupId: string
 ): Promise<GroupAccessResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -341,14 +341,12 @@ export async function renewGroupMembership(
     return { success: false, error: "Invalid group identifier." };
   }
 
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "renewGroupMembership",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { groupId },
     },
     async () => {
   // Renewal is only allowed if a password challenge succeeded at least once historically.
@@ -449,8 +447,8 @@ export async function renewGroupMembership(
 export async function checkGroupMembership(
   groupId: string
 ): Promise<MembershipCheckResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { isMember: false };
   }
 
@@ -458,7 +456,7 @@ export async function checkGroupMembership(
     return { isMember: false };
   }
 
-  const membership = await findActiveMembership(session.user.id, groupId);
+  const membership = await findActiveMembership(actorId, groupId);
   if (!membership) {
     return { isMember: false };
   }
@@ -479,8 +477,8 @@ export async function fetchGroupJoinRuntime(
     return { joined: true };
   }
 
-  const session = await auth();
-  if (!session?.user?.id || !groupId || !UUID_RE.test(groupId)) {
+  const actorId = await requireActorId();
+  if (!actorId || !groupId || !UUID_RE.test(groupId)) {
     return { joined: false };
   }
 
@@ -489,7 +487,7 @@ export async function fetchGroupJoinRuntime(
     .from(ledger)
     .where(
       and(
-        eq(ledger.subjectId, session.user.id),
+        eq(ledger.subjectId, actorId),
         eq(ledger.objectId, groupId),
         eq(ledger.verb, "join"),
         eq(ledger.isActive, true),
@@ -513,8 +511,8 @@ export async function requestGroupMembership(
     inviteToken?: string;
   }
 ): Promise<GroupAccessResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -522,14 +520,12 @@ export async function requestGroupMembership(
     return { success: false, error: "Invalid group identifier." };
   }
 
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "requestGroupMembership",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { options },
     },
     async () => {
   const [group] = await db
@@ -692,8 +688,8 @@ export async function requestGroupMembership(
 export async function fetchGroupJoinRequests(
   groupId: string
 ): Promise<JoinRequestListResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -701,7 +697,7 @@ export async function fetchGroupJoinRequests(
     return { success: false, error: "Invalid group identifier." };
   }
 
-  const isAdmin = await isGroupAdmin(session.user.id, groupId);
+  const isAdmin = await isGroupAdmin(actorId, groupId);
   if (!isAdmin) {
     return { success: false, error: "Only group admins can view join requests." };
   }
@@ -762,8 +758,8 @@ export async function reviewGroupJoinRequest(
   decision: "approved" | "rejected",
   adminNotes?: string
 ): Promise<{ success: boolean; error?: string }> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -771,14 +767,12 @@ export async function reviewGroupJoinRequest(
     return { success: false, error: "Invalid request identifier." };
   }
 
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "reviewGroupJoinRequest",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { requestId, decision, adminNotes },
     },
     async () => {
   const isAdmin = await isGroupAdmin(actorId, groupId);

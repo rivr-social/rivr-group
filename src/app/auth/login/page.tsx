@@ -44,6 +44,9 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [homeInstanceUrl, setHomeInstanceUrl] = useState("");
+  const [federatedLoading, setFederatedLoading] = useState(false);
+  const [setupGroupType, setSetupGroupType] = useState<"organization" | "family" | "ring">("organization");
   const searchParams = useSearchParams();
   const callbackUrl = safeRedirectUrl(searchParams.get("callbackUrl"));
   const isVerified = searchParams.get("verified") === "true";
@@ -69,6 +72,30 @@ export default function LoginPage() {
       setError("An unexpected error occurred. Please try again.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleFederatedLogin = () => {
+    if (!homeInstanceUrl || federatedLoading) return;
+    setError("");
+    setFederatedLoading(true);
+    try {
+      const home = new URL(homeInstanceUrl);
+      const callbackPath = (() => {
+        try {
+          const callback = new URL(callbackUrl, window.location.origin);
+          return callback.pathname + callback.search + callback.hash;
+        } catch {
+          return "/";
+        }
+      })();
+      window.location.href =
+        `/api/federation/sso/start?homeBaseUrl=${encodeURIComponent(home.origin)}` +
+        `&returnPath=${encodeURIComponent(callbackPath)}` +
+        `&groupType=${encodeURIComponent(setupGroupType)}`;
+    } catch {
+      setError("Enter a valid home instance URL (for example https://rivr.camalot.me).");
+      setFederatedLoading(false);
     }
   };
 
@@ -192,6 +219,47 @@ export default function LoginPage() {
             <Button variant="outline" className="w-full" asChild>
               <Link href="/auth/signup">Create new account</Link>
             </Button>
+
+            <div className="w-full space-y-2">
+              <Label htmlFor="home-instance-url" className="text-xs text-muted-foreground">
+                Log in with federated identity
+              </Label>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+                <Input
+                  id="home-instance-url"
+                  type="url"
+                  placeholder="https://rivr.camalot.me"
+                  value={homeInstanceUrl}
+                  onChange={(e) => setHomeInstanceUrl(e.target.value)}
+                  disabled={federatedLoading}
+                  autoComplete="url"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleFederatedLogin}
+                  disabled={!homeInstanceUrl || federatedLoading}
+                >
+                  {federatedLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Use Home"}
+                </Button>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr] sm:items-center">
+                <Label htmlFor="setup-group-type" className="text-xs text-muted-foreground">
+                  Set this instance as
+                </Label>
+                <select
+                  id="setup-group-type"
+                  value={setupGroupType}
+                  onChange={(e) => setSetupGroupType(e.target.value as "organization" | "family" | "ring")}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  disabled={federatedLoading}
+                >
+                  <option value="organization">Organization</option>
+                  <option value="family">Family</option>
+                  <option value="ring">Ring</option>
+                </select>
+              </div>
+            </div>
           </CardFooter>
         </Card>
 

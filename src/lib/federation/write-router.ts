@@ -225,6 +225,9 @@ async function forwardToHomeInstance<T, R>(
         "X-Instance-Slug": config.instanceSlug,
         "X-Idempotency-Key": idempotencyKey,
         "X-Correlation-Id": correlationId,
+        ...(process.env.NODE_ADMIN_KEY?.trim()
+          ? { "X-Node-Admin-Key": process.env.NODE_ADMIN_KEY.trim() }
+          : {}),
       },
       body: JSON.stringify({
         type: write.type,

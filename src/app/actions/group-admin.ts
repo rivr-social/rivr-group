@@ -9,9 +9,8 @@
  * `@/lib/types`, `@/lib/group-memberships`, `drizzle-orm`
  */
 
-import { auth } from "@/auth";
 import { db } from "@/db";
-import { agents, ledger } from "@/db/schema";
+import { agents, ledger, type MembershipTier } from "@/db/schema";
 import { eq, and, or, isNull, sql } from "drizzle-orm";
 import { hash } from "@node-rs/bcrypt";
 import { revalidatePath } from "next/cache";
@@ -22,6 +21,12 @@ import {
   type GroupMembershipPlan,
 } from "@/lib/group-memberships";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import {
+  MAX_MARKETPLACE_FEE_BPS,
+  MIN_MARKETPLACE_FEE_BPS,
+  normalizeMarketplaceFeeBps,
+} from "@/lib/marketplace-fees";
+import { getAuthenticatedActorId } from "@/lib/server-auth";
 
 // =============================================================================
 // Constants
@@ -38,6 +43,13 @@ const MAX_PASSWORD_LENGTH = 72;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MEMBERSHIP_TIER_VALUES: MembershipTier[] = [
+  "basic",
+  "host",
+  "seller",
+  "organizer",
+  "steward",
+];
 
 // =============================================================================
 // Result types
@@ -57,10 +69,17 @@ type GroupSettingsResult = {
     groupType: string;
     joinSettings: GroupJoinSettings;
     membershipPlans: GroupMembershipPlan[];
+    writeMembershipTier?: MembershipTier | null;
+    writeMembershipPlanId?: string | null;
+    marketplaceFeeBps?: number;
     modelUrl?: string;
     hasPassword: boolean;
   };
 };
+
+async function requireActorId(): Promise<string | null> {
+  return getAuthenticatedActorId();
+}
 
 // =============================================================================
 // Server actions
@@ -86,8 +105,8 @@ export async function setGroupPassword(
   groupId: string,
   newPassword: string
 ): Promise<GroupAdminResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -109,14 +128,12 @@ export async function setGroupPassword(
     };
   }
 
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "setGroupPassword",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { newPassword },
     },
     async () => {
   // Authorization is enforced server-side regardless of client UI role assumptions.
@@ -183,8 +200,8 @@ export async function setGroupPassword(
 export async function removeGroupPassword(
   groupId: string
 ): Promise<GroupAdminResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -192,14 +209,12 @@ export async function removeGroupPassword(
     return { success: false, error: "Invalid group identifier." };
   }
 
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "removeGroupPassword",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { groupId },
     },
     async () => {
   // Authorization is enforced server-side to prevent privilege bypass.
@@ -263,8 +278,8 @@ export async function removeGroupPassword(
 export async function fetchGroupAdminSettings(
   groupId: string
 ): Promise<GroupSettingsResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
 
@@ -272,7 +287,7 @@ export async function fetchGroupAdminSettings(
     return { success: false, error: "Invalid group identifier." };
   }
 
-  const admin = await isGroupAdmin(session.user.id, groupId);
+  const admin = await isGroupAdmin(actorId, groupId);
   if (!admin) {
     return { success: false, error: "Only group admins can view group settings." };
   }
@@ -322,10 +337,200 @@ export async function fetchGroupAdminSettings(
       groupType: typeof metadata.groupType === "string" ? metadata.groupType : "basic",
       joinSettings,
       membershipPlans: readGroupMembershipPlans(metadata),
+      writeMembershipTier:
+        typeof metadata.writeMembershipTier === "string" &&
+        MEMBERSHIP_TIER_VALUES.includes(metadata.writeMembershipTier as MembershipTier)
+          ? (metadata.writeMembershipTier as MembershipTier)
+          : null,
+      writeMembershipPlanId:
+        typeof metadata.writeMembershipPlanId === "string" && metadata.writeMembershipPlanId.trim().length > 0
+          ? metadata.writeMembershipPlanId.trim()
+          : null,
+      marketplaceFeeBps: normalizeMarketplaceFeeBps(metadata.marketplaceFeeBps) ?? undefined,
       modelUrl: typeof metadata.modelUrl === "string" ? metadata.modelUrl : undefined,
       hasPassword: Boolean(group.groupPasswordHash),
     },
   };
+}
+
+export async function updateGroupWriteAccessPolicy(
+  groupId: string,
+  policy: {
+    writeMembershipTier?: MembershipTier | null;
+    writeMembershipPlanId?: string | null;
+  },
+): Promise<GroupAdminResult> {
+  const actorId = await requireActorId();
+  if (!actorId) {
+    return { success: false, error: "Authentication required." };
+  }
+  if (!groupId || !UUID_RE.test(groupId)) {
+    return { success: false, error: "Invalid group identifier." };
+  }
+  const requestedTier = policy.writeMembershipTier ?? null;
+  if (requestedTier !== null && !MEMBERSHIP_TIER_VALUES.includes(requestedTier)) {
+    return { success: false, error: "Invalid write membership tier." };
+  }
+  const requestedPlanId =
+    typeof policy.writeMembershipPlanId === "string" && policy.writeMembershipPlanId.trim().length > 0
+      ? policy.writeMembershipPlanId.trim()
+      : null;
+
+  const facadeResult = await updateFacade.execute(
+    {
+      type: "updateGroupWriteAccessPolicy",
+      actorId,
+      targetAgentId: groupId,
+      payload: { writeMembershipTier: requestedTier, writeMembershipPlanId: requestedPlanId },
+    },
+    async () => {
+      if (!(await isGroupAdmin(actorId, groupId))) {
+        return { success: false, error: "Only group admins can edit access policy settings." };
+      }
+
+      const [current] = await db
+        .select({ metadata: agents.metadata })
+        .from(agents)
+        .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
+        .limit(1);
+      if (!current) {
+        return { success: false, error: "Group not found." };
+      }
+
+      const existingMetadata =
+        current.metadata && typeof current.metadata === "object"
+          ? (current.metadata as Record<string, unknown>)
+          : {};
+
+      const nextMetadata: Record<string, unknown> = { ...existingMetadata };
+      if (requestedTier === null) {
+        delete nextMetadata.writeMembershipTier;
+      } else {
+        nextMetadata.writeMembershipTier = requestedTier;
+      }
+      if (requestedPlanId === null) {
+        delete nextMetadata.writeMembershipPlanId;
+      } else {
+        nextMetadata.writeMembershipPlanId = requestedPlanId;
+      }
+
+      await db
+        .update(agents)
+        .set({ metadata: nextMetadata, updatedAt: new Date() })
+        .where(eq(agents.id, groupId));
+
+      revalidatePath(`/groups/${groupId}`);
+      revalidatePath(`/groups/${groupId}/settings`);
+      return { success: true } as GroupAdminResult;
+    },
+  );
+
+  if (facadeResult.success && facadeResult.data) {
+    const data = facadeResult.data as GroupAdminResult;
+    if (data.success) {
+      await emitDomainEvent({
+        eventType: EVENT_TYPES.GROUP_SETTINGS_UPDATED,
+        entityType: "agent",
+        entityId: groupId,
+        actorId,
+        payload: {
+          setting: "writeAccessPolicy",
+          writeMembershipTier: requestedTier,
+          writeMembershipPlanId: requestedPlanId,
+        },
+      }).catch(() => {});
+    }
+    return data;
+  }
+
+  return { success: false, error: facadeResult.error ?? "Failed to update access policy settings." };
+}
+
+export async function updateGroupMarketplaceFeeBps(
+  groupId: string,
+  marketplaceFeeBps: number | null,
+): Promise<GroupAdminResult> {
+  const actorId = await requireActorId();
+  if (!actorId) {
+    return { success: false, error: "Authentication required." };
+  }
+  if (!groupId || !UUID_RE.test(groupId)) {
+    return { success: false, error: "Invalid group identifier." };
+  }
+  const normalizedFee =
+    marketplaceFeeBps === null ? null : normalizeMarketplaceFeeBps(marketplaceFeeBps);
+  if (marketplaceFeeBps !== null && normalizedFee === null) {
+    return {
+      success: false,
+      error: `Marketplace fee must be an integer between ${MIN_MARKETPLACE_FEE_BPS} and ${MAX_MARKETPLACE_FEE_BPS} basis points.`,
+    };
+  }
+
+  const facadeResult = await updateFacade.execute(
+    {
+      type: "updateGroupMarketplaceFeeBps",
+      actorId,
+      targetAgentId: groupId,
+      payload: { marketplaceFeeBps: normalizedFee },
+    },
+    async () => {
+      if (!(await isGroupAdmin(actorId, groupId))) {
+        return { success: false, error: "Only group admins can edit marketplace fee settings." };
+      }
+
+      const [current] = await db
+        .select({ metadata: agents.metadata })
+        .from(agents)
+        .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
+        .limit(1);
+
+      if (!current) {
+        return { success: false, error: "Group not found." };
+      }
+
+      const existingMetadata =
+        current.metadata && typeof current.metadata === "object"
+          ? (current.metadata as Record<string, unknown>)
+          : {};
+
+      const nextMetadata =
+        normalizedFee === null
+          ? (() => {
+              const { marketplaceFeeBps: _ignored, ...rest } = existingMetadata;
+              return rest;
+            })()
+          : {
+              ...existingMetadata,
+              marketplaceFeeBps: normalizedFee,
+            };
+
+      await db
+        .update(agents)
+        .set({ metadata: nextMetadata, updatedAt: new Date() })
+        .where(eq(agents.id, groupId));
+
+      revalidatePath(`/groups/${groupId}`);
+      revalidatePath(`/groups/${groupId}/settings`);
+
+      return { success: true } as GroupAdminResult;
+    },
+  );
+
+  if (facadeResult.success && facadeResult.data) {
+    const data = facadeResult.data as GroupAdminResult;
+    if (data.success) {
+      await emitDomainEvent({
+        eventType: EVENT_TYPES.GROUP_SETTINGS_UPDATED,
+        entityType: "agent",
+        entityId: groupId,
+        actorId,
+        payload: { setting: "marketplaceFeeBps", marketplaceFeeBps: normalizedFee },
+      }).catch(() => {});
+    }
+    return data;
+  }
+
+  return { success: false, error: facadeResult.error ?? "Failed to update marketplace fee settings." };
 }
 
 /**
@@ -351,21 +556,19 @@ export async function updateGroupJoinSettings(
   groupId: string,
   joinSettings: GroupJoinSettings
 ): Promise<GroupAdminResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
   if (!groupId || !UUID_RE.test(groupId)) {
     return { success: false, error: "Invalid group identifier." };
   }
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "updateGroupJoinSettings",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { joinSettings },
     },
     async () => {
   if (!(await isGroupAdmin(actorId, groupId))) {
@@ -518,21 +721,19 @@ export async function updateGroupMembershipPlans(
   groupId: string,
   membershipPlans: unknown
 ): Promise<GroupAdminResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await requireActorId();
+  if (!actorId) {
     return { success: false, error: "Authentication required." };
   }
   if (!groupId || !UUID_RE.test(groupId)) {
     return { success: false, error: "Invalid group identifier." };
   }
-  const actorId = session.user.id;
-
   const facadeResult = await updateFacade.execute(
     {
       type: "updateGroupMembershipPlans",
       actorId,
       targetAgentId: groupId,
-      payload: {},
+      payload: { membershipPlans },
     },
     async () => {
   if (!(await isGroupAdmin(actorId, groupId))) {

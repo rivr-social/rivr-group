@@ -10,6 +10,7 @@ import { GlobalHeader } from "@/components/global-header";
 import { PersonaBanner } from "@/components/persona-banner";
 import { AppProvider } from "@/contexts/app-context";
 import { UserProvider } from "@/contexts/user-context";
+import { RemoteViewerProvider } from "@/contexts/remote-viewer-context";
 import { auth } from "@/auth";
 import "./globals.css";
 
@@ -36,16 +37,18 @@ export default async function RootLayout({
       <body className="min-h-screen bg-background">
         <SessionProvider session={session}>
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-            <UserProvider>
-              <AppProvider>
-                <GlobalHeader />
-                <PersonaBanner />
-                <AuthGuard>
-                  <main className="pt-16 pb-16 md:pb-0">{children}</main>
-                </AuthGuard>
-                <Toaster />
-              </AppProvider>
-            </UserProvider>
+            <RemoteViewerProvider>
+              <UserProvider>
+                <AppProvider>
+                  <GlobalHeader />
+                  <PersonaBanner />
+                  <AuthGuard>
+                    <main className="pt-16 pb-16 md:pb-0">{children}</main>
+                  </AuthGuard>
+                  <Toaster />
+                </AppProvider>
+              </UserProvider>
+            </RemoteViewerProvider>
           </ThemeProvider>
         </SessionProvider>
       </body>

@@ -24,6 +24,7 @@ import { useSession } from "next-auth/react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { getActivePersonaInfo } from "@/app/actions/personas"
 import type { SerializedAgent } from "@/lib/graph-serializers"
+import { useRemoteViewer } from "@/contexts/remote-viewer-context"
 
 interface TopBarProps {
   selectedLocale: string
@@ -61,6 +62,7 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
   // Session hook provides auth state; status is checked to avoid flashing the
   // Login button while the session is still being resolved on the client.
   const { data: session, status } = useSession()
+  const { remoteViewer, isAuthenticated: remoteAuthenticated } = useRemoteViewer()
 
   // Active persona tracking for avatar overlay indicator
   const [activePersona, setActivePersona] = useState<SerializedAgent | null>(null)
@@ -74,11 +76,14 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
   }, [])
   useEffect(() => {
     if (session) checkPersona()
+    else setActivePersona(null)
   }, [session, checkPersona])
 
   // When operating as a persona, show the persona's avatar instead of the user's
   const displayName = activePersona?.name || session?.user?.name || currentUser?.name
   const displayImage = activePersona?.image || session?.user?.image || currentUser?.avatar
+  const authenticated = Boolean(session || remoteAuthenticated)
+  const remoteHomeHost = remoteViewer ? new URL(remoteViewer.homeBaseUrl).host : null
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 w-full border-b bg-background">
@@ -122,7 +127,7 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
               </div>
             )}
           </div>
-          {session ? (
+          {authenticated ? (
             <>
               <Link href="/notifications" className="hidden sm:inline-flex">
                 <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-9 sm:w-9" aria-label="Notifications">
@@ -157,6 +162,9 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
                 )}
               </Button>
               <UserMenu open={userMenuOpen} onClose={() => setUserMenuOpen(false)} />
+              {!session && remoteHomeHost ? (
+                <span className="hidden md:inline text-xs text-muted-foreground">{remoteHomeHost}</span>
+              ) : null}
             </>
           ) : status !== "loading" ? (
             <Link href="/auth/login">

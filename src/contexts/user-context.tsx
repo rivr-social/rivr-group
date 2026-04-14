@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react"
 import { useSession } from "next-auth/react"
 import type { User } from "@/lib/types"
+import { useRemoteViewer } from "@/contexts/remote-viewer-context"
 
 interface UserContextType {
   currentUser: User | null
@@ -22,6 +23,7 @@ const UserContext = createContext<UserContextType>({
 
 export function UserProvider({ children }: { children: ReactNode }) {
   const { data: session, status } = useSession()
+  const { remoteViewer } = useRemoteViewer()
   const [overrideUser, setOverrideUser] = useState<User | null>(null)
 
   const sessionUser: User | null =
@@ -38,7 +40,20 @@ export function UserProvider({ children }: { children: ReactNode }) {
         }
       : null
 
-  const currentUser = overrideUser ?? sessionUser
+  const remoteUser: User | null =
+    !sessionUser && remoteViewer
+      ? {
+          id: remoteViewer.actorId,
+          name: "Federated user",
+          username: remoteViewer.actorId.slice(0, 12).toLowerCase(),
+          avatar: "/placeholder-user.jpg",
+          followers: 0,
+          following: 0,
+          role: "federated_viewer",
+        }
+      : null
+
+  const currentUser = overrideUser ?? sessionUser ?? remoteUser
 
   const isCreator = (creatorId: string | undefined) => {
     if (!currentUser || !creatorId) return false

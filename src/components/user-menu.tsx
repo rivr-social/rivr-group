@@ -29,6 +29,7 @@ import { clearLocalData } from "@/lib/local-db"
 import { useCallback, useEffect, useState } from "react"
 import { listMyPersonas, switchActivePersona } from "@/app/actions/personas"
 import type { SerializedAgent } from "@/lib/graph-serializers"
+import { useRemoteViewer } from "@/contexts/remote-viewer-context"
 
 interface UserMenuProps {
   open: boolean
@@ -38,6 +39,7 @@ interface UserMenuProps {
 export function UserMenu({ open, onClose }: UserMenuProps) {
   const router = useRouter()
   const { data: session } = useSession()
+  const { remoteViewer, clear: clearRemoteViewer, refresh: refreshRemoteViewer } = useRemoteViewer()
   const [personas, setPersonas] = useState<SerializedAgent[]>([])
   const [activePersonaId, setActivePersonaId] = useState<string | null>(null)
 
@@ -69,13 +71,29 @@ export function UserMenu({ open, onClose }: UserMenuProps) {
   const handleLogout = async () => {
     onClose()
     await clearLocalData()
-    await signOut({ callbackUrl: "/auth/login", redirect: true })
+    if (session) {
+      await signOut({ callbackUrl: "/auth/login", redirect: true })
+      return
+    }
+
+    await fetch("/api/federation/remote-session", {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+      credentials: "include",
+    }).catch(() => undefined)
+    clearRemoteViewer()
+    await refreshRemoteViewer()
+    router.push("/auth/login")
   }
 
   const handleNavigation = (path: string) => {
     router.push(path)
     onClose()
   }
+
+  const displayName = session?.user?.name || (remoteViewer ? "Federated user" : "User")
+  const displayEmail = session?.user?.email || (remoteViewer ? new URL(remoteViewer.homeBaseUrl).host : "")
+  const displayImage = session?.user?.image || "/placeholder.svg?height=64&width=64"
 
   return (
     <Sheet open={open} onOpenChange={onClose}>
@@ -89,12 +107,12 @@ export function UserMenu({ open, onClose }: UserMenuProps) {
               className="h-16 w-16 cursor-pointer hover:ring-2 hover:ring-primary transition-all"
               onClick={() => handleNavigation("/profile")}
             >
-              <AvatarImage src={session?.user?.image || "/placeholder.svg?height=64&width=64"} alt={session?.user?.name || "User"} />
-              <AvatarFallback>{session?.user?.name?.substring(0, 2).toUpperCase() || "U"}</AvatarFallback>
+              <AvatarImage src={displayImage} alt={displayName} />
+              <AvatarFallback>{displayName.substring(0, 2).toUpperCase() || "U"}</AvatarFallback>
             </Avatar>
             <div>
-              <h3 className="font-medium text-lg">{session?.user?.name || "User"}</h3>
-              <p className="text-sm text-muted-foreground">{session?.user?.email || ""}</p>
+              <h3 className="font-medium text-lg">{displayName}</h3>
+              <p className="text-sm text-muted-foreground">{displayEmail}</p>
             </div>
           </div>
           <Separator className="my-4" />
@@ -148,7 +166,7 @@ export function UserMenu({ open, onClose }: UserMenuProps) {
               <span>My Calendar</span>
             </Link>
             {/* Persona switcher section */}
-            {personas.length > 0 && (
+            {session && personas.length > 0 && (
               <>
                 <Separator className="my-2" />
                 <div className="px-2 py-1">

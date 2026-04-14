@@ -29,6 +29,7 @@ export function calculateCheckoutFees(
   sellerPriceCents: number,
   options?: {
     orgCommissionBps?: number;
+    platformFeeBps?: number;
   },
 ): CheckoutFeeResult {
   if (!Number.isInteger(sellerPriceCents) || sellerPriceCents < 0) {
@@ -49,9 +50,11 @@ export function calculateCheckoutFees(
     };
   }
 
-  const platformFeeCents = Math.round(
-    (sellerPriceCents * MARKETPLACE_FEE_BPS) / BPS_DIVISOR,
-  );
+  const platformFeeBps =
+    typeof options?.platformFeeBps === "number" && Number.isInteger(options.platformFeeBps)
+      ? options.platformFeeBps
+      : MARKETPLACE_FEE_BPS;
+  const platformFeeCents = Math.round((sellerPriceCents * platformFeeBps) / BPS_DIVISOR);
 
   const orgCommissionBps = options?.orgCommissionBps ?? 0;
   const orgCommissionCents =

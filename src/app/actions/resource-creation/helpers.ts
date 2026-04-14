@@ -15,9 +15,49 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { embedResource, scheduleEmbedding } from "@/lib/ai";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { getHostedNodeForOwner, queueEntityExportEvents } from "@/lib/federation";
+import { hasEntitlement } from "@/lib/billing";
+import type { MembershipTier } from "@/db/schema";
 
 import type { ActionResult, CreateResourceInput } from "./types";
 import { GROUP_LIKE_OWNER_AGENT_TYPES } from "./types";
+
+const MEMBERSHIP_TIER_VALUES: MembershipTier[] = [
+  "basic",
+  "host",
+  "seller",
+  "organizer",
+  "steward",
+];
+
+function normalizeRequiredTier(metadata: Record<string, unknown>): MembershipTier | null {
+  const direct = metadata.writeMembershipTier;
+  if (typeof direct === "string" && MEMBERSHIP_TIER_VALUES.includes(direct as MembershipTier)) {
+    return direct as MembershipTier;
+  }
+
+  const accessPolicy = metadata.accessPolicy;
+  if (accessPolicy && typeof accessPolicy === "object" && !Array.isArray(accessPolicy)) {
+    const nested = (accessPolicy as Record<string, unknown>).writeMembershipTier;
+    if (typeof nested === "string" && MEMBERSHIP_TIER_VALUES.includes(nested as MembershipTier)) {
+      return nested as MembershipTier;
+    }
+  }
+
+  return null;
+}
+
+function normalizeRequiredPlanId(metadata: Record<string, unknown>): string | null {
+  const direct = metadata.writeMembershipPlanId;
+  if (typeof direct === "string" && direct.trim().length > 0) return direct.trim();
+
+  const accessPolicy = metadata.accessPolicy;
+  if (accessPolicy && typeof accessPolicy === "object" && !Array.isArray(accessPolicy)) {
+    const nested = (accessPolicy as Record<string, unknown>).writeMembershipPlanId;
+    if (typeof nested === "string" && nested.trim().length > 0) return nested.trim();
+  }
+
+  return null;
+}
 
 export async function resolveAuthenticatedUserId(): Promise<string | null> {
   const session = await auth();
@@ -44,11 +84,21 @@ export async function hasGroupWriteAccess(userId: string, groupId: string): Prom
 
   if (!group) return false;
 
-  const creatorId = ((group.metadata ?? {}) as Record<string, unknown>).creatorId;
+  const metadata = ((group.metadata ?? {}) as Record<string, unknown>);
+  const creatorId = metadata.creatorId;
   if (typeof creatorId === "string" && creatorId === userId) return true;
+
+  const requiredTier = normalizeRequiredTier(metadata);
+  if (requiredTier) {
+    const entitled = await hasEntitlement(userId, requiredTier);
+    if (!entitled) return false;
+  }
+
+  const requiredPlanId = normalizeRequiredPlanId(metadata);
 
   const rows = await db.execute(sql`
     SELECT id
+         , metadata
     FROM ledger
     WHERE subject_id = ${userId}::uuid
       AND object_id = ${groupId}::uuid
@@ -58,7 +108,26 @@ export async function hasGroupWriteAccess(userId: string, groupId: string): Prom
     LIMIT 1
   `);
 
-  return (rows as Array<Record<string, unknown>>).length > 0;
+  const membership = (rows as Array<Record<string, unknown>>)[0];
+  if (!membership) return false;
+
+  if (requiredPlanId) {
+    const membershipMeta =
+      membership.metadata && typeof membership.metadata === "object"
+        ? (membership.metadata as Record<string, unknown>)
+        : {};
+    const planId =
+      typeof membershipMeta.membershipPlanId === "string"
+        ? membershipMeta.membershipPlanId
+        : typeof membershipMeta.planId === "string"
+          ? membershipMeta.planId
+          : null;
+    if (planId !== requiredPlanId) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export async function canModifyResource(userId: string, resourceId: string): Promise<{

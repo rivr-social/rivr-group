@@ -110,6 +110,9 @@ export class UpdateFacade {
           'X-Instance-Slug': config.instanceSlug,
           'X-Idempotency-Key': mutation.idempotencyKey || crypto.randomUUID(),
           ...(mutation.correlationId ? { 'X-Correlation-Id': mutation.correlationId } : {}),
+          ...(process.env.NODE_ADMIN_KEY?.trim()
+            ? { 'X-Node-Admin-Key': process.env.NODE_ADMIN_KEY.trim() }
+            : {}),
         },
         body: JSON.stringify({
           type: mutation.type,

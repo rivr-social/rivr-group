@@ -27,6 +27,7 @@ import { resources, ledger, agents } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getStripe } from '@/lib/billing';
 import { calculateCheckoutFees } from '@/lib/checkout-fees';
+import { resolveMarketplaceFeePolicy } from '@/lib/marketplace-fees';
 import { resolvePostOfferingDeal } from '@/lib/post-offer-deals';
 import { hasBookableSchedule, isBookingSlotAvailable } from '@/lib/booking-slots';
 import {
@@ -221,6 +222,10 @@ export async function POST(request: NextRequest) {
         : null;
     const unitPriceCents = deal?.dealPriceCents ?? listingUnitPriceCents;
     const sellerPriceCents = unitPriceCents * quantity * hours;
+    const marketplaceFeePolicy = await resolveMarketplaceFeePolicy({
+      ownerAgentId: sellerId,
+      listingMetadata: listingMeta,
+    });
 
     // 4. Check if listing belongs to an org and get org commission
     let orgId: string | null = null;
@@ -262,6 +267,7 @@ export async function POST(request: NextRequest) {
     // 5. Calculate fees
     const fees = calculateCheckoutFees(sellerPriceCents, {
       orgCommissionBps: orgCommissionBps > 0 ? orgCommissionBps : undefined,
+      platformFeeBps: marketplaceFeePolicy.feeBps,
     });
 
     // 6. Create Stripe Checkout Session
@@ -298,6 +304,9 @@ export async function POST(request: NextRequest) {
         orgId: orgId || '',
         orgCommissionCents: String(fees.orgCommissionCents),
         platformFeeCents: String(fees.platformFeeCents),
+        marketplaceFeeBpsApplied: String(marketplaceFeePolicy.feeBps),
+        marketplaceFeePolicySource: marketplaceFeePolicy.source,
+        marketplaceFeePolicyAgentId: marketplaceFeePolicy.policyAgentId ?? '',
         buyerPlatformFeeCents: String(fees.buyerPlatformFeeCents),
         priceCents: String(fees.sellerPriceCents),
         buyerTotalCents: String(fees.buyerTotalCents),

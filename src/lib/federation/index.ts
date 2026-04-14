@@ -12,3 +12,15 @@ export { federatedWrite, isLocalWrite } from './remote-write';
 export type { FederatedWriteParams, FederatedWriteResult } from './remote-write';
 export { QueryFacade, queryFacade } from './query-facade';
 export type { QueryResult, DataSource } from './query-facade';
+export type {
+  CanonicalProfileRef,
+  FederatedActorContext,
+  FederatedInteractionAction,
+  FederatedInteractionRequest,
+  FederatedInteractionResult,
+  FederationFacadeResponse,
+  HomeAuthorityRef,
+  ProjectedDatapoint,
+  RemoteAuthResult,
+  RemoteViewerState,
+} from './cross-instance-types';

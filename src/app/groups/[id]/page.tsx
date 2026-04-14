@@ -9,7 +9,6 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import { MessageSquare, Settings } from "lucide-react"
-import { auth } from "@/auth"
 import { fetchAgentFeed, fetchGroupDetail } from "@/app/actions/graph"
 import { agentToGroup, agentToUser } from "@/lib/graph-adapters"
 import { readGroupMembershipPlans } from "@/lib/group-memberships"
@@ -21,6 +20,7 @@ import { GroupActions } from "@/components/group-actions"
 import { GroupTabsClient } from "@/components/group-tabs-client"
 import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
+import { getAuthenticatedActorId } from "@/lib/server-auth"
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -40,7 +40,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const [detail, activity, session] = await Promise.all([
     fetchGroupDetail(id),
     fetchAgentFeed(id, 40).catch(() => []),
-    auth(),
+    getAuthenticatedActorId(),
   ])
 
   if (!detail) {
@@ -54,7 +54,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const rawGroupType = String(groupMeta.groupType ?? "").toLowerCase()
   const canonicalGroupType = rawGroupType === "org" ? "organization" : (rawGroupType || "basic")
   const ownerId = typeof groupMeta.creatorId === "string" ? groupMeta.creatorId : undefined
-  const currentUserId = session?.user?.id ?? null
+  const currentUserId = session ?? null
   const isGroupAdmin = !!(currentUserId && (
     groupMeta.creatorId === currentUserId ||
     (Array.isArray(groupMeta.adminIds) && (groupMeta.adminIds as unknown[]).includes(currentUserId))

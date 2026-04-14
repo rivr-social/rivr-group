@@ -5,7 +5,6 @@ import { db } from '@/db';
 import { agents, resources, type NewResource } from '@/db/schema';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import {
-  MARKETPLACE_FEE_BPS,
   BPS_DIVISOR,
 } from '@/lib/wallet-constants';
 import {
@@ -16,6 +15,7 @@ import {
   getSettlementWalletForAgent,
 } from '@/lib/wallet';
 import { calculateLegacyCheckoutFeesCents } from '@/lib/fees';
+import { resolveMarketplaceFeePolicy } from '@/lib/marketplace-fees';
 import { canView } from '@/lib/permissions';
 import { resolvePostOfferingDeal } from '@/lib/post-offer-deals';
 import { getResource } from '@/lib/queries/resources';
@@ -295,9 +295,13 @@ export async function purchaseWithWalletAction(
       }
 
       // Business rule: marketplace platform fee is charged on product listings only.
+      const marketplaceFeePolicy = await resolveMarketplaceFeePolicy({
+        ownerAgentId: listing.ownerId,
+        listingMetadata: listingMeta,
+      });
       const feeCents =
         listingType === 'product'
-          ? Math.round((subtotalCents * MARKETPLACE_FEE_BPS) / BPS_DIVISOR)
+          ? Math.round((subtotalCents * marketplaceFeePolicy.feeBps) / BPS_DIVISOR)
           : 0;
       const totalChargeCents = subtotalCents + feeCents;
 
@@ -395,6 +399,9 @@ export async function purchaseWithWalletAction(
             sellerAgentId: listing.ownerId,
             priceCents: subtotalCents,
             platformFeeCents: feeCents,
+            marketplaceFeeBpsApplied: listingType === 'product' ? marketplaceFeePolicy.feeBps : 0,
+            marketplaceFeePolicySource: marketplaceFeePolicy.source,
+            marketplaceFeePolicyAgentId: marketplaceFeePolicy.policyAgentId,
             totalCents: totalChargeCents,
             feeCents,
             dealPostId: deal?.postId ?? null,
