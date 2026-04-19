@@ -19,6 +19,8 @@ import type {
 } from "@/lib/federation/cross-instance-types";
 import type { RoutingProvenance } from "@/lib/federation/write-router";
 import { toggleFollowAgent, toggleJoinGroup } from "@/app/actions/interactions/social";
+import { createEventResource } from "@/app/actions/resource-creation/events";
+import { createOfferingResource } from "@/app/actions/resource-creation/offerings";
 import * as kg from "@/lib/kg/autobot-kg-client";
 
 const KNOWN_MUTATION_TYPES = [
@@ -30,6 +32,7 @@ const KNOWN_MUTATION_TYPES = [
   "toggleFollowAgent",
   "toggleJoinGroup",
   "createOffering",
+  "createOfferingResource",
   "updateAgent",
   "createComment",
   "toggleReaction",
@@ -499,6 +502,46 @@ async function handleLegacyMutation(
     });
   }
 
+  if (type === "createEventResource") {
+    const result = await runWithFederationExecutionContext(actorId, () =>
+      createEventResource(withTargetOwner(payload, targetAgentId) as Parameters<typeof createEventResource>[0]),
+    );
+    return NextResponse.json({
+      success: result.success,
+      data: result,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(routedFrom
+        ? {
+            routedFrom: {
+              originInstanceSlug: routedFrom.originInstanceSlug,
+              originInstanceId: routedFrom.originInstanceId,
+            },
+          }
+        : {}),
+    });
+  }
+
+  if (type === "createOffering" || type === "createOfferingResource") {
+    const result = await runWithFederationExecutionContext(actorId, () =>
+      createOfferingResource(withTargetOwner(payload, targetAgentId) as Parameters<typeof createOfferingResource>[0]),
+    );
+    return NextResponse.json({
+      success: result.success,
+      data: result,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(routedFrom
+        ? {
+            routedFrom: {
+              originInstanceSlug: routedFrom.originInstanceSlug,
+              originInstanceId: routedFrom.originInstanceId,
+            },
+          }
+        : {}),
+    });
+  }
+
   return NextResponse.json({
     success: true,
     phase: "forwarding-stub",
@@ -517,6 +560,20 @@ async function handleLegacyMutation(
         }
       : {}),
   });
+}
+
+function withTargetOwner(payload: unknown, targetAgentId: string): Record<string, unknown> {
+  const base =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? { ...(payload as Record<string, unknown>) }
+      : {};
+  if (typeof base.ownerId !== "string" || base.ownerId.length === 0) {
+    base.ownerId = targetAgentId;
+  }
+  if (typeof base.groupId !== "string" || base.groupId.length === 0) {
+    base.groupId = targetAgentId;
+  }
+  return base;
 }
 
 function validateRoutingProvenance(

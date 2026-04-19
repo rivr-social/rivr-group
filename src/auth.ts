@@ -49,6 +49,59 @@ const MINIMUM_PASSWORD_LENGTH = 8;
 const MAXIMUM_PASSWORD_LENGTH = 72;
 const buildFallbackAuthSecret = "build-only-auth-secret-not-for-runtime";
 
+function getFederatedHomeBaseUrl(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const homeBaseUrl = (metadata as Record<string, unknown>).federatedHomeBaseUrl;
+  return typeof homeBaseUrl === "string" && homeBaseUrl.length > 0 ? homeBaseUrl.replace(/\/+$/, "") : null;
+}
+
+async function verifyWithFederatedHome(params: {
+  homeBaseUrl: string;
+  email: string;
+  password: string;
+}): Promise<{
+  id: string;
+  name: string | null;
+  email: string | null;
+  image: string | null;
+} | null> {
+  try {
+    const response = await fetch(`${params.homeBaseUrl}/api/federation/remote-password/verify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        email: params.email,
+        password: params.password,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    const data = await response.json().catch(() => null) as {
+      success?: boolean;
+      actor?: {
+        id?: string;
+        name?: string | null;
+        email?: string | null;
+        image?: string | null;
+      };
+    } | null;
+    if (!response.ok || data?.success !== true || (data.actor?.id !== undefined && data.actor.id.length === 0)) {
+      return null;
+    }
+    if (!data.actor?.id) return null;
+    return {
+      id: data.actor.id,
+      name: data.actor.name ?? null,
+      email: data.actor.email ?? params.email,
+      image: data.actor.image ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function clearStaleTokenIdentity(token: Record<string, unknown>) {
   delete token.sub;
   delete token.email;
@@ -103,8 +156,21 @@ export const authConfig: NextAuthConfig = {
           .where(eq(agents.email, email))
           .limit(1);
 
-        if (!agent || !agent.passwordHash) {
+        if (!agent) {
           return null;
+        }
+
+        if (!agent.passwordHash) {
+          const homeBaseUrl = getFederatedHomeBaseUrl(agent.metadata);
+          if (!homeBaseUrl) return null;
+          const verified = await verifyWithFederatedHome({ homeBaseUrl, email, password });
+          if (!verified || verified.id !== agent.id) return null;
+          return {
+            id: agent.id,
+            name: agent.name ?? verified.name,
+            email: agent.email ?? verified.email,
+            image: agent.image ?? verified.image,
+          };
         }
 
         const passwordValid = await verify(password, agent.passwordHash);

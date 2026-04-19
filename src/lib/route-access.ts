@@ -6,6 +6,8 @@ const PUBLIC_PAGE_PATHS = new Set([
   "/search",
   "/calendar",
   "/manifest.webmanifest",
+  "/llms.html",
+  "/llms.txt",
 ]);
 
 const PUBLIC_PAGE_PREFIXES = [
@@ -45,6 +47,7 @@ const PUBLIC_API_PREFIXES = [
   "/api/map-diagnostics",
   "/api/locations/suggest",
   "/.well-known/matrix",
+  "/.well-known/openid-configuration",
   "/.well-known/universal-manifest.json",
   "/.well-known/mcp",
   "/api/mcp",

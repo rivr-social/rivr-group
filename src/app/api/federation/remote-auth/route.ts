@@ -46,6 +46,7 @@ type RemoteAuthResult = {
 type VerificationResult = {
   valid: boolean;
   displayName?: string;
+  email?: string;
   manifestUrl?: string;
   persona?: FederatedAssertionPersonaContext;
   error?: string;
@@ -176,6 +177,7 @@ async function verifyActorAssertionWithHome(
     return {
       valid: true,
       displayName: typeof data.displayName === "string" ? data.displayName : undefined,
+      email: typeof data.email === "string" ? data.email : undefined,
       manifestUrl: typeof data.manifestUrl === "string" ? data.manifestUrl : undefined,
       persona,
     };
@@ -191,6 +193,7 @@ async function bootstrapPrimaryGroup(params: {
   actorId: string;
   homeBaseUrl: string;
   displayName?: string;
+  email?: string;
   manifestUrl?: string;
   requestedGroupType: "organization" | "family" | "ring";
 }): Promise<{ applied: boolean; primaryAgentId?: string; groupType?: "organization" | "family" | "ring" }> {
@@ -235,6 +238,7 @@ async function bootstrapPrimaryGroup(params: {
     await db.insert(agents).values({
       id: params.actorId,
       name: params.displayName?.trim() || "Federated user",
+      email: params.email?.trim() || null,
       type: "person",
       visibility: "public",
       peermeshManifestUrl: params.manifestUrl ?? null,
@@ -255,6 +259,7 @@ async function bootstrapPrimaryGroup(params: {
       .update(agents)
       .set({
         name: params.displayName?.trim() || undefined,
+        email: params.email?.trim() || undefined,
         peermeshManifestUrl: params.manifestUrl ?? null,
         peermeshLinkedAt: now,
         metadata: {
@@ -490,6 +495,7 @@ async function authenticateActor(
       actorId: context.actorId,
       homeBaseUrl: context.homeBaseUrl,
       displayName: verification.displayName,
+      email: verification.email,
       manifestUrl: verification.manifestUrl,
       requestedGroupType: effectiveGroupType,
     });
