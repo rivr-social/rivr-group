@@ -265,4 +265,123 @@ describe("authority-guard / checkAuthorityForSession", () => {
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe("revoked");
   });
+
+  it("ignores revoke rows that target a different home than the asserted one", async () => {
+    const { checkAuthorityForSession } = await loadGuard();
+
+    cacheRows.push({
+      agentId: "agent-123",
+      eventType: "authority.revoke",
+      homeBaseUrl: "https://other-home.example",
+      successorHomeBaseUrl: null,
+      receivedAt: new Date(Date.now() - 1000),
+      authorityStatus: "revoked",
+    });
+
+    const result = await callCheck(
+      checkAuthorityForSession,
+      "agent-123",
+      "https://home.example",
+      { sensitive: true },
+    );
+
+    expect(result).toEqual({ allowed: true });
+  });
+
+  it("normalizes trailing slashes when comparing homeBaseUrl", async () => {
+    const { checkAuthorityForSession } = await loadGuard();
+
+    cacheRows.push({
+      agentId: "agent-123",
+      eventType: "authority.revoke",
+      homeBaseUrl: "https://home.example",
+      successorHomeBaseUrl: null,
+      receivedAt: new Date(Date.now() - 1000),
+      authorityStatus: "revoked",
+    });
+
+    const result = await callCheck(
+      checkAuthorityForSession,
+      "agent-123",
+      "https://home.example///",
+      { sensitive: true },
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("revoked");
+  });
+
+  it("returns allowed when the superseded claim targets an unrelated old home", async () => {
+    const { checkAuthorityForSession } = await loadGuard();
+
+    cacheRows.push({
+      agentId: "agent-123",
+      eventType: "successor.authority.claim",
+      homeBaseUrl: "https://some-other-home.example",
+      successorHomeBaseUrl: "https://new-home.example",
+      receivedAt: new Date(Date.now() - 1000),
+      authorityStatus: "superseded",
+    });
+
+    const result = await callCheck(
+      checkAuthorityForSession,
+      "agent-123",
+      "https://home.example",
+      { sensitive: true },
+    );
+
+    expect(result).toEqual({ allowed: true });
+  });
+});
+
+describe("authority-guard / persistAuthorityEvent", () => {
+  it("maps authority.revoke to revoked status", async () => {
+    const { persistAuthorityEvent } = await loadGuard();
+    const result = await persistAuthorityEvent({
+      agentId: "agent-revoked",
+      eventType: "authority.revoke",
+      homeBaseUrl: "https://home.example/",
+      signedBy: "global",
+      signedPayload: { agentId: "agent-revoked" },
+    });
+    expect(result.authorityStatus).toBe("revoked");
+  });
+
+  it("maps successor.authority.claim to superseded status", async () => {
+    const { persistAuthorityEvent } = await loadGuard();
+    const result = await persistAuthorityEvent({
+      agentId: "agent-superseded",
+      eventType: "successor.authority.claim",
+      homeBaseUrl: "https://old.example",
+      successorHomeBaseUrl: "https://new.example",
+      signedBy: "global",
+      signedPayload: {},
+    });
+    expect(result.authorityStatus).toBe("superseded");
+  });
+
+  it("maps credential.updated to active status", async () => {
+    const { persistAuthorityEvent } = await loadGuard();
+    const result = await persistAuthorityEvent({
+      agentId: "agent-active",
+      eventType: "credential.updated",
+      homeBaseUrl: "https://home.example",
+      credentialVersion: 7,
+      signedBy: "global",
+      signedPayload: {},
+    });
+    expect(result.authorityStatus).toBe("active");
+  });
+});
+
+describe("authority-guard / isRecognizedAuthorityEventType", () => {
+  it("recognizes all four known event types and rejects unknown ones", async () => {
+    const { isRecognizedAuthorityEventType } = await loadGuard();
+    expect(isRecognizedAuthorityEventType("authority.revoke")).toBe(true);
+    expect(isRecognizedAuthorityEventType("successor.authority.claim")).toBe(true);
+    expect(isRecognizedAuthorityEventType("credential.updated")).toBe(true);
+    expect(isRecognizedAuthorityEventType("credential.tempwrite.from-global")).toBe(true);
+    expect(isRecognizedAuthorityEventType("some.other.event")).toBe(false);
+    expect(isRecognizedAuthorityEventType("")).toBe(false);
+  });
 });
