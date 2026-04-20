@@ -1,14 +1,22 @@
 /**
- * Central transactional mailer (#103 — peer email delegation).
+ * Central transactional mailer (#103, refined in #106 — per-kind routing).
  *
- * This is the single place the app decides HOW to deliver an email:
+ * This is the single place the app decides HOW to deliver an email.
  *
- *   - On the global/hosted instance (`INSTANCE_TYPE=global`) messages
- *     are sent directly via the local SMTP transport in `@/lib/email`.
- *   - On peer instances (person/group/locale/region) transactional
- *     email is signed and relayed to the global identity authority's
- *     `/api/federation/email/send` endpoint via `sendEmailViaGlobal()`
- *     so peers don't need their own SMTP credentials.
+ * On the global/hosted instance (`INSTANCE_TYPE=global`):
+ *   - All messages ship via the local SMTP transport in `@/lib/email`.
+ *
+ * On a peer instance (person/group/locale/region) the routing is
+ * per-kind:
+ *   - Federated-auth kinds (`verification`, `password-reset`,
+ *     `recovery`) are ALWAYS delegated to the global identity
+ *     authority's `/api/federation/email/send` endpoint. The peer
+ *     cannot override this — federated auth lives on global so the
+ *     "lost your password" flow works even if the peer's own SMTP is
+ *     misconfigured, credentials were rotated, or the peer is offline.
+ *   - Other transactional kinds (`transactional`) use the peer's own
+ *     outgoing SMTP config from `peer_smtp_config` when enabled. If
+ *     no peer config exists, we fall through to the global relay.
  *
  * Call sites should never import `sendEmail` from `@/lib/email`
  * directly for transactional messages — they go through
@@ -16,6 +24,8 @@
  *
  * Key exports:
  * - {@link sendTransactionalEmail}
+ * - {@link sendBulkTransactionalEmail}
+ * - {@link FEDERATED_AUTH_EMAIL_KINDS}
  * - {@link TransactionalEmailKind}
  * - {@link TransactionalEmailParams}
  * - {@link TransactionalEmailResult}
@@ -23,6 +33,8 @@
  * Dependencies:
  * - `@/lib/email` — local SMTP transport (used on global).
  * - `@/lib/federation/email-relay` — signed relay client.
+ * - `@/lib/federation/peer-smtp` — per-instance SMTP config loader.
+ * - `@/lib/federation/peer-smtp-transport` — peer nodemailer wrapper.
  * - `@/lib/federation/instance-config` — peer vs global detection.
  */
 
@@ -36,9 +48,41 @@ import {
 import {
   getGlobalIdentityAuthorityUrl,
   getInstanceConfig,
+  isPeerInstance,
   shouldDelegateEmail,
   warnIfPeerMissingGlobalEmailAuthority,
 } from "@/lib/federation/instance-config";
+import {
+  getPeerSmtpConfig,
+  type PeerSmtpConfig,
+} from "@/lib/federation/peer-smtp";
+import { sendViaPeerSmtp } from "@/lib/federation/peer-smtp-transport";
+
+/**
+ * Transactional kinds that represent federated-auth flows. These
+ * ALWAYS route through the global identity authority on a peer —
+ * they can never be captured by peer SMTP config. See module docstring.
+ */
+export const FEDERATED_AUTH_EMAIL_KINDS = [
+  EMAIL_RELAY_KINDS.VERIFICATION,
+  EMAIL_RELAY_KINDS.PASSWORD_RESET,
+  EMAIL_RELAY_KINDS.RECOVERY,
+] as const satisfies readonly EmailRelayKind[];
+
+const FEDERATED_AUTH_EMAIL_KIND_SET: ReadonlySet<EmailRelayKind> = new Set(
+  FEDERATED_AUTH_EMAIL_KINDS,
+);
+
+/**
+ * Whether a given kind MUST route through global regardless of any
+ * peer SMTP configuration.
+ *
+ * @param kind Transactional classification.
+ * @returns True when global is the only acceptable transport.
+ */
+export function isFederatedAuthEmailKind(kind: EmailRelayKind): boolean {
+  return FEDERATED_AUTH_EMAIL_KIND_SET.has(kind);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,9 +169,20 @@ function derivePlaintext(params: TransactionalEmailParams): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Send a transactional email. On global, delivers via local SMTP. On
- * peer instances (when configured), delegates to the global identity
- * authority's signed email relay endpoint.
+ * Send a transactional email.
+ *
+ * Routing:
+ * - Global instance: delivers via local SMTP.
+ * - Peer + federated-auth kind (verification/password-reset/recovery):
+ *   always delegates to the global relay, regardless of peer SMTP.
+ * - Peer + non-federated-auth kind + peer SMTP configured + enabled:
+ *   sends via the peer's own SMTP transport.
+ * - Peer + non-federated-auth kind + no peer SMTP: falls through to
+ *   the global relay.
+ *
+ * All paths swallow transport errors into `{ success: false, error }`
+ * so signup/password-reset/billing flows don't crash when email is
+ * temporarily broken.
  *
  * @param params Message + kind.
  * @returns Result carrying the chosen transport outcome.
@@ -135,17 +190,74 @@ function derivePlaintext(params: TransactionalEmailParams): string {
 export async function sendTransactionalEmail(
   params: TransactionalEmailParams,
 ): Promise<TransactionalEmailResult> {
-  // Peer with no GLOBAL_IDENTITY_AUTHORITY_URL configured — warn once
-  // and fall through to local SMTP. In most peer containers SMTP is
-  // absent, so the message will fail locally with a clear error rather
-  // than silently succeed or crash the caller.
+  // Peer with no GLOBAL_IDENTITY_AUTHORITY_URL configured — warn once.
+  // Federated-auth sends will still attempt the relay path and fail
+  // with a clear error rather than silently succeed.
   warnIfPeerMissingGlobalEmailAuthority();
+
+  // On global, nothing to switch on — local SMTP is authoritative.
+  if (!isPeerInstance()) {
+    return deliverViaLocal(params);
+  }
+
+  // Peer path: federated-auth kinds always route to global relay.
+  if (isFederatedAuthEmailKind(params.kind)) {
+    if (shouldDelegateEmail()) {
+      return deliverViaRelay(params);
+    }
+    // Peer is missing GLOBAL_IDENTITY_AUTHORITY_URL — the warning above
+    // already explained this. Fall back to local SMTP so the caller at
+    // least gets a deterministic failure (most peer containers have no
+    // working SMTP) instead of silently dropping the message.
+    return deliverViaLocal(params);
+  }
+
+  // Peer + non-federated-auth kind — prefer peer's own SMTP config,
+  // otherwise relay via global.
+  const peerConfig = await loadPeerSmtpConfigSafe();
+  if (peerConfig) {
+    return deliverViaPeerSmtp(peerConfig, params);
+  }
 
   if (shouldDelegateEmail()) {
     return deliverViaRelay(params);
   }
 
   return deliverViaLocal(params);
+}
+
+/**
+ * Wrap `getPeerSmtpConfig()` so a transient DB error (e.g. the peer
+ * just booted before Postgres is ready) does not crash the caller —
+ * the mailer falls through to the relay path and logs the failure.
+ */
+async function loadPeerSmtpConfigSafe(): Promise<PeerSmtpConfig | null> {
+  try {
+    return await getPeerSmtpConfig();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[mailer] Could not load peer SMTP config, falling back to relay: ${message}`,
+    );
+    return null;
+  }
+}
+
+async function deliverViaPeerSmtp(
+  config: PeerSmtpConfig,
+  params: TransactionalEmailParams,
+): Promise<TransactionalEmailResult> {
+  const local = await sendViaPeerSmtp(config, {
+    to: params.to,
+    subject: params.subject,
+    html: params.html,
+    text: params.text,
+    replyTo: params.replyTo,
+  });
+  // delegated=false — the peer handled delivery itself, even though it
+  // wasn't the global SMTP transport. Logs treat these two local paths
+  // uniformly.
+  return toResultFromLocal(local);
 }
 
 async function deliverViaLocal(

@@ -148,6 +148,13 @@
       "when": 1776556800000,
       "tag": "0033_link_previews",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1777118400000,
+      "tag": "0034_peer_smtp_config",
+      "breakpoints": true
     }
   ]
 }
