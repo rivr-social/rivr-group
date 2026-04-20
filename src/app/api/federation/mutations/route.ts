@@ -22,6 +22,10 @@ import { toggleFollowAgent, toggleJoinGroup } from "@/app/actions/interactions/s
 import { createEventResource } from "@/app/actions/resource-creation/events";
 import { createOfferingResource } from "@/app/actions/resource-creation/offerings";
 import * as kg from "@/lib/kg/autobot-kg-client";
+import {
+  AUTHORITY_GUARD_REASONS,
+  checkAuthorityForSession,
+} from "@/lib/federation/authority-guard";
 
 const KNOWN_MUTATION_TYPES = [
   "createGroupResource",
@@ -98,6 +102,37 @@ export async function POST(request: Request) {
       );
     }
 
+    // Peer-side authority enforcement on sensitive mutations.
+    // If the caller is acting via a remote viewer session, verify its asserted
+    // home has not been revoked or superseded. `sensitive: true` bypasses the
+    // TTL cache so a freshly-imported authority event takes immediate effect.
+    if (remoteViewerSession) {
+      const authorityCheck = await checkAuthorityForSession(
+        remoteViewerSession.actorId,
+        remoteViewerSession.homeBaseUrl,
+        { sensitive: true },
+      );
+      if (!authorityCheck.allowed) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              authorityCheck.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR
+                ? "Asserted home has been superseded by a successor authority claim"
+                : "Asserted home has been revoked",
+            errorCode:
+              authorityCheck.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR
+                ? "HOME_AUTHORITY_SUPERSEDED"
+                : "HOME_AUTHORITY_REVOKED",
+            ...(authorityCheck.newHomeBaseUrl
+              ? { newHomeBaseUrl: authorityCheck.newHomeBaseUrl }
+              : {}),
+          },
+          { status: 403 },
+        );
+      }
+    }
+
     const remoteInstanceId = request.headers.get("X-Instance-Id");
     const remoteInstanceSlug = request.headers.get("X-Instance-Slug");
 
@@ -165,6 +200,34 @@ async function handleFederatedInteraction(
     return NextResponse.json(
       { success: false, error: "Actor context must include actorId, homeBaseUrl, and assertion" },
       { status: 400 },
+    );
+  }
+
+  // Peer-side authority enforcement (sensitive path): any federated interaction
+  // that asserts a home must be re-checked against the latest authority event
+  // cache. Reject if the home is revoked or has been superseded.
+  const actorAuthorityCheck = await checkAuthorityForSession(
+    actor.actorId,
+    actor.homeBaseUrl,
+    { sensitive: true },
+  );
+  if (!actorAuthorityCheck.allowed) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          actorAuthorityCheck.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR
+            ? "Asserted home has been superseded by a successor authority claim"
+            : "Asserted home has been revoked",
+        errorCode:
+          actorAuthorityCheck.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR
+            ? "HOME_AUTHORITY_SUPERSEDED"
+            : "HOME_AUTHORITY_REVOKED",
+        ...(actorAuthorityCheck.newHomeBaseUrl
+          ? { newHomeBaseUrl: actorAuthorityCheck.newHomeBaseUrl }
+          : {}),
+      },
+      { status: 403 },
     );
   }
 

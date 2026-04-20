@@ -1454,3 +1454,79 @@ export const mcpProvenanceLog = pgTable(
 
 export type McpProvenanceLogRecord = typeof mcpProvenanceLog.$inferSelect;
 export type NewMcpProvenanceLogRecord = typeof mcpProvenanceLog.$inferInsert;
+
+/**
+ * Authority event cache — peer-side projection of signed authority events.
+ *
+ * Purpose:
+ * - Store the latest-seen authority event per (agentId, eventType) received from
+ *   global (or any peer) via `/api/federation/events/import`.
+ * - Drive `authority-guard.ts` revocation/successor decisions on session creation
+ *   and sensitive mutations.
+ *
+ * Canonical source:
+ * - Global owns the append-only `authority_event_log`; peers hold a cached
+ *   latest-seen projection here.
+ *
+ * Event types recognized:
+ * - `credential.updated`
+ * - `authority.revoke`
+ * - `successor.authority.claim`
+ * - `credential.tempwrite.from-global`
+ */
+export const authorityEventCache = pgTable(
+  'authority_event_cache',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    agentId: uuid('agent_id').notNull(),
+    eventType: text('event_type').notNull(),
+    homeBaseUrl: text('home_base_url').notNull(),
+    homeAuthorityVersion: integer('home_authority_version'),
+    authorityStatus: text('authority_status').notNull().default('active'),
+    credentialVersion: integer('credential_version'),
+    successorHomeBaseUrl: text('successor_home_base_url'),
+    signedBy: text('signed_by').notNull(),
+    signedPayload: jsonb('signed_payload').$type<Record<string, unknown>>().notNull().default({}),
+    signature: text('signature'),
+    receivedAt: timestamp('received_at', { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('authority_event_cache_agent_type_idx').on(table.agentId, table.eventType),
+    index('authority_event_cache_agent_id_idx').on(table.agentId),
+    index('authority_event_cache_home_base_url_idx').on(table.homeBaseUrl),
+    index('authority_event_cache_authority_status_idx').on(table.authorityStatus),
+    index('authority_event_cache_received_at_idx').on(table.receivedAt),
+  ]
+);
+
+export type AuthorityEventCacheRecord = typeof authorityEventCache.$inferSelect;
+export type NewAuthorityEventCacheRecord = typeof authorityEventCache.$inferInsert;
+
+/**
+ * Authority event types recognized by the peer consumer.
+ * Keep in sync with the signed events emitted by global (see rivr-app #88).
+ */
+export const AUTHORITY_EVENT_TYPES = {
+  CREDENTIAL_UPDATED: 'credential.updated',
+  AUTHORITY_REVOKE: 'authority.revoke',
+  SUCCESSOR_AUTHORITY_CLAIM: 'successor.authority.claim',
+  CREDENTIAL_TEMPWRITE_FROM_GLOBAL: 'credential.tempwrite.from-global',
+} as const;
+
+export type AuthorityEventType = typeof AUTHORITY_EVENT_TYPES[keyof typeof AUTHORITY_EVENT_TYPES];
+
+/**
+ * `authorityStatus` values stored on the cache row.
+ * - `active`: home is currently authoritative.
+ * - `revoked`: home has been revoked; peer must reject sessions asserted from it.
+ * - `superseded`: home has been superseded by a successor claim.
+ */
+export const AUTHORITY_STATUS = {
+  ACTIVE: 'active',
+  REVOKED: 'revoked',
+  SUPERSEDED: 'superseded',
+} as const;
+
+export type AuthorityStatus = typeof AUTHORITY_STATUS[keyof typeof AUTHORITY_STATUS];

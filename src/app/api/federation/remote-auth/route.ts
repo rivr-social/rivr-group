@@ -10,6 +10,10 @@ import {
   type FederatedAssertionPersonaContext,
 } from "@/lib/federation-remote-session";
 import { resolveRequestOrigin } from "@/lib/request-origin";
+import {
+  AUTHORITY_GUARD_REASONS,
+  checkAuthorityForSession,
+} from "@/lib/federation/authority-guard";
 
 const MAX_ASSERTION_AGE_MS = 5 * 60 * 1000;
 const MAX_ASSERTION_FUTURE_MS = 60 * 1000;
@@ -442,6 +446,42 @@ async function authenticateActor(
     return {
       ok: false,
       response: buildError(timingError, "ASSERTION_TIMING_ERROR", 401),
+    };
+  }
+
+  // Peer-side authority enforcement:
+  // Reject any session whose asserted home has been revoked, or whose home has
+  // been superseded by a successor.authority.claim. Session creation is a
+  // sensitive op, so skip the TTL cache and re-read on every call.
+  const authorityCheck = await checkAuthorityForSession(
+    context.actorId,
+    context.homeBaseUrl,
+    { sensitive: true },
+  );
+  if (!authorityCheck.allowed) {
+    if (authorityCheck.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          {
+            success: false,
+            viewerState: "anonymous",
+            error:
+              "Asserted home has been superseded by a successor authority claim. Re-authenticate through the new home.",
+            errorCode: "HOME_AUTHORITY_SUPERSEDED",
+            newHomeBaseUrl: authorityCheck.newHomeBaseUrl,
+          } satisfies RemoteAuthResult & { newHomeBaseUrl?: string },
+          { status: 403 },
+        ),
+      };
+    }
+    return {
+      ok: false,
+      response: buildError(
+        "Asserted home has been revoked. Sessions from this home are not accepted.",
+        "HOME_AUTHORITY_REVOKED",
+        403,
+      ),
     };
   }
 
