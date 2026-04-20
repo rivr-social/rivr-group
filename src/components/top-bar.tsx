@@ -25,6 +25,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { getActivePersonaInfo } from "@/app/actions/personas"
 import type { SerializedAgent } from "@/lib/graph-serializers"
 import { useRemoteViewer } from "@/contexts/remote-viewer-context"
+import { GLOBAL_BASE_URL } from "@/lib/global-base-url"
 
 interface TopBarProps {
   selectedLocale: string
@@ -89,8 +90,34 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
     <header className="fixed top-0 left-0 right-0 z-50 w-full border-b bg-background">
       <div className="flex h-14 items-center px-2 sm:px-4">
         <div className="flex items-center gap-1.5 shrink-0">
-          <Link href="/" className="flex items-center gap-1.5">
-            <Image src="/rivr-emoji.png" alt="Rivr" width={32} height={32} className="h-8 w-8" />
+          {/*
+            Ticket #109: top-left logo always navigates to GLOBAL
+            (cross-origin on this sovereign instance), using the new
+            theme-aware R-logo.
+          */}
+          <a
+            href={`${GLOBAL_BASE_URL}/`}
+            className="flex items-center gap-1.5"
+            aria-label="RIVR — go to global home"
+          >
+            {/* Light-mode logo */}
+            <Image
+              src="/rivr-logo-light.png"
+              alt="RIVR"
+              width={32}
+              height={32}
+              className="h-8 w-8 block dark:hidden"
+              priority
+            />
+            {/* Dark-mode logo */}
+            <Image
+              src="/rivr-logo-dark.png"
+              alt="RIVR"
+              width={32}
+              height={32}
+              className="h-8 w-8 hidden dark:block"
+              priority
+            />
             <div className="hidden sm:flex flex-col items-center">
               <button
                 onClick={(e) => { e.preventDefault(); setTheme(theme === "dark" ? "light" : "dark"); }}
@@ -101,7 +128,7 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
               </button>
               <Image src="/wordmark.png" alt="RIVR Wordmark" width={80} height={24} className="h-7 w-auto" />
             </div>
-          </Link>
+          </a>
         </div>
         <div className="flex-1 ml-2 sm:ml-4 flex items-center min-w-0">
           <LocaleSwitcher selectedLocale={selectedLocale} onLocaleChange={onLocaleChange} />
