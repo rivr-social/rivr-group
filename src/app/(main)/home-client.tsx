@@ -14,7 +14,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { useRouter } from "next/navigation"
 import { Search, ChevronRight } from "lucide-react"
 import Link from "next/link"
-import { ChapterHeader } from "@/components/chapter-header"
 import { MarketplaceFeed } from "@/components/marketplace-feed"
 import { GigsFeed } from "@/components/gigs-feed"
 import { useToast } from "@/components/ui/use-toast"
@@ -70,7 +69,7 @@ export default function HomeClient({
 }: HomeClientProps) {
   const router = useRouter()
   const { toast } = useToast()
-  const { state: appState, setSelectedChapter } = useAppContext()
+  const { state: appState } = useAppContext()
   const { currentUser } = useUser()
   const isAuthenticated = !!currentUser
   const selectedLocale = appState.selectedChapter || "all"
@@ -439,13 +438,11 @@ export default function HomeClient({
         )}
       </div>
 
-      {/* Chapter header for locale-scoped views */}
-      {selectedLocale !== "all" && (
-        <ChapterHeader
-          selectedChapter={selectedLocale}
-          onChapterChange={setSelectedChapter}
-        />
-      )}
+      {/*
+        Ticket #109: the sticky "Boulder"-style ChapterHeader pill bar has
+        been removed. The locale heading above and the top-bar
+        LocaleSwitcher already convey this context.
+      */}
 
       {/* Post input box (auth required) */}
       {/* Auth-gated redirect entrypoint into `/create?tab=post`. */}
