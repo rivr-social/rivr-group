@@ -5,7 +5,7 @@
  * @description Exports actions to request password reset emails and complete password resets
  * via one-time tokens. Includes anti-enumeration responses, rate limiting, token rotation,
  * and email/audit logging.
- * @dependencies `@/db`, `@/db/schema`, `@/lib/rate-limit`, `@/lib/email`,
+ * @dependencies `@/db`, `@/db/schema`, `@/lib/rate-limit`, `@/lib/mailer`,
  * `@/lib/email-templates`, `@node-rs/bcrypt`, `crypto`, `next/headers`, `drizzle-orm`
  */
 
@@ -16,7 +16,7 @@ import { hash } from "@node-rs/bcrypt";
 import { randomBytes } from "crypto";
 import { headers } from "next/headers";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { sendEmail } from "@/lib/email";
+import { sendTransactionalEmail } from "@/lib/mailer";
 import { passwordResetEmail } from "@/lib/email-templates";
 import { getClientIp } from "@/lib/client-ip";
 import { hashToken } from "@/lib/token-hash";
@@ -124,11 +124,14 @@ export async function requestPasswordResetAction(
 
   // Send reset link payload via email provider/template layer.
   const template = passwordResetEmail(agent.name, rawToken);
-  const result = await sendEmail({
+  const result = await sendTransactionalEmail({
+    kind: "password-reset",
     to: agent.email,
     subject: template.subject,
     html: template.html,
     text: template.text,
+    recipientAgentId: agent.id,
+    meta: { flow: "password_reset" },
   });
 
   // Record send attempt outcome for operational visibility and audits.

@@ -6,6 +6,9 @@
  * Responsibilities:
  * 1. **Route protection** -- unauthenticated requests to non-public routes are
  *    redirected to `/auth/login` (pages) or receive a 401 JSON response (API).
+ *    A request counts as authenticated when **either** a valid NextAuth JWT
+ *    is present **or** a signed, unexpired `rivr_remote_viewer` cookie from a
+ *    federated-SSO session verifies against `AUTH_SECRET` (issue #105).
  * 2. **Content Security Policy** -- a per-request nonce is generated and injected
  *    into a strict CSP header to mitigate XSS attacks.
  * 3. **Security hardening** -- HSTS, X-Content-Type-Options, X-Frame-Options,
@@ -21,6 +24,11 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { isPublicRoute } from "@/lib/route-access";
+import {
+  REMOTE_VIEWER_COOKIE_NAME,
+  type RemoteViewerSessionPayload,
+} from "@/lib/federation/remote-viewer-session-types";
+import { decodeRemoteViewerSessionEdge } from "@/lib/federation/remote-viewer-session-edge";
 
 /**
  * Builds a Content-Security-Policy header string with a per-request nonce.
@@ -162,9 +170,10 @@ function applySecurityHeaders(response: NextResponse, cspHeader: string, nonce: 
  * @returns A NextResponse with security headers applied.
  */
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
   const nonce = btoa(crypto.randomUUID());
   const cspHeader = buildCspHeader(nonce);
-  const { pathname } = request.nextUrl;
   const method = request.method.toUpperCase();
   // Filter non-API POST requests that are neither Server Actions nor form
   // submissions. This prevents bare POST requests from being processed as
@@ -186,6 +195,20 @@ export async function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
 
+  const forcePublicPrefixes = [
+    "/api/mcp",
+    "/api/profile/",
+    "/api/schema-schema",
+    "/.well-known/mcp",
+  ];
+
+  if (forcePublicPrefixes.some((prefix) => pathname.startsWith(prefix))) {
+    const response = NextResponse.next({
+      request: { headers: requestHeaders },
+    });
+    return applySecurityHeaders(response, cspHeader, nonce);
+  }
+
   if (isPublicRoute(pathname)) {
     const response = NextResponse.next({
       request: { headers: requestHeaders },
@@ -201,13 +224,28 @@ export async function middleware(request: NextRequest) {
   const isSecure =
     forwardedProto === "https" || request.nextUrl.protocol === "https:";
 
+  const authSecret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+
   const token = await getToken({
     req: request,
-    secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+    secret: authSecret,
     secureCookie: isSecure,
   });
 
-  if (!token) {
+  // Fall back to the federated `rivr_remote_viewer` cookie when NextAuth is
+  // absent. This lets peer users who signed in via global's SSO flow (issue
+  // #102 / #105) authorize downstream requests without also carrying a local
+  // NextAuth JWT. The cookie is HMAC-verified and expire-checked on every
+  // request; a valid signature alone is not enough if `exp` has passed.
+  let remoteViewer: RemoteViewerSessionPayload | null = null;
+  if (!token && authSecret) {
+    const rawCookie = request.cookies.get(REMOTE_VIEWER_COOKIE_NAME)?.value;
+    if (rawCookie) {
+      remoteViewer = await decodeRemoteViewerSessionEdge(rawCookie, authSecret);
+    }
+  }
+
+  if (!token && !remoteViewer) {
     if (pathname.startsWith("/api/")) {
       const response = NextResponse.json(
         { error: "Authentication required" },
@@ -220,6 +258,19 @@ export async function middleware(request: NextRequest) {
     loginUrl.searchParams.set("callbackUrl", pathname);
     const response = NextResponse.redirect(loginUrl);
     return applySecurityHeaders(response, cspHeader, nonce);
+  }
+
+  // Forward the verified remote-viewer identity to downstream handlers via
+  // request headers so route-level code that does not re-verify the cookie
+  // can still reason about the authenticated actor. Route handlers that gate
+  // on capability / projection MUST still call `getSession()` — these headers
+  // are a hint, not a trust boundary.
+  if (remoteViewer && !token) {
+    requestHeaders.set("x-remote-viewer-actor-id", remoteViewer.actorId);
+    requestHeaders.set("x-remote-viewer-auth-method", remoteViewer.authMethod);
+    if (remoteViewer.homeBaseUrl) {
+      requestHeaders.set("x-remote-viewer-home", remoteViewer.homeBaseUrl);
+    }
   }
 
   const response = NextResponse.next({
@@ -247,6 +298,6 @@ export const config = {
      * - favicon.ico, sitemap.xml, robots.txt
      * - Static assets (images, fonts, json data)
      */
-    "/((?!_next/static|_next/image|Cesium/|geojson/|favicon\\.ico|sitemap\\.xml|robots\\.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf|eot|xml|json|geojson)$).*)",
+    "/((?!_next/static|_next/image|Cesium/|geojson/|favicon\\.ico|sitemap\\.xml|robots\\.txt|.*\\.(?:html|svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf|eot|xml|json|geojson)$).*)",
   ],
 };
