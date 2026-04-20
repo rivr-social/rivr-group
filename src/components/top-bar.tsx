@@ -58,6 +58,11 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [searchOpen])
   const { theme, setTheme } = useTheme()
+  // Theme icon needs a mounted guard — next-themes resolves `theme` only on
+  // the client, so rendering a theme-aware icon on SSR would cause React
+  // #418 hydration mismatches.
+  const [themeMounted, setThemeMounted] = useState(false)
+  useEffect(() => { setThemeMounted(true) }, [])
   // Context-backed user profile data used as an avatar/session fallback.
   const { currentUser } = useUser()
   // Session hook provides auth state; status is checked to avoid flashing the
@@ -122,8 +127,13 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTheme(theme === "dark" ? "light" : "dark"); }}
               className="absolute -top-0.5 -right-1 text-amber-400 hover:text-amber-300 transition-colors"
               aria-label="Toggle theme"
+              suppressHydrationWarning
             >
-              {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+              {themeMounted
+                ? theme === "dark"
+                  ? <Sun className="h-3.5 w-3.5" />
+                  : <Moon className="h-3.5 w-3.5" />
+                : <span className="inline-block h-3.5 w-3.5" aria-hidden="true" />}
             </button>
           </a>
         </div>
