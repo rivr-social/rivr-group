@@ -97,37 +97,34 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
           */}
           <a
             href={`${GLOBAL_BASE_URL}/`}
-            className="flex items-center gap-1.5"
+            className="relative flex items-center"
             aria-label="RIVR — go to global home"
           >
             {/* Light-mode logo */}
             <Image
               src="/rivr-logo-light.png"
               alt="RIVR"
-              width={32}
-              height={32}
-              className="h-8 w-8 block dark:hidden"
+              width={48}
+              height={48}
+              className="h-12 w-12 block dark:hidden"
               priority
             />
             {/* Dark-mode logo */}
             <Image
               src="/rivr-logo-dark.png"
               alt="RIVR"
-              width={32}
-              height={32}
-              className="h-8 w-8 hidden dark:block"
+              width={48}
+              height={48}
+              className="h-12 w-12 hidden dark:block"
               priority
             />
-            <div className="hidden sm:flex flex-col items-center">
-              <button
-                onClick={(e) => { e.preventDefault(); setTheme(theme === "dark" ? "light" : "dark"); }}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-                aria-label="Toggle theme"
-              >
-                {theme === "dark" ? <Sun className="h-3 w-3" /> : <Moon className="h-3 w-3" />}
-              </button>
-              <Image src="/wordmark.png" alt="RIVR Wordmark" width={80} height={24} className="h-7 w-auto" />
-            </div>
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTheme(theme === "dark" ? "light" : "dark"); }}
+              className="absolute -top-0.5 -right-1 text-amber-400 hover:text-amber-300 transition-colors"
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+            </button>
           </a>
         </div>
         <div className="flex-1 ml-2 sm:ml-4 flex items-center min-w-0">
