@@ -1591,3 +1591,52 @@ export const linkPreviews = pgTable(
 
 export type LinkPreviewRecord = typeof linkPreviews.$inferSelect;
 export type NewLinkPreviewRecord = typeof linkPreviews.$inferInsert;
+
+/**
+ * Per-instance outgoing SMTP configuration (ticket #106).
+ *
+ * Purpose:
+ * - Lets a peer Rivr instance (person/group/locale/region) configure its
+ *   own outgoing transactional SMTP transport (Gmail Workspace, Postmark,
+ *   etc.) for notifications it owns (group broadcasts, billing receipts,
+ *   login notices).
+ * - Federated-auth email (verification / password-reset / recovery)
+ *   still routes through the global identity authority — this table
+ *   never overrides that rail.
+ *
+ * Security contract:
+ * - `password_secret_ref` stores a REFERENCE ONLY — either the name of
+ *   an env var (`PEER_SMTP_PASSWORD`) or a Docker secret mount path
+ *   (`/run/secrets/peer_smtp_password`). The actual credential is
+ *   resolved at send time by `getPeerSmtpConfig()` and never written to
+ *   this table. Admin UIs must never echo the resolved value back.
+ *
+ * Single-row-per-instance invariant:
+ * - Enforced by the unique index on `instance_id`. Upserts are keyed on
+ *   `instance_id` so re-saving the settings page updates in place.
+ */
+export const peerSmtpConfig = pgTable(
+  'peer_smtp_config',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id').notNull(),
+    enabled: boolean('enabled').notNull().default(false),
+    host: text('host').notNull(),
+    port: integer('port').notNull().default(587),
+    secure: boolean('secure').notNull().default(false),
+    username: text('username').notNull(),
+    fromAddress: text('from_address').notNull(),
+    passwordSecretRef: text('password_secret_ref').notNull(),
+    lastTestAt: timestamp('last_test_at', { withTimezone: true }),
+    lastTestStatus: text('last_test_status'),
+    lastTestError: text('last_test_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('peer_smtp_config_instance_id_idx').on(table.instanceId),
+  ],
+);
+
+export type PeerSmtpConfigRecord = typeof peerSmtpConfig.$inferSelect;
+export type NewPeerSmtpConfigRecord = typeof peerSmtpConfig.$inferInsert;
