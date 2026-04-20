@@ -36,7 +36,7 @@ import {
   DEFAULT_MEMBERSHIP_TRIAL_DAYS,
 } from '@/lib/billing';
 import type { MembershipTier } from '@/db/schema';
-import { sendEmail } from '@/lib/email';
+import { sendTransactionalEmail } from '@/lib/mailer';
 import { trialEndingReminderEmail } from '@/lib/email-templates';
 
 const VALID_TIERS = new Set<string>(Object.keys(MEMBERSHIP_TIERS));
@@ -274,9 +274,12 @@ export async function sendTrialEndingRemindersAction(): Promise<{
         `${baseUrl}/profile`
       );
 
-      const result = await sendEmail({
+      const result = await sendTransactionalEmail({
+        kind: 'transactional',
         to: sub.agentEmail,
         ...email,
+        recipientAgentId: sub.agentId,
+        meta: { flow: 'trial_ending_reminder' },
       });
 
       await db.insert(emailLog).values({

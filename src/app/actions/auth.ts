@@ -31,7 +31,7 @@ import { randomBytes } from "crypto";
 import { AuthError } from "next-auth";
 import { headers } from "next/headers";
 import { rateLimit } from "@/lib/rate-limit";
-import { sendEmail } from "@/lib/email";
+import { sendTransactionalEmail } from "@/lib/mailer";
 import { verificationEmail, loginNotificationEmail } from "@/lib/email-templates";
 import { embedAgent, scheduleEmbedding } from "@/lib/ai";
 import { provisionMatrixUser } from "@/lib/matrix-admin";
@@ -580,11 +580,14 @@ async function sendVerificationEmail(params: {
   });
 
   const template = verificationEmail(name, rawToken);
-  const result = await sendEmail({
+  const result = await sendTransactionalEmail({
+    kind: "verification",
     to: email,
     subject: template.subject,
     html: template.html,
     text: template.text,
+    recipientAgentId: agentId,
+    meta: { flow: "signup_verification" },
   });
 
   await db.insert(emailLog).values({
@@ -660,11 +663,14 @@ function sendLoginNotification(
       if (!agent || !agent.email) return;
 
       const template = loginNotificationEmail(agent.name, ipAddress, userAgent);
-      const result = await sendEmail({
+      const result = await sendTransactionalEmail({
+        kind: "transactional",
         to: agent.email,
         subject: template.subject,
         html: template.html,
         text: template.text,
+        recipientAgentId: agent.id,
+        meta: { flow: "login_notification" },
       });
 
       await db.insert(emailLog).values({

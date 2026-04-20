@@ -1,638 +1,299 @@
-import { and, eq, isNull } from "drizzle-orm";
+/**
+ * Federated-SSO acceptance endpoint for peer instances (issue #102).
+ *
+ * Purpose:
+ * - Accept a signed SSO assertion minted by the global identity authority
+ *   via `POST /api/federation/sso/issue`, verify the assertion against the
+ *   issuer's public key stored in `nodes`, and set the short-lived
+ *   `rivr_remote_viewer` cookie that represents a federated viewer session
+ *   on this peer.
+ * - Sibling write-path to `/api/federation/sso/issue`. Issue mints; this
+ *   route verifies and grants a local session cookie.
+ *
+ * Endpoint:
+ * - `POST /api/federation/remote-auth`
+ * - Body: a fully signed assertion exactly as produced by
+ *   `SignedSsoAssertion` in `@/lib/federation/sso-assertion`. The body is
+ *   passed through the verifier as-is (no normalization) so the signature
+ *   continues to cover every field the target trusts.
+ *
+ * Response shape (200):
+ * ```json
+ * {
+ *   "ok": true,
+ *   "actorId": "uuid",
+ *   "homeBaseUrl": "https://alice.rivr.example",
+ *   "globalIssuerBaseUrl": "https://global.rivr.social",
+ *   "authMethod": "federated-sso",
+ *   "expiresAt": 1713500500
+ * }
+ * ```
+ *
+ * Error codes:
+ * - 400 — body is missing or not a signed-assertion shape.
+ * - 401 — assertion is malformed, expired, audience-mismatched, issuer
+ *         unknown, or signature invalid. All failure modes collapse to a
+ *         single 401 so the route cannot be used as an issuer-discovery
+ *         or audience-probing oracle (Cameron's constraint: "don't leak
+ *         global's existence").
+ * - 429 — per-IP rate limit hit.
+ * - 500 — DB/crypto unavailable.
+ *
+ * Rate limiting:
+ * - Per-IP bucket (30/min) matches `/api/federation/sso/issue`. An
+ *   attacker spraying nonces across IPs still hits the per-issuer
+ *   verification cost ceiling because the verifier short-circuits on
+ *   audience mismatch before any DB work.
+ *
+ * Security posture:
+ * - Audience binding is checked before signature verification so a valid
+ *   assertion for a different target is cheap to reject.
+ * - Single 401 response for every verify failure (see above).
+ * - Cookie is HttpOnly, Secure on HTTPS, SameSite=Lax, Path=/.
+ * - Cookie body is HMAC-SHA256 signed with `AUTH_SECRET` so an attacker
+ *   that cannot read the process env cannot mint a session.
+ */
+
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { agents, ledger, nodes } from "@/db/schema";
+
+import { getClientIp } from "@/lib/client-ip";
+import { rateLimit } from "@/lib/rate-limit";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
 import {
-  createRemoteViewerToken,
-  REMOTE_VIEWER_COOKIE_NAME,
-  REMOTE_VIEWER_TTL_MS,
-  type FederatedAssertionPersonaContext,
-} from "@/lib/federation-remote-session";
-import { resolveRequestOrigin } from "@/lib/request-origin";
+  verifySsoAssertion,
+  type SsoAssertionVerifyResult,
+} from "@/lib/federation/sso-assertion";
 import {
-  AUTHORITY_GUARD_REASONS,
-  checkAuthorityForSession,
-} from "@/lib/federation/authority-guard";
+  REMOTE_VIEWER_COOKIE_NAME,
+  REMOTE_VIEWER_DEFAULT_LIFETIME_SEC,
+  encodeRemoteViewerSession,
+  RemoteViewerSessionError,
+} from "@/lib/federation/remote-viewer-session";
+import {
+  STATUS_OK,
+  STATUS_BAD_REQUEST,
+  STATUS_UNAUTHORIZED,
+  STATUS_TOO_MANY_REQUESTS,
+  STATUS_INTERNAL_ERROR,
+  STATUS_UNSUPPORTED_MEDIA_TYPE,
+} from "@/lib/http-status";
 
-const MAX_ASSERTION_AGE_MS = 5 * 60 * 1000;
-const MAX_ASSERTION_FUTURE_MS = 60 * 1000;
+// ---------------------------------------------------------------------------
+// Policy constants
+// ---------------------------------------------------------------------------
 
-type AssertionType = "session" | "token" | "signed";
+/** Per-IP rate limit: 30 verifications per rolling minute. */
+const IP_RATE_LIMIT_MAX = 30;
+const IP_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 
-type FederatedActorContext = {
-  actorId: string;
-  homeBaseUrl: string;
-  assertionType: AssertionType;
-  assertion: string;
-  issuedAt: string;
-  expiresAt: string;
-  manifestUrl?: string;
-};
+/**
+ * Session lifetime for the `rivr_remote_viewer` cookie, in seconds.
+ * Clamps to the module's hard ceiling (30d) inside the encoder; the
+ * default (7d) matches the NextAuth JWT session lifetime on this app.
+ */
+const VIEWER_SESSION_LIFETIME_SEC = REMOTE_VIEWER_DEFAULT_LIFETIME_SEC;
 
-type RemoteAuthResult = {
-  success: boolean;
-  viewerState: "anonymous" | "remotely_authenticated";
-  sessionToken?: string;
-  actorId?: string;
-  homeBaseUrl?: string;
-  displayName?: string;
-  persona?: FederatedAssertionPersonaContext;
-  error?: string;
-  errorCode?: string;
-  bootstrap?: {
-    applied: boolean;
-    groupType?: "organization" | "family" | "ring";
-    primaryAgentId?: string;
-  };
-};
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
 
-type VerificationResult = {
-  valid: boolean;
-  displayName?: string;
-  email?: string;
-  manifestUrl?: string;
-  persona?: FederatedAssertionPersonaContext;
-  error?: string;
-};
+/**
+ * POST handler — verify a signed SSO assertion and set the viewer cookie.
+ *
+ * @param request Incoming fetch Request (expects `application/json`).
+ * @returns Session summary on success; canonical error JSON otherwise.
+ */
+export async function POST(request: Request): Promise<NextResponse> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return NextResponse.json(
+      { error: "Content-Type must be application/json" },
+      { status: STATUS_UNSUPPORTED_MEDIA_TYPE },
+    );
+  }
 
-function normalizeRedirectPath(path: string | null): string {
-  if (!path) return "/";
-  if (!path.startsWith("/")) return "/";
-  if (path.startsWith("//")) return "/";
-  return path;
-}
-
-function normalizeGroupType(value: string | null): "organization" | "family" | "ring" | null {
-  if (!value) return null;
-  const type = value.trim().toLowerCase();
-  if (type === "org") return "organization";
-  if (type === "organization" || type === "family" || type === "ring") return type;
-  return null;
-}
-
-function mapGroupTypeToAgentType(groupType: "organization" | "family" | "ring"): "organization" | "family" | "ring" {
-  if (groupType === "family") return "family";
-  if (groupType === "ring") return "ring";
-  return "organization";
-}
-
-function inferBootstrapGroupType(primary: {
-  type?: string | null;
-  metadata?: Record<string, unknown> | null;
-} | null | undefined): "organization" | "family" | "ring" {
-  if (!primary) return "organization";
-  const metadata = (primary.metadata ?? {}) as Record<string, unknown>;
-  const metadataGroupType =
-    typeof metadata.groupType === "string" ? normalizeGroupType(metadata.groupType) : null;
-  if (metadataGroupType) return metadataGroupType;
-
-  const agentType = typeof primary.type === "string" ? normalizeGroupType(primary.type) : null;
-  if (agentType) return agentType;
-
-  return "organization";
-}
-
-function validateActorContext(ctx: Partial<FederatedActorContext>): string | null {
-  if (!ctx.actorId || typeof ctx.actorId !== "string") return "actorId is required";
-  if (!ctx.homeBaseUrl || typeof ctx.homeBaseUrl !== "string") return "homeBaseUrl is required";
+  let parsedBody: unknown;
   try {
-    const url = new URL(ctx.homeBaseUrl);
-    if (!["http:", "https:"].includes(url.protocol)) return "homeBaseUrl must be http/https";
+    parsedBody = await request.json();
   } catch {
-    return "homeBaseUrl must be a valid URL";
+    return NextResponse.json(
+      { error: "Invalid JSON body" },
+      { status: STATUS_BAD_REQUEST },
+    );
   }
-  if (!ctx.assertionType || !["session", "token", "signed"].includes(ctx.assertionType)) {
-    return "assertionType must be one of: session, token, signed";
+
+  // Per-IP rate limit (before any DB/crypto work).
+  const clientIp = getClientIp(request.headers);
+  const ipLimit = await rateLimit(
+    `federation-remote-auth:ip:${clientIp}`,
+    IP_RATE_LIMIT_MAX,
+    IP_RATE_LIMIT_WINDOW_MS,
+  );
+  if (!ipLimit.success) {
+    const retryAfterSec = Math.max(1, Math.ceil(ipLimit.resetMs / 1000));
+    return NextResponse.json(
+      { error: "Too many requests" },
+      {
+        status: STATUS_TOO_MANY_REQUESTS,
+        headers: {
+          "Retry-After": retryAfterSec.toString(),
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   }
-  if (!ctx.assertion || typeof ctx.assertion !== "string") return "assertion is required";
-  if (!ctx.issuedAt || typeof ctx.issuedAt !== "string") return "issuedAt is required";
-  if (!ctx.expiresAt || typeof ctx.expiresAt !== "string") return "expiresAt is required";
-  return null;
-}
 
-function validateAssertionTiming(ctx: FederatedActorContext): string | null {
-  const now = Date.now();
-  const issuedAt = new Date(ctx.issuedAt).getTime();
-  const expiresAt = new Date(ctx.expiresAt).getTime();
-  if (Number.isNaN(issuedAt) || Number.isNaN(expiresAt)) {
-    return "issuedAt and expiresAt must be valid ISO timestamps";
+  const config = getInstanceConfig();
+  const expectedTarget = deriveExpectedTargetBaseUrl(request, config.baseUrl);
+  if (!expectedTarget) {
+    // Instance misconfigured — we cannot safely verify an audience binding.
+    return NextResponse.json(
+      { error: "Instance base URL not configured" },
+      { status: STATUS_INTERNAL_ERROR },
+    );
   }
-  if (issuedAt > now + MAX_ASSERTION_FUTURE_MS) return "Assertion issuedAt is in the future";
-  if (now - issuedAt > MAX_ASSERTION_AGE_MS) return "Assertion too old";
-  if (expiresAt <= now) return "Assertion expired";
-  return null;
-}
 
-async function verifyActorAssertionWithHome(
-  ctx: FederatedActorContext,
-  targetBaseUrl: string,
-): Promise<VerificationResult> {
-  const homeBaseUrl = ctx.homeBaseUrl.replace(/\/+$/, "");
-  const verifyUrl = `${homeBaseUrl}/api/federation/remote-assertion/verify`;
-
+  let result: SsoAssertionVerifyResult;
   try {
-    const response = await fetch(verifyUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        actorId: ctx.actorId,
-        homeBaseUrl: ctx.homeBaseUrl,
-        targetBaseUrl,
-        assertion: ctx.assertion,
-        issuedAt: ctx.issuedAt,
-        expiresAt: ctx.expiresAt,
-      }),
-      signal: AbortSignal.timeout(5000),
+    result = await verifySsoAssertion({
+      assertion: parsedBody,
+      expectedTargetBaseUrl: expectedTarget,
+      expectedGlobalIssuerBaseUrl:
+        process.env.GLOBAL_IDENTITY_AUTHORITY_URL ?? undefined,
     });
-
-    const data = await response.json().catch(() => ({} as Record<string, unknown>));
-    if (!response.ok || data.valid !== true) {
-      return {
-        valid: false,
-        error:
-          typeof data.error === "string"
-            ? data.error
-            : `Home verification failed (${response.status})`,
-      };
-    }
-
-    // Extract persona context if present in the verification response
-    let persona: FederatedAssertionPersonaContext | undefined;
-    if (
-      data.persona &&
-      typeof data.persona === "object" &&
-      typeof (data.persona as Record<string, unknown>).personaId === "string" &&
-      typeof (data.persona as Record<string, unknown>).parentAgentId === "string"
-    ) {
-      const p = data.persona as Record<string, unknown>;
-      persona = {
-        personaId: p.personaId as string,
-        parentAgentId: p.parentAgentId as string,
-        ...(typeof p.personaDisplayName === "string"
-          ? { personaDisplayName: p.personaDisplayName }
-          : {}),
-      };
-    }
-
-    return {
-      valid: true,
-      displayName: typeof data.displayName === "string" ? data.displayName : undefined,
-      email: typeof data.email === "string" ? data.email : undefined,
-      manifestUrl: typeof data.manifestUrl === "string" ? data.manifestUrl : undefined,
-      persona,
-    };
   } catch (error) {
-    return {
-      valid: false,
-      error: error instanceof Error ? `Home instance unreachable: ${error.message}` : "Home instance unreachable",
-    };
-  }
-}
-
-async function bootstrapPrimaryGroup(params: {
-  actorId: string;
-  homeBaseUrl: string;
-  displayName?: string;
-  email?: string;
-  manifestUrl?: string;
-  requestedGroupType: "organization" | "family" | "ring";
-}): Promise<{ applied: boolean; primaryAgentId?: string; groupType?: "organization" | "family" | "ring" }> {
-  const config = getInstanceConfig();
-  if (!config.primaryAgentId) {
-    return { applied: false };
+    console.error("[federation/remote-auth] verify threw:", error);
+    return NextResponse.json(
+      { error: "Internal error" },
+      { status: STATUS_INTERNAL_ERROR },
+    );
   }
 
-  const primary = await db.query.agents.findFirst({
-    where: and(eq(agents.id, config.primaryAgentId), isNull(agents.deletedAt)),
-    columns: {
-      id: true,
-      metadata: true,
-    },
-  });
-  if (!primary) {
-    return { applied: false };
-  }
-
-  const now = new Date();
-  const metadata = (primary.metadata ?? {}) as Record<string, unknown>;
-  const existingSourceOwner =
-    metadata.sourceOwner && typeof metadata.sourceOwner === "object"
-      ? (metadata.sourceOwner as Record<string, unknown>)
-      : null;
-
-  if (
-    existingSourceOwner &&
-    typeof existingSourceOwner.actorId === "string" &&
-    existingSourceOwner.actorId.length > 0 &&
-    existingSourceOwner.actorId !== params.actorId
-  ) {
-    return { applied: false, primaryAgentId: primary.id };
-  }
-
-  const existingActor = await db.query.agents.findFirst({
-    where: and(eq(agents.id, params.actorId), isNull(agents.deletedAt)),
-    columns: { id: true, metadata: true },
-  });
-
-  if (!existingActor) {
-    await db.insert(agents).values({
-      id: params.actorId,
-      name: params.displayName?.trim() || "Federated user",
-      email: params.email?.trim() || null,
-      type: "person",
-      visibility: "public",
-      peermeshManifestUrl: params.manifestUrl ?? null,
-      peermeshLinkedAt: now,
-      metadata: {
-        federatedHomeBaseUrl: params.homeBaseUrl,
-        federatedOwner: true,
-        sourceType: "federated_home_instance",
+  if (!result.ok) {
+    // Single 401 for every failure mode so this route cannot be used as
+    // an audience/issuer probe.
+    console.warn(
+      `[federation/remote-auth] rejected assertion: reason=${result.reason}`,
+    );
+    return NextResponse.json(
+      { error: "Invalid assertion" },
+      {
+        status: STATUS_UNAUTHORIZED,
+        headers: { "Cache-Control": "no-store" },
       },
-      updatedAt: now,
-    });
-  } else {
-    const actorMetadata =
-      existingActor.metadata && typeof existingActor.metadata === "object"
-        ? (existingActor.metadata as Record<string, unknown>)
-        : {};
-    await db
-      .update(agents)
-      .set({
-        name: params.displayName?.trim() || undefined,
-        email: params.email?.trim() || undefined,
-        peermeshManifestUrl: params.manifestUrl ?? null,
-        peermeshLinkedAt: now,
-        metadata: {
-          ...actorMetadata,
-          federatedHomeBaseUrl: params.homeBaseUrl,
-          federatedOwner: true,
-          sourceType: "federated_home_instance",
-        },
-        updatedAt: now,
-      })
-      .where(eq(agents.id, params.actorId));
+    );
   }
 
-  const existingMembership = await db.query.ledger.findFirst({
-    where: and(
-      eq(ledger.subjectId, params.actorId),
-      eq(ledger.objectId, primary.id),
-      eq(ledger.verb, "join"),
-      eq(ledger.isActive, true),
-    ),
-    columns: { id: true },
-  });
+  const claims = result.claims;
 
-  if (!existingMembership) {
-    await db.insert(ledger).values({
-      verb: "join",
-      subjectId: params.actorId,
-      objectId: primary.id,
-      objectType: "agent",
-      role: "admin",
-      isActive: true,
-      visibility: "public",
-      timestamp: now,
-      metadata: {
-        grantType: "federated_bootstrap",
-        sourceOwner: true,
-        homeBaseUrl: params.homeBaseUrl,
-      },
-    });
+  const secret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
+  if (!secret) {
+    console.error(
+      "[federation/remote-auth] AUTH_SECRET missing; cannot mint viewer cookie",
+    );
+    return NextResponse.json(
+      { error: "Internal error" },
+      { status: STATUS_INTERNAL_ERROR },
+    );
   }
 
-  const existingAdminIds = Array.isArray(metadata.adminIds)
-    ? metadata.adminIds.filter((value): value is string => typeof value === "string")
-    : [];
-  const adminIds = Array.from(new Set([...existingAdminIds, params.actorId]));
-  const nextCreatorId =
-    typeof metadata.creatorId === "string" && metadata.creatorId.length > 0
-      ? metadata.creatorId
-      : params.actorId;
-
-  await db
-    .update(agents)
-    .set({
-      type: mapGroupTypeToAgentType(params.requestedGroupType),
-      metadata: {
-        ...metadata,
-        groupType: params.requestedGroupType,
-        creatorId: nextCreatorId,
-        adminIds,
-        sourceOwner: {
-          actorId: params.actorId,
-          homeBaseUrl: params.homeBaseUrl,
-          linkedAt: now.toISOString(),
-        },
+  let cookieValue: string;
+  try {
+    cookieValue = encodeRemoteViewerSession(
+      {
+        actorId: claims.actorId,
+        homeBaseUrl: claims.homeBaseUrl,
+        globalIssuerBaseUrl: claims.globalIssuerBaseUrl,
+        credentialVersion: claims.credentialVersion,
+        homeAuthorityVersion: claims.homeAuthorityVersion,
+        instanceClass: claims.instanceClass,
+        parentAgentId: claims.parentAgentId,
+        authMethod: "federated-sso",
+        lifetimeSec: VIEWER_SESSION_LIFETIME_SEC,
       },
-      updatedAt: now,
-    })
-    .where(eq(agents.id, primary.id));
-
-  await db
-    .update(nodes)
-    .set({
-      ownerAgentId: params.actorId,
-      primaryAgentId: primary.id,
-      updatedAt: now,
-    })
-    .where(eq(nodes.id, config.instanceId));
-
-  return {
-    applied: true,
-    primaryAgentId: primary.id,
-    groupType: params.requestedGroupType,
-  };
-}
-
-async function mirrorBootstrapMembershipToHome(params: {
-  actorId: string;
-  homeBaseUrl: string;
-  primaryAgentId: string;
-}): Promise<void> {
-  const group = await db.query.agents.findFirst({
-    where: and(eq(agents.id, params.primaryAgentId), isNull(agents.deletedAt)),
-    columns: {
-      id: true,
-      name: true,
-      type: true,
-      description: true,
-      metadata: true,
-    },
-  });
-  if (!group) return;
-
-  const config = getInstanceConfig();
-  const groupMetadata =
-    group.metadata && typeof group.metadata === "object"
-      ? (group.metadata as Record<string, unknown>)
-      : {};
-
-  const response = await fetch(`${params.homeBaseUrl}/api/federation/mutations`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Instance-Id": config.instanceId,
-      "X-Instance-Slug": config.instanceSlug,
-      ...(process.env.NODE_ADMIN_KEY?.trim()
-        ? { "X-Node-Admin-Key": process.env.NODE_ADMIN_KEY.trim() }
-        : {}),
-    },
-    body: JSON.stringify({
-      type: "applyMembershipProjection",
-      actorId: params.actorId,
-      targetAgentId: params.actorId,
-      payload: {
-        joined: true,
-        role: "admin",
-        group: {
-          id: group.id,
-          name: group.name,
-          type: group.type,
-          description: group.description,
-          metadata: groupMetadata,
-          homeBaseUrl: config.baseUrl,
-          sourceOwner:
-            groupMetadata.sourceOwner && typeof groupMetadata.sourceOwner === "object"
-              ? groupMetadata.sourceOwner
-              : null,
-        },
-      },
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!response.ok) {
-    const message = await response.text().catch(() => "");
-    throw new Error(`Failed to mirror bootstrap membership (${response.status}): ${message}`);
+      secret,
+    );
+  } catch (error) {
+    if (error instanceof RemoteViewerSessionError) {
+      console.error("[federation/remote-auth] encode failed:", error);
+      return NextResponse.json(
+        { error: "Internal error" },
+        { status: STATUS_INTERNAL_ERROR },
+      );
+    }
+    throw error;
   }
-}
 
-function buildError(error: string, code: string, status = 401) {
-  return NextResponse.json(
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expiresAt = nowSec + VIEWER_SESSION_LIFETIME_SEC;
+  const isHttps = deriveIsHttps(request);
+
+  const response = NextResponse.json(
     {
-      success: false,
-      viewerState: "anonymous",
-      error,
-      errorCode: code,
-    } satisfies RemoteAuthResult,
-    { status },
-  );
-}
-
-async function authenticateActor(
-  actorContext: Partial<FederatedActorContext>,
-  targetBaseUrl: string,
-  requestedGroupType?: "organization" | "family" | "ring" | null,
-): Promise<
-  | { ok: true; result: RemoteAuthResult; token: string }
-  | { ok: false; response: NextResponse }
-> {
-  const validationError = validateActorContext(actorContext);
-  if (validationError) {
-    return {
-      ok: false,
-      response: buildError(validationError, "INVALID_ACTOR_CONTEXT", 400),
-    };
-  }
-
-  const context = actorContext as FederatedActorContext;
-  const timingError = validateAssertionTiming(context);
-  if (timingError) {
-    return {
-      ok: false,
-      response: buildError(timingError, "ASSERTION_TIMING_ERROR", 401),
-    };
-  }
-
-  // Peer-side authority enforcement:
-  // Reject any session whose asserted home has been revoked, or whose home has
-  // been superseded by a successor.authority.claim. Session creation is a
-  // sensitive op, so skip the TTL cache and re-read on every call.
-  const authorityCheck = await checkAuthorityForSession(
-    context.actorId,
-    context.homeBaseUrl,
-    { sensitive: true },
-  );
-  if (!authorityCheck.allowed) {
-    if (authorityCheck.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR) {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          {
-            success: false,
-            viewerState: "anonymous",
-            error:
-              "Asserted home has been superseded by a successor authority claim. Re-authenticate through the new home.",
-            errorCode: "HOME_AUTHORITY_SUPERSEDED",
-            newHomeBaseUrl: authorityCheck.newHomeBaseUrl,
-          } satisfies RemoteAuthResult & { newHomeBaseUrl?: string },
-          { status: 403 },
-        ),
-      };
-    }
-    return {
-      ok: false,
-      response: buildError(
-        "Asserted home has been revoked. Sessions from this home are not accepted.",
-        "HOME_AUTHORITY_REVOKED",
-        403,
-      ),
-    };
-  }
-
-  const verification = await verifyActorAssertionWithHome(context, targetBaseUrl);
-  if (!verification.valid) {
-    return {
-      ok: false,
-      response: buildError(
-        verification.error || "Actor assertion verification failed",
-        "ASSERTION_VERIFICATION_FAILED",
-        401,
-      ),
-    };
-  }
-
-  const config = getInstanceConfig();
-  const sessionToken = createRemoteViewerToken({
-    actorId: context.actorId,
-    homeBaseUrl: context.homeBaseUrl,
-    localInstanceId: config.instanceId,
-    persona: verification.persona,
-  });
-
-  const primary = config.primaryAgentId
-    ? await db.query.agents.findFirst({
-        where: and(eq(agents.id, config.primaryAgentId), isNull(agents.deletedAt)),
-        columns: {
-          id: true,
-          type: true,
-          metadata: true,
-        },
-      })
-    : null;
-  const primaryMetadata =
-    primary?.metadata && typeof primary.metadata === "object"
-      ? (primary.metadata as Record<string, unknown>)
-      : {};
-  const existingSourceOwner =
-    primaryMetadata.sourceOwner && typeof primaryMetadata.sourceOwner === "object"
-      ? (primaryMetadata.sourceOwner as Record<string, unknown>)
-      : null;
-  const shouldAutoBootstrap =
-    config.instanceType === "group" &&
-    !!config.primaryAgentId &&
-    (!existingSourceOwner || typeof existingSourceOwner.actorId !== "string" || existingSourceOwner.actorId.length === 0);
-  const effectiveGroupType = requestedGroupType ?? (shouldAutoBootstrap ? inferBootstrapGroupType(primary) : null);
-
-  let bootstrap: RemoteAuthResult["bootstrap"] | undefined;
-  if (effectiveGroupType) {
-    const result = await bootstrapPrimaryGroup({
-      actorId: context.actorId,
-      homeBaseUrl: context.homeBaseUrl,
-      displayName: verification.displayName,
-      email: verification.email,
-      manifestUrl: verification.manifestUrl,
-      requestedGroupType: effectiveGroupType,
-    });
-    bootstrap = {
-      applied: result.applied,
-      groupType: result.groupType,
-      primaryAgentId: result.primaryAgentId,
-    };
-    if (result.applied && result.primaryAgentId) {
-      await mirrorBootstrapMembershipToHome({
-        actorId: context.actorId,
-        homeBaseUrl: context.homeBaseUrl,
-        primaryAgentId: result.primaryAgentId,
-      }).catch((error) => {
-        console.error("[federation/remote-auth] Failed to mirror bootstrap membership:", error);
-      });
-    }
-  }
-
-  return {
-    ok: true,
-    token: sessionToken,
-    result: {
-      success: true,
-      viewerState: "remotely_authenticated",
-      sessionToken,
-      actorId: context.actorId,
-      homeBaseUrl: context.homeBaseUrl,
-      displayName: verification.displayName,
-      persona: verification.persona,
-      bootstrap,
+      ok: true,
+      actorId: claims.actorId,
+      homeBaseUrl: claims.homeBaseUrl,
+      globalIssuerBaseUrl: claims.globalIssuerBaseUrl,
+      authMethod: "federated-sso" as const,
+      expiresAt,
     },
-  };
-}
+    { status: STATUS_OK, headers: { "Cache-Control": "no-store" } },
+  );
 
-function attachRemoteViewerCookie(response: NextResponse, requestUrl: URL, token: string): void {
-  response.cookies.set(REMOTE_VIEWER_COOKIE_NAME, token, {
+  response.cookies.set(REMOTE_VIEWER_COOKIE_NAME, cookieValue, {
     httpOnly: true,
-    secure: requestUrl.protocol === "https:",
+    secure: isHttps,
     sameSite: "lax",
     path: "/",
-    maxAge: Math.floor(REMOTE_VIEWER_TTL_MS / 1000),
+    maxAge: VIEWER_SESSION_LIFETIME_SEC,
   });
-}
 
-export async function POST(request: Request) {
-  try {
-    const requestUrl = new URL(request.url);
-    const config = getInstanceConfig();
-    const publicOrigin = resolveRequestOrigin(request, config.baseUrl);
-    const body = (await request.json()) as Partial<FederatedActorContext> & {
-      groupType?: string;
-    };
-    const requestedGroupType = normalizeGroupType(body.groupType ?? null);
-    const auth = await authenticateActor(
-      body,
-      publicOrigin,
-      requestedGroupType,
-    );
-    if (!auth.ok) return auth.response;
-
-    const response = NextResponse.json(auth.result);
-    attachRemoteViewerCookie(response, requestUrl, auth.token);
-    return response;
-  } catch (error) {
-    return buildError(
-      error instanceof Error ? error.message : "Failed to process remote authentication",
-      "INTERNAL_ERROR",
-      500,
-    );
-  }
-}
-
-export async function GET(request: Request) {
-  const requestUrl = new URL(request.url);
-  const config = getInstanceConfig();
-  const publicOrigin = resolveRequestOrigin(request, config.baseUrl);
-  const requestedGroupType = normalizeGroupType(requestUrl.searchParams.get("groupType"));
-  const actorContext: Partial<FederatedActorContext> = {
-    actorId: requestUrl.searchParams.get("actorId") ?? undefined,
-    homeBaseUrl: requestUrl.searchParams.get("homeBaseUrl") ?? undefined,
-    assertionType: (requestUrl.searchParams.get("assertionType") as AssertionType | null) ?? undefined,
-    assertion: requestUrl.searchParams.get("assertion") ?? undefined,
-    issuedAt: requestUrl.searchParams.get("issuedAt") ?? undefined,
-    expiresAt: requestUrl.searchParams.get("expiresAt") ?? undefined,
-    manifestUrl: requestUrl.searchParams.get("manifestUrl") ?? undefined,
-  };
-
-  const auth = await authenticateActor(
-    actorContext,
-    publicOrigin,
-    requestedGroupType,
-  );
-  if (!auth.ok) return auth.response;
-
-  const redirectPath = normalizeRedirectPath(requestUrl.searchParams.get("redirect"));
-  const response = NextResponse.redirect(new URL(redirectPath, publicOrigin));
-  attachRemoteViewerCookie(response, requestUrl, auth.token);
   return response;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the base URL this peer expects SSO assertions to target.
+ *
+ * Preferred source: `getInstanceConfig().baseUrl`. When running behind a
+ * reverse proxy that already sets `Forwarded`/`X-Forwarded-*`, we fall back
+ * to the reconstructed proto+host so the check still matches what the
+ * client actually connected to.
+ */
+function deriveExpectedTargetBaseUrl(
+  request: Request,
+  configuredBaseUrl: string,
+): string | null {
+  if (configuredBaseUrl && !configuredBaseUrl.includes("localhost")) {
+    return configuredBaseUrl;
+  }
+  const proto =
+    request.headers.get("x-forwarded-proto") ??
+    (deriveIsHttps(request) ? "https" : "http");
+  const host =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (host) {
+    return `${proto}://${host}`;
+  }
+  return configuredBaseUrl || null;
+}
+
+/**
+ * Heuristic: are we serving HTTPS? Honors `X-Forwarded-Proto` (Traefik
+ * sets this) so cookies get the `Secure` flag in production even when the
+ * internal request is HTTP.
+ */
+function deriveIsHttps(request: Request): boolean {
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  if (forwardedProto) {
+    return forwardedProto.toLowerCase() === "https";
+  }
+  try {
+    return new URL(request.url).protocol === "https:";
+  } catch {
+    return false;
+  }
 }

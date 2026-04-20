@@ -424,6 +424,26 @@ export const agents = pgTable(
 );
 
 /**
+ * Shape of a single rich embed attached to a resource (typically a post).
+ *
+ * - `link`: external URL with OpenGraph metadata (populated from the
+ *   `link_previews` cache via POST /api/link-preview).
+ * - `internal`: link to another RIVR surface (ring/group/locale/profile/etc.).
+ *   Rendered with a RIVR-native card instead of a generic OG card; metadata
+ *   comes from local DB lookup, not an outbound fetch.
+ * - `video` / `image`: reserved for future platform-specific embeds.
+ */
+export type ResourceEmbed = {
+  url: string;
+  kind: 'link' | 'internal' | 'video' | 'image';
+  ogTitle?: string;
+  ogDescription?: string;
+  ogImage?: string;
+  siteName?: string;
+  favicon?: string;
+};
+
+/**
  * Resources table - stores documents, files, and other content
  * Includes vector embeddings for semantic search
  */
@@ -454,6 +474,10 @@ export const resources = pgTable(
     metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
     tags: text('tags').array().default([]),
     enteredAccountAt: timestamp('entered_account_at', { withTimezone: true }),
+
+    // Rich link/OpenGraph embeds attached at post time. Rendered below post
+    // content in the feed. See `ResourceEmbed` type above for shape.
+    embeds: jsonb('embeds').$type<ResourceEmbed[]>().default([]).notNull(),
 
     // Vector embeddings for semantic search (all-MiniLM-L6-v2 = 384 dimensions)
     embedding: vector('embedding', { dimensions: 384 }),
@@ -1530,3 +1554,40 @@ export const AUTHORITY_STATUS = {
 } as const;
 
 export type AuthorityStatus = typeof AUTHORITY_STATUS[keyof typeof AUTHORITY_STATUS];
+
+// ---------------------------------------------------------------------------
+// Link preview / OpenGraph unfurl cache (issue #15)
+// ---------------------------------------------------------------------------
+
+/**
+ * Link preview / OpenGraph unfurl cache.
+ *
+ * Populated by POST /api/link-preview when a user pastes an external URL.
+ * Internal RIVR subspace links are short-circuited and are not stored here.
+ * Keyed by sha-256 of the normalized URL so lookup is O(1) regardless of
+ * URL length or encoding variation.
+ */
+export const linkPreviews = pgTable(
+  'link_previews',
+  {
+    urlHash: text('url_hash').primaryKey(),
+    url: text('url').notNull(),
+    ogTitle: text('og_title'),
+    ogDescription: text('og_description'),
+    ogImage: text('og_image'),
+    ogSiteName: text('og_site_name'),
+    ogType: text('og_type'),
+    favicon: text('favicon'),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+    ttlSeconds: integer('ttl_seconds').default(86400).notNull(),
+    fetchStatus: text('fetch_status').notNull(),
+    fetchError: text('fetch_error'),
+  },
+  (table) => [
+    index('link_previews_fetched_at_idx').on(table.fetchedAt),
+    index('link_previews_fetch_status_idx').on(table.fetchStatus),
+  ],
+);
+
+export type LinkPreviewRecord = typeof linkPreviews.$inferSelect;
+export type NewLinkPreviewRecord = typeof linkPreviews.$inferInsert;

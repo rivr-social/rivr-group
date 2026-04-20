@@ -31,7 +31,7 @@ import { db } from "@/db";
 import { agents, emailLog, emailVerificationTokens } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { randomBytes } from "crypto";
-import { sendEmail } from "@/lib/email";
+import { sendTransactionalEmail } from "@/lib/mailer";
 import { systemNotificationEmail, verificationEmail } from "@/lib/email-templates";
 import { embedAgent, scheduleEmbedding } from "@/lib/ai";
 import { syncProfileToMatrix } from "@/lib/matrix-sync";
@@ -258,11 +258,14 @@ export async function updateProfileAction(
       });
 
       const verificationTemplate = verificationEmail(name, token);
-      const verifyResult = await sendEmail({
+      const verifyResult = await sendTransactionalEmail({
+        kind: "verification",
         to: email,
         subject: verificationTemplate.subject,
         html: verificationTemplate.html,
         text: verificationTemplate.text,
+        recipientAgentId: session.user.id,
+        meta: { flow: "email_change_verification" },
       });
 
       await db.insert(emailLog).values({
@@ -282,11 +285,14 @@ export async function updateProfileAction(
           "Your email address was changed",
           `Your account email was updated to ${email}. If this was not you, reset your password immediately.`
         );
-        const notifyOldResult = await sendEmail({
+        const notifyOldResult = await sendTransactionalEmail({
+          kind: "transactional",
           to: previousEmail,
           subject: changeNotice.subject,
           html: changeNotice.html,
           text: changeNotice.text,
+          recipientAgentId: session.user.id,
+          meta: { flow: "email_change_notice" },
         });
         await db.insert(emailLog).values({
           recipientEmail: previousEmail,
