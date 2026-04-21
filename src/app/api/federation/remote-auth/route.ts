@@ -55,7 +55,10 @@
  */
 
 import { NextResponse } from "next/server";
+import { sql } from "drizzle-orm";
 
+import { db } from "@/db";
+import { agents } from "@/db/schema";
 import { getClientIp } from "@/lib/client-ip";
 import { rateLimit } from "@/lib/rate-limit";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
@@ -185,6 +188,49 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const claims = result.claims;
+
+  // Mirror the federated identity into the local `agents` table so this
+  // user shows up in local lookups (admin picker, mention search) without
+  // needing a follow-up home-authority round-trip. `remoteOnly: true`
+  // marks the row as non-authoritative — the canonical source of truth
+  // is still the home instance at `homeBaseUrl`. Mirror rows do not
+  // accept local password writes and are distinguished from local
+  // credentialled rows by the `remoteOnly` metadata flag.
+  try {
+    const displayName = claims.name ?? claims.email ?? claims.handle ?? "Federated user";
+    await db
+      .insert(agents)
+      .values({
+        id: claims.actorId,
+        name: displayName,
+        type: "person",
+        email: claims.email ?? null,
+        image: claims.avatarUrl ?? null,
+        metadata: {
+          remoteOnly: true,
+          homeBaseUrl: claims.homeBaseUrl,
+          globalIssuerBaseUrl: claims.globalIssuerBaseUrl,
+          credentialVersion: claims.credentialVersion,
+          homeAuthorityVersion: claims.homeAuthorityVersion,
+          instanceClass: claims.instanceClass,
+          authMethod: "federated-sso",
+          mirroredAt: new Date().toISOString(),
+        },
+      })
+      .onConflictDoUpdate({
+        target: agents.id,
+        set: {
+          name: sql`COALESCE(EXCLUDED.name, ${agents.name})`,
+          email: sql`COALESCE(EXCLUDED.email, ${agents.email})`,
+          image: sql`COALESCE(EXCLUDED.image, ${agents.image})`,
+          metadata: sql`COALESCE(${agents.metadata}, '{}'::jsonb) || EXCLUDED.metadata`,
+        },
+      });
+  } catch (error) {
+    // Mirror failure must not block login — the signed cookie is the
+    // source of truth for the session; the mirror is an optimization.
+    console.warn("[federation/remote-auth] agent mirror upsert failed:", error);
+  }
 
   const secret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
   if (!secret) {
