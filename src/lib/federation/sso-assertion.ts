@@ -76,6 +76,19 @@ export interface SsoAssertionClaims {
   email?: string;
   /** Echo of the handle supplied at issue, lowercased. Present iff used. */
   handle?: string;
+  /**
+   * Display name resolved from `agents.name` at the issuer. Optional —
+   * peers must treat absence as "unknown" and not reject the assertion.
+   * Carried in the signed surface so federated peers can mirror a
+   * lightweight local display row (admin pickers, mention search) without
+   * a follow-up home-authority call.
+   */
+  name?: string;
+  /**
+   * Avatar URL resolved from `agents.image` at the issuer. Optional for
+   * the same reason as `name`.
+   */
+  avatarUrl?: string;
   /** Canonical home authority base URL resolved from identity_authority. */
   homeBaseUrl: string;
   /** Base URL of the global issuer that signed this assertion. */
@@ -151,6 +164,10 @@ export interface SignSsoAssertionInput {
   actorId: string;
   email?: string;
   handle?: string;
+  /** Optional display name to carry in the signed surface. */
+  name?: string;
+  /** Optional avatar URL to carry in the signed surface. */
+  avatarUrl?: string;
   homeBaseUrl: string;
   targetBaseUrl: string;
   credentialVersion: number;
@@ -192,6 +209,12 @@ export async function signSsoAssertion(
     actorId: input.actorId,
     ...(input.email ? { email: input.email } : {}),
     ...(input.handle ? { handle: input.handle } : {}),
+    // name and avatarUrl are populated when the issuer knows them so
+    // federated peers can mirror a local display row without a second
+    // round trip. Absence is tolerated — the signed surface only carries
+    // values the issuer actually resolved.
+    ...(input.name ? { name: input.name } : {}),
+    ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
     homeBaseUrl: input.homeBaseUrl,
     globalIssuerBaseUrl: baseUrl,
     targetBaseUrl: input.targetBaseUrl,
