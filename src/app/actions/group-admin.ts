@@ -839,3 +839,90 @@ export async function isGroupAdmin(userId: string, groupId: string): Promise<boo
 
   return false;
 }
+
+/**
+ * Replace the admin roster for a group.
+ *
+ * Writes `metadata.adminIds` as the new canonical list of admin user IDs.
+ * The caller must already be a group admin (checked via `isGroupAdmin`, which
+ * covers ledger-based and metadata-based admin records).
+ *
+ * Each submitted id is upsert-tolerant: any UUID in the list is allowed,
+ * whether the corresponding agent row is local-credentialled, remote-only
+ * (mirrored), or a federated visitor that hasn't logged in yet. This is
+ * intentional — the admin roster is a policy list, not a membership list,
+ * and federated users can hold admin roles without a local credential.
+ *
+ * @param groupId — UUID of the group to update.
+ * @param adminIds — complete replacement list of admin user IDs.
+ */
+export async function setGroupAdmins(
+  groupId: string,
+  adminIds: string[],
+): Promise<GroupAdminResult> {
+  const actorId = await requireActorId();
+  if (!actorId) {
+    return { success: false, error: "Authentication required." };
+  }
+
+  if (!groupId || !UUID_RE.test(groupId)) {
+    return { success: false, error: "Invalid group identifier." };
+  }
+
+  if (!Array.isArray(adminIds)) {
+    return { success: false, error: "`adminIds` must be an array." };
+  }
+
+  // Sanitize: keep only well-formed UUIDs, de-duplicate, cap at 100 to avoid
+  // pathologically large metadata writes.
+  const cleaned = Array.from(
+    new Set(adminIds.filter((id) => typeof id === "string" && UUID_RE.test(id))),
+  ).slice(0, 100);
+
+  if (!(await isGroupAdmin(actorId, groupId))) {
+    return {
+      success: false,
+      error: "Only group admins can manage the admin roster.",
+    };
+  }
+
+  const [group] = await db
+    .select({ id: agents.id, metadata: agents.metadata })
+    .from(agents)
+    .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
+    .limit(1);
+  if (!group) {
+    return { success: false, error: "Group not found." };
+  }
+
+  const existingMeta =
+    group.metadata && typeof group.metadata === "object"
+      ? (group.metadata as Record<string, unknown>)
+      : {};
+
+  // Preserve creatorId — creators remain implicit admins even when the list
+  // is shrunk. This prevents a lock-out if an admin accidentally removes
+  // themselves without setting a successor.
+  const creatorId = typeof existingMeta.creatorId === "string" ? existingMeta.creatorId : null;
+  const nextAdminIds = creatorId && !cleaned.includes(creatorId)
+    ? [creatorId, ...cleaned]
+    : cleaned;
+
+  const nextMeta = { ...existingMeta, adminIds: nextAdminIds };
+
+  await db
+    .update(agents)
+    .set({ metadata: nextMeta, updatedAt: new Date() })
+    .where(eq(agents.id, groupId));
+
+  await emitDomainEvent({
+    eventType: EVENT_TYPES.GROUP_SETTINGS_UPDATED,
+    entityType: "agent",
+    entityId: groupId,
+    actorId,
+    payload: { setting: "adminIds", action: "replace", count: nextAdminIds.length },
+  }).catch(() => {});
+
+  revalidatePath(`/groups/${groupId}`);
+  return { success: true };
+}
