@@ -23,6 +23,7 @@ import { db } from "@/db";
 import { groupConnections } from "@/db/schema";
 import { isGroupAdmin } from "@/app/actions/group-admin";
 import { GOOGLE_WORKSPACE_PROVIDER } from "@/lib/google/constants";
+import type { GroupGoogleConnectionSummary } from "./connections-form";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -178,6 +179,75 @@ export async function updateGroupGoogleConnectionConfigAction(
   }
 
   return { success: true };
+}
+
+/** Result envelope for {@link fetchGroupGoogleConnectionAction}. */
+export interface FetchGroupGoogleConnectionResult {
+  success: boolean;
+  error?: ConnectionActionErrorCode;
+  connection: GroupGoogleConnectionSummary | null;
+}
+
+/**
+ * Read the group's Google Workspace connection summary for client-side
+ * rendering (e.g. inside the Connections tab on the settings page).
+ *
+ * Returns `connection: null` when the caller is admin but no row exists yet
+ * (so the form can render the "Connect Google Workspace" CTA). Returns
+ * `success: false` with a stable error code on auth/admin failure.
+ *
+ * Tokens, refresh tokens, and HMAC nonces are intentionally omitted — only
+ * the fields the form actually renders are returned.
+ *
+ * @param groupId Group whose connection to read.
+ */
+export async function fetchGroupGoogleConnectionAction(
+  groupId: string,
+): Promise<FetchGroupGoogleConnectionResult> {
+  const authResult = await authorize(groupId);
+  if (!authResult.ok) {
+    return { success: false, error: authResult.error, connection: null };
+  }
+
+  const [row] = await db
+    .select({
+      accountEmail: groupConnections.accountEmail,
+      scope: groupConnections.scope,
+      expiresAt: groupConnections.expiresAt,
+      config: groupConnections.config,
+    })
+    .from(groupConnections)
+    .where(
+      and(
+        eq(groupConnections.groupId, groupId),
+        eq(groupConnections.provider, GOOGLE_WORKSPACE_PROVIDER),
+      ),
+    )
+    .limit(1);
+
+  if (!row) {
+    return { success: true, connection: null };
+  }
+
+  const config = row.config ?? {
+    smtpEnabled: false,
+    calendarSyncEnabled: false,
+  };
+
+  return {
+    success: true,
+    connection: {
+      accountEmail: row.accountEmail,
+      scope: row.scope ?? null,
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+      config: {
+        smtpEnabled: Boolean(config.smtpEnabled),
+        calendarSyncEnabled: Boolean(config.calendarSyncEnabled),
+        fromAddress: config.fromAddress,
+        calendarId: config.calendarId,
+      },
+    },
+  };
 }
 
 /**

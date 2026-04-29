@@ -55,16 +55,23 @@ const LOGIN_PATH = '/auth/login';
 const STATE_INVALID_ERROR = 'state_invalid';
 
 /**
- * Build a redirect URL back to the group's Connections settings page,
- * optionally carrying a stable error code. Caller must already know the
- * target groupId (i.e. signed state has been parsed successfully).
+ * Build a redirect URL back to the group's settings page with the
+ * Connections tab pre-selected, optionally carrying a stable error code.
+ * Caller must already know the target groupId (i.e. signed state has been
+ * parsed successfully).
+ *
+ * The tab UI lives on the unified settings page; the standalone
+ * `/settings/connections` route remains valid for direct deep links but
+ * the OAuth round-trip prefers the tab so the user lands back in the
+ * familiar settings shell.
  */
 function buildRedirect(
   baseUrl: string,
   groupId: string,
   errorCode?: GoogleOAuthErrorCode,
 ): URL {
-  const url = new URL(`/groups/${groupId}/settings/connections`, baseUrl);
+  const url = new URL(`/groups/${groupId}/settings`, baseUrl);
+  url.searchParams.set('tab', 'connections');
   if (errorCode) {
     url.searchParams.set('error', errorCode);
   }

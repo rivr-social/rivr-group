@@ -18,7 +18,7 @@
  */
 import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Plus, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -48,6 +48,23 @@ import { SubscriptionGateDialog } from "@/components/subscription-gate-dialog";
 import { GroupAdminView } from "@/components/group-admin-view";
 import { GroupType as LegacyGroupType } from "@/lib/types";
 import type { Group as LegacyGroup } from "@/lib/types";
+import { ConnectionsForm, type GroupGoogleConnectionSummary } from "./connections/connections-form";
+import { fetchGroupGoogleConnectionAction } from "./connections/actions";
+
+/** Stable tab identifiers used in the `?tab=` query param. */
+const TAB_VALUES = {
+  MEMBERSHIPS: "memberships",
+  JOIN: "join",
+  REQUESTS: "requests",
+  CHAT: "chat",
+  ANNOUNCEMENTS: "announcements",
+  CONNECTIONS: "connections",
+  MAP_MARKER: "map-marker",
+  ADMIN_OVERVIEW: "admin-overview",
+} as const;
+type TabValue = (typeof TAB_VALUES)[keyof typeof TAB_VALUES];
+
+const ALL_TABS = new Set<TabValue>(Object.values(TAB_VALUES));
 
 const RESUME_ORG_UPGRADE_PARAM = "resumeOrgUpgrade";
 
@@ -120,6 +137,7 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
   });
 
   const [membershipPlans, setMembershipPlans] = useState<EditableMembershipPlan[]>([]);
+  const [connection, setConnection] = useState<GroupGoogleConnectionSummary | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("both");
   const [hasMatrixRoom, setHasMatrixRoom] = useState(false);
   const [savingChatMode, setSavingChatMode] = useState(false);
@@ -183,6 +201,18 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
         }
       } catch {
         // Matrix room lookup is non-critical
+      }
+
+      // Load Google Workspace connection summary for the Connections tab.
+      // Falls through silently when not admin or no row exists; the form
+      // renders its own zero-state in that case.
+      try {
+        const connResult = await fetchGroupGoogleConnectionAction(groupId);
+        if (!cancelled && connResult.success) {
+          setConnection(connResult.connection);
+        }
+      } catch {
+        // Connection lookup is non-critical for the rest of the page.
       }
 
       setError(null);
@@ -397,6 +427,19 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
     })();
   }, [groupId, groupType, router, searchParams]);
 
+  // Resolve initial tab from `?tab=` query param. Allows the OAuth callback
+  // to deep-link back into the Connections tab after a round-trip.
+  const requestedTab = searchParams.get("tab");
+  const initialTab: TabValue =
+    requestedTab && ALL_TABS.has(requestedTab as TabValue)
+      ? (requestedTab as TabValue)
+      : TAB_VALUES.MEMBERSHIPS;
+
+  // Surface OAuth callback errors only when the user landed on the
+  // Connections tab — other tabs should not render unrelated error cards.
+  const connectionsInitialError =
+    initialTab === TAB_VALUES.CONNECTIONS ? searchParams.get("error") : null;
+
   // Conditional render for initial client fetch state.
   if (loading) {
     return <div className="container max-w-4xl mx-auto p-4">Loading settings...</div>;
@@ -437,33 +480,37 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
         </Button>
       </div>
 
-      <Tabs defaultValue="memberships" className="space-y-6">
+      <Tabs defaultValue={initialTab} className="space-y-6">
         <ResponsiveTabsList>
-          <TabsTrigger value="memberships" className="inline-flex items-center gap-2">
+          <TabsTrigger value={TAB_VALUES.MEMBERSHIPS} className="inline-flex items-center gap-2">
             <CreditCard className="h-4 w-4" />
             Memberships
           </TabsTrigger>
-          <TabsTrigger value="join" className="inline-flex items-center gap-2">
+          <TabsTrigger value={TAB_VALUES.JOIN} className="inline-flex items-center gap-2">
             <UserPlus className="h-4 w-4" />
             Join Settings
           </TabsTrigger>
-          <TabsTrigger value="requests" className="inline-flex items-center gap-2">
+          <TabsTrigger value={TAB_VALUES.REQUESTS} className="inline-flex items-center gap-2">
             <UserPlus className="h-4 w-4" />
             Requests
           </TabsTrigger>
-          <TabsTrigger value="chat" className="inline-flex items-center gap-2">
+          <TabsTrigger value={TAB_VALUES.CHAT} className="inline-flex items-center gap-2">
             <MessageSquare className="h-4 w-4" />
             Chat
           </TabsTrigger>
-          <TabsTrigger value="announcements" className="inline-flex items-center gap-2">
+          <TabsTrigger value={TAB_VALUES.ANNOUNCEMENTS} className="inline-flex items-center gap-2">
             <Mail className="h-4 w-4" />
             Announcements
           </TabsTrigger>
-          <TabsTrigger value="map-marker" className="inline-flex items-center gap-2">
+          <TabsTrigger value={TAB_VALUES.CONNECTIONS} className="inline-flex items-center gap-2">
+            <Plug className="h-4 w-4" />
+            Connections
+          </TabsTrigger>
+          <TabsTrigger value={TAB_VALUES.MAP_MARKER} className="inline-flex items-center gap-2">
             <Globe className="h-4 w-4" />
             Map Marker
           </TabsTrigger>
-          <TabsTrigger value="admin-overview" className="inline-flex items-center gap-2">
+          <TabsTrigger value={TAB_VALUES.ADMIN_OVERVIEW} className="inline-flex items-center gap-2">
             <Crown className="h-4 w-4" />
             Admin Overview
           </TabsTrigger>
@@ -794,6 +841,15 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
 
         <TabsContent value="announcements" className="space-y-4">
           <GroupBroadcastCard groupId={groupId} groupName={groupName} />
+        </TabsContent>
+
+        {/* Connections tab — Google Workspace OAuth, calendar sync, group SMTP. */}
+        <TabsContent value={TAB_VALUES.CONNECTIONS} className="space-y-4">
+          <ConnectionsForm
+            groupId={groupId}
+            connection={connection}
+            initialError={connectionsInitialError}
+          />
         </TabsContent>
 
         {/* Admin Overview tab renders the GroupAdminView component with data mapped from settings state. */}
