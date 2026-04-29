@@ -1,0 +1,69 @@
+/**
+ * Constants for Google Workspace OAuth on rivr-group (PR1).
+ *
+ * Purpose:
+ * - Centralizes provider identifiers, OAuth endpoints, and scope names so
+ *   no string drifts between connect, callback, settings, and mailer paths.
+ *
+ * Scope rationale:
+ * - `calendar` is required so PR2 can sync the group's calendar without
+ *   another consent prompt.
+ * - `gmail.send` is required so the central mailer can deliver group
+ *   broadcasts via XOAUTH2 to the linked Workspace account.
+ * - `userinfo.email` + `openid` lets the callback resolve the linked
+ *   account email for display and audit.
+ *
+ * Error codes:
+ * - Stable identifiers used in the connect/callback redirect query so the
+ *   Connections UI can render specific error states. Never leak provider
+ *   error bodies in URLs — the codes here are the public surface.
+ */
+
+/** Stable provider identifier used in `groupConnections.provider`. */
+export const GOOGLE_WORKSPACE_PROVIDER = 'google_workspace' as const;
+
+/** Google OAuth 2.0 authorization endpoint. */
+export const GOOGLE_OAUTH_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+
+/** Google OAuth 2.0 token exchange + refresh endpoint. */
+export const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+/** OIDC userinfo endpoint used to resolve the linked account email. */
+export const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
+
+/**
+ * Granted scopes for a group-admin Workspace link. Joined into a single
+ * space-delimited string at request time.
+ */
+export const GOOGLE_OAUTH_SCOPES: readonly string[] = [
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'openid',
+];
+
+/** Cookie name for the per-flow OAuth state nonce. HMAC-signed in the cookie value. */
+export const GOOGLE_OAUTH_STATE_COOKIE = 'group_google_oauth_state';
+
+/** Cookie max age in seconds — short-lived, just long enough to consent. */
+export const GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS = 600;
+
+/**
+ * Stable error codes surfaced through `?error=...` on the Connections page.
+ * Keep the values short and provider-agnostic.
+ */
+export const GOOGLE_OAUTH_ERRORS = {
+  NOT_CONFIGURED: 'not_configured',
+  FORBIDDEN: 'forbidden',
+  STATE_MISMATCH: 'state_mismatch',
+  STATE_MISSING: 'state_missing',
+  CODE_MISSING: 'code_missing',
+  TOKEN_EXCHANGE_FAILED: 'token_exchange_failed',
+  NO_ACCESS_TOKEN: 'no_access_token',
+  USERINFO_FAILED: 'userinfo_failed',
+  PROVIDER_ERROR: 'provider_error',
+  INVALID_GROUP: 'invalid_group',
+} as const;
+
+export type GoogleOAuthErrorCode =
+  (typeof GOOGLE_OAUTH_ERRORS)[keyof typeof GOOGLE_OAUTH_ERRORS];
