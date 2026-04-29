@@ -49,6 +49,30 @@ export const GOOGLE_OAUTH_STATE_COOKIE = 'group_google_oauth_state';
 export const GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS = 600;
 
 /**
+ * Static callback path for the per-group Google Workspace OAuth flow.
+ *
+ * Google OAuth Console requires a fixed allow-list of redirect URIs and does
+ * NOT accept path-template segments like `[groupId]`. The target group is
+ * therefore carried inside the signed `state` parameter, not the URL.
+ *
+ * Operator: register `${baseUrl}${GROUP_GOOGLE_CALLBACK_PATH}` for each
+ * deployed origin (e.g. `https://group.rivr.social/api/group/connections/google/callback`).
+ */
+export const GROUP_GOOGLE_CALLBACK_PATH =
+  '/api/group/connections/google/callback' as const;
+
+/**
+ * Cookie path for the per-flow OAuth state nonce.
+ *
+ * Must be a prefix common to BOTH the connect route
+ * (`/api/group/[groupId]/connections/google/connect`) and the static
+ * callback route (`/api/group/connections/google/callback`). `/api/group`
+ * is the tightest prefix that covers both. Concurrent OAuth dances are
+ * still distinguished by the cookie value vs the signed-state nonce match.
+ */
+export const GOOGLE_OAUTH_STATE_COOKIE_PATH = '/api/group' as const;
+
+/**
  * Stable error codes surfaced through `?error=...` on the Connections page.
  * Keep the values short and provider-agnostic.
  */

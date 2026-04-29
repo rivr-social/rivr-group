@@ -28,7 +28,9 @@ import {
   GOOGLE_OAUTH_ERRORS,
   GOOGLE_OAUTH_SCOPES,
   GOOGLE_OAUTH_STATE_COOKIE,
+  GOOGLE_OAUTH_STATE_COOKIE_PATH,
   GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS,
+  GROUP_GOOGLE_CALLBACK_PATH,
 } from '@/lib/google/constants';
 
 export const dynamic = 'force-dynamic';
@@ -115,9 +117,13 @@ export async function GET(
     );
   }
 
+  // STATIC redirect_uri — Google OAuth Console requires a fixed allow-list
+  // entry per origin. Do NOT interpolate `groupId` here; the target group
+  // is carried in the signed `state` instead.
+  // Register `${baseUrl}${GROUP_GOOGLE_CALLBACK_PATH}` in Google Console.
   const redirectUri =
     process.env.GOOGLE_GROUP_REDIRECT_URI?.trim() ||
-    `${baseUrl}/api/group/${groupId}/connections/google/callback`;
+    `${baseUrl}${GROUP_GOOGLE_CALLBACK_PATH}`;
 
   const nonce = crypto.randomBytes(STATE_NONCE_BYTES).toString('hex');
   const signature = signState(authSecret, nonce, groupId, session.user.id);
@@ -148,7 +154,9 @@ export async function GET(
     secure: true,
     sameSite: 'lax',
     maxAge: GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS,
-    path: `/api/group/${groupId}/connections/google`,
+    // Path must cover BOTH the connect route (under `[groupId]`) and the
+    // static callback route, so `/api/group` is the tightest common prefix.
+    path: GOOGLE_OAUTH_STATE_COOKIE_PATH,
   });
 
   return response;

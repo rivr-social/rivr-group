@@ -1,6 +1,10 @@
 /**
  * OAuth callback for the per-group Google Workspace flow.
  *
+ * Path is intentionally STATIC — `groupId` lives only in the signed `state`,
+ * not in the URL. Google OAuth Console requires a fixed redirect_uri
+ * allow-list, which can't include a `[groupId]` segment.
+ *
  * Verifies the signed state, exchanges the authorization code for tokens,
  * fetches the userinfo email, then upserts a `groupConnections` row keyed
  * by `(groupId, 'google_workspace')`.
@@ -12,7 +16,9 @@
  * On success: clears the state cookie and redirects to
  * `/groups/[groupId]/settings/connections`.
  * On failure: redirects to the same page with `?error=<stable_code>` so the
- * UI can render a deterministic message.
+ * UI can render a deterministic message. If state parsing fails before we
+ * know the target group, redirects to the canonical sign-in route with
+ * `?error=state_invalid` since there is no group context to bounce back to.
  */
 
 import crypto from 'node:crypto';
@@ -25,9 +31,11 @@ import { isGroupAdmin } from '@/app/actions/group-admin';
 import {
   GOOGLE_OAUTH_ERRORS,
   GOOGLE_OAUTH_STATE_COOKIE,
+  GOOGLE_OAUTH_STATE_COOKIE_PATH,
   GOOGLE_OAUTH_TOKEN_URL,
   GOOGLE_USERINFO_URL,
   GOOGLE_WORKSPACE_PROVIDER,
+  GROUP_GOOGLE_CALLBACK_PATH,
   type GoogleOAuthErrorCode,
 } from '@/lib/google/constants';
 
@@ -40,8 +48,16 @@ const PROVIDER_ERROR_LOG_LIMIT = 500;
 const LOGIN_PATH = '/auth/login';
 
 /**
+ * Stable error code surfaced when state parsing fails BEFORE we know the
+ * target group, so we can't redirect back to the Connections page. Routed
+ * to the login page instead.
+ */
+const STATE_INVALID_ERROR = 'state_invalid';
+
+/**
  * Build a redirect URL back to the group's Connections settings page,
- * optionally carrying a stable error code.
+ * optionally carrying a stable error code. Caller must already know the
+ * target groupId (i.e. signed state has been parsed successfully).
  */
 function buildRedirect(
   baseUrl: string,
@@ -52,6 +68,16 @@ function buildRedirect(
   if (errorCode) {
     url.searchParams.set('error', errorCode);
   }
+  return url;
+}
+
+/**
+ * Build a neutral redirect to the login page when we have no group context
+ * (state parsing failed before we could read `groupId`).
+ */
+function buildNeutralErrorRedirect(baseUrl: string): URL {
+  const url = new URL(LOGIN_PATH, baseUrl);
+  url.searchParams.set('error', STATE_INVALID_ERROR);
   return url;
 }
 
@@ -128,11 +154,7 @@ function readStateCookie(request: Request): string | null {
   return entry.slice(GOOGLE_OAUTH_STATE_COOKIE.length + 1) || null;
 }
 
-export async function GET(
-  request: Request,
-  context: { params: Promise<{ groupId: string }> },
-) {
-  const { groupId } = await context.params;
+export async function GET(request: Request) {
   const url = new URL(request.url);
 
   const baseUrl =
@@ -140,20 +162,33 @@ export async function GET(
     process.env.NEXT_PUBLIC_BASE_URL?.trim() ||
     url.origin;
 
+  // Parse signed state FIRST — `groupId` only exists inside it now. If
+  // parsing fails we cannot redirect to a group-specific page, so we
+  // bounce to the login page with a neutral error.
+  const parsed = parseState(url.searchParams.get('state'));
+  if (!parsed) {
+    console.error(
+      `[group-google-callback] state missing or unparseable at ${GROUP_GOOGLE_CALLBACK_PATH}`,
+    );
+    return NextResponse.redirect(buildNeutralErrorRedirect(baseUrl));
+  }
+
+  const parsedGroupId = parsed.groupId;
+
   const errorParam = url.searchParams.get('error');
   if (errorParam) {
     console.error(
-      `[group-google-callback] provider error for group ${groupId}: ${errorParam.slice(0, PROVIDER_ERROR_LOG_LIMIT)}`,
+      `[group-google-callback] provider error for group ${parsedGroupId}: ${errorParam.slice(0, PROVIDER_ERROR_LOG_LIMIT)}`,
     );
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.PROVIDER_ERROR),
+      buildRedirect(baseUrl, parsedGroupId, GOOGLE_OAUTH_ERRORS.PROVIDER_ERROR),
     );
   }
 
   const code = url.searchParams.get('code');
   if (!code) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.CODE_MISSING),
+      buildRedirect(baseUrl, parsedGroupId, GOOGLE_OAUTH_ERRORS.CODE_MISSING),
     );
   }
 
@@ -163,7 +198,11 @@ export async function GET(
   const authSecret = process.env.AUTH_SECRET?.trim();
   if (!authSecret) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.STATE_MISCONFIGURED),
+      buildRedirect(
+        baseUrl,
+        parsedGroupId,
+        GOOGLE_OAUTH_ERRORS.STATE_MISCONFIGURED,
+      ),
     );
   }
 
@@ -172,30 +211,23 @@ export async function GET(
     return NextResponse.redirect(new URL(LOGIN_PATH, baseUrl));
   }
 
-  const isAdmin = await isGroupAdmin(session.user.id, groupId);
+  const isAdmin = await isGroupAdmin(session.user.id, parsedGroupId);
   if (!isAdmin) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.FORBIDDEN),
+      buildRedirect(baseUrl, parsedGroupId, GOOGLE_OAUTH_ERRORS.FORBIDDEN),
     );
   }
 
-  const parsed = parseState(url.searchParams.get('state'));
-  if (!parsed) {
+  if (parsed.userId !== session.user.id) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.STATE_MISSING),
-    );
-  }
-
-  if (parsed.groupId !== groupId || parsed.userId !== session.user.id) {
-    return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.STATE_MISMATCH),
+      buildRedirect(baseUrl, parsedGroupId, GOOGLE_OAUTH_ERRORS.STATE_MISMATCH),
     );
   }
 
   const cookieNonce = readStateCookie(request);
   if (!cookieNonce || cookieNonce !== parsed.nonce) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.STATE_MISMATCH),
+      buildRedirect(baseUrl, parsedGroupId, GOOGLE_OAUTH_ERRORS.STATE_MISMATCH),
     );
   }
 
@@ -209,7 +241,7 @@ export async function GET(
     )
   ) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.STATE_MISMATCH),
+      buildRedirect(baseUrl, parsedGroupId, GOOGLE_OAUTH_ERRORS.STATE_MISMATCH),
     );
   }
 
@@ -217,13 +249,15 @@ export async function GET(
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.NOT_CONFIGURED),
+      buildRedirect(baseUrl, parsedGroupId, GOOGLE_OAUTH_ERRORS.NOT_CONFIGURED),
     );
   }
 
+  // STATIC redirect_uri — must match exactly what the connect route used
+  // and what is registered in Google Console's allow-list.
   const redirectUri =
     process.env.GOOGLE_GROUP_REDIRECT_URI?.trim() ||
-    `${baseUrl}/api/group/${groupId}/connections/google/callback`;
+    `${baseUrl}${GROUP_GOOGLE_CALLBACK_PATH}`;
 
   const tokenResponse = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
     method: 'POST',
@@ -240,10 +274,14 @@ export async function GET(
   if (!tokenResponse.ok) {
     const errorText = await tokenResponse.text();
     console.error(
-      `[group-google-callback] token exchange failed for group ${groupId}: ${errorText.slice(0, PROVIDER_ERROR_LOG_LIMIT)}`,
+      `[group-google-callback] token exchange failed for group ${parsedGroupId}: ${errorText.slice(0, PROVIDER_ERROR_LOG_LIMIT)}`,
     );
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.TOKEN_EXCHANGE_FAILED),
+      buildRedirect(
+        baseUrl,
+        parsedGroupId,
+        GOOGLE_OAUTH_ERRORS.TOKEN_EXCHANGE_FAILED,
+      ),
     );
   }
 
@@ -258,7 +296,11 @@ export async function GET(
 
   if (!tokenData.access_token) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.NO_ACCESS_TOKEN),
+      buildRedirect(
+        baseUrl,
+        parsedGroupId,
+        GOOGLE_OAUTH_ERRORS.NO_ACCESS_TOKEN,
+      ),
     );
   }
 
@@ -270,10 +312,14 @@ export async function GET(
   if (!userinfoResponse.ok) {
     const errorText = await userinfoResponse.text();
     console.error(
-      `[group-google-callback] userinfo failed for group ${groupId}: ${errorText.slice(0, PROVIDER_ERROR_LOG_LIMIT)}`,
+      `[group-google-callback] userinfo failed for group ${parsedGroupId}: ${errorText.slice(0, PROVIDER_ERROR_LOG_LIMIT)}`,
     );
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.USERINFO_FAILED),
+      buildRedirect(
+        baseUrl,
+        parsedGroupId,
+        GOOGLE_OAUTH_ERRORS.USERINFO_FAILED,
+      ),
     );
   }
 
@@ -285,7 +331,11 @@ export async function GET(
 
   if (!profile.email) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.USERINFO_FAILED),
+      buildRedirect(
+        baseUrl,
+        parsedGroupId,
+        GOOGLE_OAUTH_ERRORS.USERINFO_FAILED,
+      ),
     );
   }
 
@@ -303,7 +353,7 @@ export async function GET(
     .from(groupConnections)
     .where(
       and(
-        eq(groupConnections.groupId, groupId),
+        eq(groupConnections.groupId, parsedGroupId),
         eq(groupConnections.provider, GOOGLE_WORKSPACE_PROVIDER),
       ),
     )
@@ -343,20 +393,20 @@ export async function GET(
       .where(eq(groupConnections.id, existing.id));
   } else {
     await db.insert(groupConnections).values({
-      groupId,
+      groupId: parsedGroupId,
       provider: GOOGLE_WORKSPACE_PROVIDER,
       connectedByUserId: session.user.id,
       ...baseValues,
     });
   }
 
-  const response = NextResponse.redirect(buildRedirect(baseUrl, groupId));
+  const response = NextResponse.redirect(buildRedirect(baseUrl, parsedGroupId));
   response.cookies.set(GOOGLE_OAUTH_STATE_COOKIE, '', {
     httpOnly: true,
     secure: true,
     sameSite: 'lax',
     maxAge: 0,
-    path: `/api/group/${groupId}/connections/google`,
+    path: GOOGLE_OAUTH_STATE_COOKIE_PATH,
   });
 
   return response;
