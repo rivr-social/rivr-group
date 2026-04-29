@@ -31,6 +31,11 @@ import {
   type PeerSmtpConfig,
 } from "./peer-smtp";
 
+/** Gmail submission host used for Workspace XOAUTH2 sends. */
+const GMAIL_SMTP_HOST = "smtp.gmail.com";
+/** Implicit-TLS port (`secure: true`) used for Gmail XOAUTH2 sends. */
+const GMAIL_SMTP_PORT = 465;
+
 /** Pool size cap for peer SMTP transports (matches the global mailer). */
 const PEER_TRANSPORT_POOL_SIZE = 5;
 /** Rate limit (messages/sec) matching global mailer. */
@@ -174,4 +179,99 @@ export async function verifyPeerSmtpConfig(
       `that outgoing SMTP is configured correctly.\n\n` +
       `Host: ${config.host}:${config.port}\nFrom: ${config.fromAddress}`,
   });
+}
+
+// ---------------------------------------------------------------------------
+// XOAUTH2 transporter (Google Workspace per-group connections)
+// ---------------------------------------------------------------------------
+
+/** Inputs required to build a Gmail XOAUTH2 transporter for a group. */
+export interface BuildXoauth2TransporterInput {
+  /** Workspace account email — used as the SMTP user and From address. */
+  accountEmail: string;
+  /** Live (non-expired) OAuth2 access token. */
+  accessToken: string;
+  /** Refresh token, when one is on file. Optional. */
+  refreshToken?: string | null;
+  /** Absolute UTC expiry of the access token, when known. */
+  expiresAt?: Date | null;
+  /**
+   * OAuth2 client id/secret for token refresh inside nodemailer. Optional —
+   * if omitted, nodemailer will reject access-token expiry; callers should
+   * pre-refresh via `getFreshGoogleAccessToken` before reaching this path.
+   */
+  clientId?: string;
+  clientSecret?: string;
+}
+
+/**
+ * Build a Gmail XOAUTH2 nodemailer transporter for a group's linked
+ * Workspace account. The caller is expected to have already refreshed
+ * the access token via `getFreshGoogleAccessToken` so the resulting
+ * transporter does not need network access to send.
+ *
+ * Note: returned transporter is unpooled — the wedge in `mailer.ts`
+ * builds a fresh transporter per send so a token rotation never reuses
+ * stale credentials. This trades a small connection-setup cost for
+ * deterministic correctness.
+ *
+ * @param input Workspace credentials.
+ * @returns A non-pooled nodemailer transporter ready for `sendMail()`.
+ */
+export function buildXoauth2Transporter(
+  input: BuildXoauth2TransporterInput,
+): Transporter {
+  const expiresMs =
+    input.expiresAt instanceof Date ? input.expiresAt.getTime() : undefined;
+
+  return nodemailer.createTransport({
+    host: GMAIL_SMTP_HOST,
+    port: GMAIL_SMTP_PORT,
+    secure: true,
+    auth: {
+      type: "OAuth2",
+      user: input.accountEmail,
+      accessToken: input.accessToken,
+      refreshToken: input.refreshToken ?? undefined,
+      expires: expiresMs,
+      clientId: input.clientId,
+      clientSecret: input.clientSecret,
+    },
+  });
+}
+
+/**
+ * Send a single email via a freshly built Gmail XOAUTH2 transporter.
+ *
+ * The transporter is closed after the send to guarantee a stale
+ * access-token never lingers in a pooled connection.
+ *
+ * @param input Workspace credentials.
+ * @param options Recipient/subject/body envelope; mirrors `sendEmail`.
+ * @returns Structured result `{ success, messageId?, error? }`.
+ */
+export async function sendViaXoauth2(
+  input: BuildXoauth2TransporterInput,
+  options: SendEmailOptions,
+): Promise<SendEmailResult> {
+  const transport = buildXoauth2Transporter(input);
+  try {
+    const info = await transport.sendMail({
+      from: input.accountEmail,
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
+      text: options.text,
+      replyTo: options.replyTo,
+    });
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[group-smtp] XOAUTH2 send failed to=${options.to} account=${input.accountEmail}: ${message}`,
+    );
+    return { success: false, error: message };
+  } finally {
+    transport.close();
+  }
 }

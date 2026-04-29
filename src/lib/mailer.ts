@@ -38,6 +38,9 @@
  * - `@/lib/federation/instance-config` — peer vs global detection.
  */
 
+import { and, eq } from "drizzle-orm";
+import { db } from "@/db";
+import { groupConnections } from "@/db/schema";
 import { sendEmail, type SendEmailResult } from "@/lib/email";
 import {
   EMAIL_RELAY_KINDS,
@@ -56,7 +59,15 @@ import {
   getPeerSmtpConfig,
   type PeerSmtpConfig,
 } from "@/lib/federation/peer-smtp";
-import { sendViaPeerSmtp } from "@/lib/federation/peer-smtp-transport";
+import {
+  sendViaPeerSmtp,
+  sendViaXoauth2,
+} from "@/lib/federation/peer-smtp-transport";
+import { GOOGLE_WORKSPACE_PROVIDER } from "@/lib/google/constants";
+import {
+  getFreshGoogleAccessToken,
+  GoogleTokenError,
+} from "@/lib/google/token";
 
 /**
  * Transactional kinds that represent federated-auth flows. These
@@ -219,6 +230,16 @@ export async function sendTransactionalEmail(
     return deliverViaLocal(params);
   }
 
+  // Peer + non-federated-auth kind — first, if the caller scoped the
+  // send to a specific group AND that group has a Google Workspace
+  // connection with `smtpEnabled=true`, deliver through XOAUTH2 to that
+  // group's Gmail account. Falls through to the instance-wide peer SMTP
+  // config when no group override exists or it is disabled.
+  if (params.groupId) {
+    const groupResult = await tryDeliverViaGroupGoogle(params, params.groupId);
+    if (groupResult) return groupResult;
+  }
+
   // Peer + non-federated-auth kind — prefer peer's own SMTP config,
   // otherwise relay via global.
   const peerConfig = await loadPeerSmtpConfigSafe();
@@ -248,6 +269,95 @@ async function loadPeerSmtpConfigSafe(): Promise<PeerSmtpConfig | null> {
     );
     return null;
   }
+}
+
+/**
+ * Look up whether the group identified by `groupId` has a Google
+ * Workspace connection with `smtpEnabled=true`. When yes, refresh the
+ * access token (the `getFreshGoogleAccessToken` helper writes the
+ * refreshed value back to `groupConnections`) and send via XOAUTH2 to
+ * the group's Gmail account. Returns `null` to indicate "no group
+ * override applies" so the caller falls through to the next transport.
+ *
+ * Failures during refresh / send are converted into a non-null error
+ * result so the broadcast surface gets a clean error per recipient
+ * instead of the call site silently regressing to peer SMTP after
+ * the admin explicitly enabled the override.
+ */
+async function tryDeliverViaGroupGoogle(
+  params: TransactionalEmailParams,
+  groupId: string,
+): Promise<TransactionalEmailResult | null> {
+  // Check enablement before doing any token work.
+  let smtpEnabled = false;
+  let configuredFromAddress: string | undefined;
+  try {
+    const [row] = await db
+      .select({ config: groupConnections.config })
+      .from(groupConnections)
+      .where(
+        and(
+          eq(groupConnections.groupId, groupId),
+          eq(groupConnections.provider, GOOGLE_WORKSPACE_PROVIDER),
+        ),
+      )
+      .limit(1);
+
+    if (!row) return null;
+    smtpEnabled = row.config?.smtpEnabled === true;
+    configuredFromAddress = row.config?.fromAddress;
+  } catch (error) {
+    console.warn(
+      `[mailer] Could not load group Google connection for ${groupId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return null;
+  }
+
+  if (!smtpEnabled) return null;
+
+  let token;
+  try {
+    token = await getFreshGoogleAccessToken(groupId);
+  } catch (error) {
+    const message =
+      error instanceof GoogleTokenError
+        ? `${error.code}: ${error.message}`
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    console.error(
+      `[mailer] Group Google token refresh failed for group ${groupId}: ${message}`,
+    );
+    return {
+      success: false,
+      error: message,
+      delegated: false,
+    };
+  }
+
+  const fromAddress = configuredFromAddress ?? token.accountEmail;
+
+  const local = await sendViaXoauth2(
+    {
+      accountEmail: fromAddress,
+      accessToken: token.accessToken,
+      refreshToken: token.refreshToken,
+      expiresAt: token.expiresAt,
+      clientId: process.env.GOOGLE_CLIENT_ID?.trim(),
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim(),
+    },
+    {
+      to: params.to,
+      subject: params.subject,
+      html: params.html,
+      text: params.text,
+      replyTo: params.replyTo,
+    },
+  );
+
+  return toResultFromLocal(local);
 }
 
 async function deliverViaPeerSmtp(
