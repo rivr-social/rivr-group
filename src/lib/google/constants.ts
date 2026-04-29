@@ -103,6 +103,7 @@ export const GOOGLE_OAUTH_STATE_COOKIE_PATH = '/api/group' as const;
  */
 export const GOOGLE_OAUTH_ERRORS = {
   NOT_CONFIGURED: 'not_configured',
+  OAUTH_CREDENTIALS_MISSING: 'oauth_credentials_missing',
   STATE_MISCONFIGURED: 'state_misconfigured',
   FORBIDDEN: 'forbidden',
   STATE_MISMATCH: 'state_mismatch',

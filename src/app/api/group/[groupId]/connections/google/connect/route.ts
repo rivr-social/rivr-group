@@ -39,16 +39,22 @@ export const dynamic = 'force-dynamic';
 const STATE_NONCE_BYTES = 32;
 
 /**
- * Build a redirect URL back to the group's Connections settings page.
- * The error code (when present) is appended as a query parameter so the
- * UI can render a stable, user-facing message.
+ * Build a redirect URL back to the group's settings page with the
+ * Connections tab pre-selected. The error code (when present) is appended
+ * as a query parameter so the UI can render a stable, user-facing message.
+ *
+ * Mirrors the callback route's redirect so success and failure paths
+ * always land in the unified tabs UI rather than the standalone
+ * `/settings/connections` route. The standalone route remains valid for
+ * direct deep links.
  */
 function buildRedirect(
   baseUrl: string,
   groupId: string,
   errorCode?: string,
 ): URL {
-  const url = new URL(`/groups/${groupId}/settings/connections`, baseUrl);
+  const url = new URL(`/groups/${groupId}/settings`, baseUrl);
+  url.searchParams.set('tab', 'connections');
   if (errorCode) {
     url.searchParams.set('error', errorCode);
   }
@@ -113,7 +119,11 @@ export async function GET(
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   if (!clientId) {
     return NextResponse.redirect(
-      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.NOT_CONFIGURED),
+      buildRedirect(
+        baseUrl,
+        groupId,
+        GOOGLE_OAUTH_ERRORS.OAUTH_CREDENTIALS_MISSING,
+      ),
     );
   }
 

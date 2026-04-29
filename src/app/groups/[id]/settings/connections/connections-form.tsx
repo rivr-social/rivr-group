@@ -64,6 +64,8 @@ export interface ConnectionsFormProps {
 const ERROR_MESSAGES: Record<string, string> = {
   not_configured:
     "Group connections are not configured on this server. Contact admin.",
+  oauth_credentials_missing:
+    "Google OAuth credentials are not set on this server. The admin must populate GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET before group admins can link a Workspace account.",
   state_misconfigured:
     "Group connections are not configured on this server. Contact admin.",
   forbidden: "You must be a group admin to manage connections.",
