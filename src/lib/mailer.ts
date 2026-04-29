@@ -117,6 +117,13 @@ export interface TransactionalEmailParams {
   recipientAgentId?: string;
   /** Optional free-form metadata — propagated to relay for audit. */
   meta?: Record<string, unknown>;
+  /**
+   * Optional group id — when present, the mailer will check
+   * `groupConnections` for a Google Workspace SMTP override before
+   * falling through to the global peer SMTP path. Used by group
+   * broadcasts so each group can deliver from its own Gmail account.
+   */
+  groupId?: string;
 }
 
 /**

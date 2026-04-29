@@ -15,7 +15,10 @@ import { agents, ledger, emailLog } from "@/db/schema";
 import { eq, and, or, isNull, sql } from "drizzle-orm";
 import { headers } from "next/headers";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { sendBulkEmail } from "@/lib/email";
+import {
+  sendBulkTransactionalEmail,
+  TRANSACTIONAL_EMAIL_KINDS,
+} from "@/lib/mailer";
 import { groupBroadcastEmail } from "@/lib/email-templates";
 import { getClientIp } from "@/lib/client-ip";
 
@@ -241,14 +244,20 @@ export async function sendGroupBroadcastAction(
     body.trim()
   );
 
-  // Execute provider bulk send; per-recipient outcomes are logged below.
-  const results = await sendBulkEmail(
-    recipients,
-    template.subject,
-    template.html,
-    template.text,
-    sender.email ? { replyTo: sender.email } : undefined,
-  );
+  // Route through the central transactional mailer so group-specific
+  // SMTP wedges (e.g., Google Workspace via groupConnections) are honored.
+  // The `groupId` is threaded so the mailer can pick this group's
+  // connection ahead of the instance-wide peer SMTP fallback.
+  const results = await sendBulkTransactionalEmail(recipients, {
+    kind: TRANSACTIONAL_EMAIL_KINDS.TRANSACTIONAL,
+    subject: template.subject,
+    html: template.html,
+    text: template.text,
+    replyTo: sender.email ?? undefined,
+    groupId,
+    meta: { groupId, senderId: session.user.id, kind: "group_broadcast" },
+    agentIdFor: (email) => emailToAgentId.get(email),
+  });
 
   // Persist delivery/audit logs for traceability and retry diagnostics.
   let sent = 0;
