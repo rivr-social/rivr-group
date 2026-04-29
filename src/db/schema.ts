@@ -1640,3 +1640,67 @@ export const peerSmtpConfig = pgTable(
 
 export type PeerSmtpConfigRecord = typeof peerSmtpConfig.$inferSelect;
 export type NewPeerSmtpConfigRecord = typeof peerSmtpConfig.$inferInsert;
+
+/**
+ * Per-group third-party connection credentials (PR1: Google Workspace).
+ *
+ * Purpose:
+ * - Stores OAuth tokens and configuration for a group-admin-linked
+ *   Google Workspace account. Used by the central mailer to send
+ *   group broadcasts via the group's own Gmail account, and by future
+ *   PR2 calendar-sync work.
+ *
+ * Scope contract:
+ * - One connection row per `(groupId, provider)`. The unique index
+ *   enforces upsert semantics in the OAuth callback.
+ * - `connectedByUserId` records which admin authorized the linkage —
+ *   useful for audit and re-auth flows when tokens expire.
+ *
+ * Security contract:
+ * - `accessToken` and `refreshToken` are stored encrypted-at-rest by
+ *   Postgres only — protect the database accordingly. The mailer
+ *   resolves them only at send time.
+ * - `config.smtpEnabled` and `config.calendarSyncEnabled` default to
+ *   `false`; an admin must explicitly opt in from the Connections UI.
+ *
+ * Provider extensibility:
+ * - `provider` is currently narrowed to `'google_workspace'`. New
+ *   providers added in later PRs should extend the literal union and
+ *   match on the same `(groupId, provider)` upsert contract.
+ */
+export const groupConnections = pgTable(
+  'group_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    groupId: uuid('group_id').notNull(),
+    provider: text('provider').notNull().$type<'google_workspace'>(),
+    connectedByUserId: uuid('connected_by_user_id').notNull(),
+    accessToken: text('access_token').notNull(),
+    refreshToken: text('refresh_token'),
+    tokenType: text('token_type').notNull().default('Bearer'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    scope: text('scope'),
+    accountEmail: text('account_email').notNull(),
+    config: jsonb('config')
+      .$type<{
+        calendarId?: string;
+        fromAddress?: string;
+        smtpEnabled: boolean;
+        calendarSyncEnabled: boolean;
+      }>()
+      .notNull()
+      .default({ smtpEnabled: false, calendarSyncEnabled: false }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('group_connections_group_id_provider_idx').on(
+      table.groupId,
+      table.provider,
+    ),
+    index('group_connections_group_id_idx').on(table.groupId),
+  ],
+);
+
+export type GroupConnectionRecord = typeof groupConnections.$inferSelect;
+export type NewGroupConnectionRecord = typeof groupConnections.$inferInsert;

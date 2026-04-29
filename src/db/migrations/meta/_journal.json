@@ -155,6 +155,13 @@
       "when": 1777118400000,
       "tag": "0034_peer_smtp_config",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1777747200000,
+      "tag": "0035_group_connections",
+      "breakpoints": true
     }
   ]
 }
