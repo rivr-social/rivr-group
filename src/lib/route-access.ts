@@ -33,6 +33,7 @@ const PUBLIC_PAGE_PREFIXES = [
 const PUBLIC_API_PREFIXES = [
   "/api/auth",
   "/api/billing/trial-reminders",
+  "/api/cron/google-calendar-sync",
   "/api/health",
   "/api/federation",
   "/api/murmurations",
