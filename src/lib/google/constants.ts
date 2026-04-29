@@ -8,10 +8,20 @@
  * Scope rationale:
  * - `calendar` is required so PR2 can sync the group's calendar without
  *   another consent prompt.
- * - `gmail.send` is required so the central mailer can deliver group
- *   broadcasts via XOAUTH2 to the linked Workspace account.
+ * - `https://mail.google.com/` is required because PR1 sends via SMTP
+ *   XOAUTH2 to smtp.gmail.com. Per Google's Gmail XOAUTH2 protocol docs,
+ *   IMAP/POP/SMTP access requires this single full-access scope; the
+ *   narrower `gmail.send` scope is only valid for the Gmail REST API
+ *   (`users.messages.send`) and will not authenticate over SMTP.
+ *   If we later switch the send path to the Gmail REST API for least
+ *   privilege, downgrade this back to `gmail.send`.
  * - `userinfo.email` + `openid` lets the callback resolve the linked
  *   account email for display and audit.
+ *
+ * Operator note:
+ * - This scope is classified by Google as "restricted." Workspace admins
+ *   may need to allow-list this app in Google Admin > Security > API
+ *   Controls before group admins can complete the connect flow.
  *
  * Error codes:
  * - Stable identifiers used in the connect/callback redirect query so the
@@ -37,7 +47,7 @@ export const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/user
  */
 export const GOOGLE_OAUTH_SCOPES: readonly string[] = [
   'https://www.googleapis.com/auth/calendar',
-  'https://www.googleapis.com/auth/gmail.send',
+  'https://mail.google.com/',
   'https://www.googleapis.com/auth/userinfo.email',
   'openid',
 ];
