@@ -1672,15 +1672,33 @@ export const groupConnections = pgTable(
   'group_connections',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    groupId: uuid('group_id').notNull(),
+    // Group/agent that owns this connection. CASCADE because the
+    // connection is meaningless without the group it scopes to.
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
     provider: text('provider').notNull().$type<'google_workspace'>(),
-    connectedByUserId: uuid('connected_by_user_id').notNull(),
+    // Admin who authorized the link. RESTRICT (not SET NULL) because the
+    // column is NOT NULL and we want an explicit failure if someone
+    // tries to delete a user who is still on the audit trail of a live
+    // credential — the operator should reassign or disconnect first.
+    connectedByUserId: uuid('connected_by_user_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'restrict' }),
     accessToken: text('access_token').notNull(),
     refreshToken: text('refresh_token'),
     tokenType: text('token_type').notNull().default('Bearer'),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     scope: text('scope'),
     accountEmail: text('account_email').notNull(),
+    /**
+     * Stable provider-side account identifier. For Google this is the
+     * OIDC `sub` claim; we fall back to the email when `sub` is absent.
+     * Used for "which group owns this Google account" lookups so two
+     * different groups can't accidentally claim the same Workspace
+     * credential without it being detectable from the audit side.
+     */
+    providerAccountId: text('provider_account_id'),
     config: jsonb('config')
       .$type<{
         calendarId?: string;
@@ -1699,6 +1717,10 @@ export const groupConnections = pgTable(
       table.provider,
     ),
     index('group_connections_group_id_idx').on(table.groupId),
+    index('group_connections_provider_account_id_idx').on(
+      table.provider,
+      table.providerAccountId,
+    ),
   ],
 );
 

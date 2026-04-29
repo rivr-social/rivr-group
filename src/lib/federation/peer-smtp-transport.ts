@@ -187,7 +187,15 @@ export async function verifyPeerSmtpConfig(
 
 /** Inputs required to build a Gmail XOAUTH2 transporter for a group. */
 export interface BuildXoauth2TransporterInput {
-  /** Workspace account email — used as the SMTP user and From address. */
+  /**
+   * Workspace account email — used as the SMTP authentication user.
+   *
+   * This MUST be the linked OAuth account, NOT a Workspace alias. The
+   * envelope `From:` header is set separately at the send call (see
+   * {@link SendViaXoauth2Options.fromAddress}) so an alias address can
+   * appear in the From header while SMTP auth stays bound to the OAuth
+   * account that holds the access/refresh tokens.
+   */
   accountEmail: string;
   /** Live (non-expired) OAuth2 access token. */
   accessToken: string;
@@ -241,23 +249,51 @@ export function buildXoauth2Transporter(
 }
 
 /**
+ * Optional send-time overrides for {@link sendViaXoauth2}.
+ *
+ * `fromAddress` is intentionally NOT part of {@link BuildXoauth2TransporterInput}
+ * because it belongs at the envelope level, not at SMTP auth time. Gmail's
+ * XOAUTH2 binds the SMTP user to the OAuth account; the message header
+ * `From:` may legitimately be a Workspace alias / "Send mail as" address
+ * different from the OAuth account. Operator note: for the alias to be
+ * accepted by Gmail, it must be configured as a verified
+ * "Send mail as" address in Google Workspace Admin / the linked account.
+ */
+export interface SendViaXoauth2Options {
+  /**
+   * Optional envelope `From:` override. When present, used as the message
+   * From address; SMTP authentication still happens as the OAuth user
+   * (`accountEmail` on the transporter input). When absent, defaults to
+   * the OAuth account email so single-address Workspace setups work
+   * with no extra config.
+   */
+  fromAddress?: string;
+}
+
+/**
  * Send a single email via a freshly built Gmail XOAUTH2 transporter.
  *
  * The transporter is closed after the send to guarantee a stale
  * access-token never lingers in a pooled connection.
  *
- * @param input Workspace credentials.
+ * @param input Workspace credentials. `accountEmail` MUST be the OAuth user
+ *   identity (the linked Workspace account) — passing an alias here
+ *   would make XOAUTH2 auth fail.
  * @param options Recipient/subject/body envelope; mirrors `sendEmail`.
+ * @param sendOptions Optional send-time overrides such as
+ *   {@link SendViaXoauth2Options.fromAddress}.
  * @returns Structured result `{ success, messageId?, error? }`.
  */
 export async function sendViaXoauth2(
   input: BuildXoauth2TransporterInput,
   options: SendEmailOptions,
+  sendOptions: SendViaXoauth2Options = {},
 ): Promise<SendEmailResult> {
   const transport = buildXoauth2Transporter(input);
+  const envelopeFrom = sendOptions.fromAddress ?? input.accountEmail;
   try {
     const info = await transport.sendMail({
-      from: input.accountEmail,
+      from: envelopeFrom,
       to: options.to,
       subject: options.subject,
       html: options.html,
@@ -268,7 +304,7 @@ export async function sendViaXoauth2(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(
-      `[group-smtp] XOAUTH2 send failed to=${options.to} account=${input.accountEmail}: ${message}`,
+      `[group-smtp] XOAUTH2 send failed to=${options.to} account=${input.accountEmail} from=${envelopeFrom}: ${message}`,
     );
     return { success: false, error: message };
   } finally {

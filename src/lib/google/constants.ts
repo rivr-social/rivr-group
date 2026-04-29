@@ -54,6 +54,7 @@ export const GOOGLE_OAUTH_STATE_MAX_AGE_SECONDS = 600;
  */
 export const GOOGLE_OAUTH_ERRORS = {
   NOT_CONFIGURED: 'not_configured',
+  STATE_MISCONFIGURED: 'state_misconfigured',
   FORBIDDEN: 'forbidden',
   STATE_MISMATCH: 'state_mismatch',
   STATE_MISSING: 'state_missing',

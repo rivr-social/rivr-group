@@ -36,6 +36,9 @@ export const dynamic = 'force-dynamic';
 /** Maximum bytes of provider error body to log. Keeps logs tidy. */
 const PROVIDER_ERROR_LOG_LIMIT = 500;
 
+/** Canonical sign-in route. Mirrors the global redirect target used elsewhere. */
+const LOGIN_PATH = '/auth/login';
+
 /**
  * Build a redirect URL back to the group's Connections settings page,
  * optionally carrying a stable error code.
@@ -52,14 +55,20 @@ function buildRedirect(
   return url;
 }
 
-/** HMAC-verify the nonce against the AUTH_SECRET-bound signature. */
+/**
+ * HMAC-verify the nonce against the AUTH_SECRET-bound signature.
+ *
+ * Caller is responsible for ensuring `secret` is non-empty — verifying with
+ * `''` would silently accept any forged signature, so the GET handler
+ * fails closed with `state_misconfigured` before reaching here.
+ */
 function verifySignature(
+  secret: string,
   nonce: string,
   groupId: string,
   userId: string,
   signature: string,
 ): boolean {
-  const secret = process.env.AUTH_SECRET ?? '';
   const expected = crypto
     .createHmac('sha256', secret)
     .update(`${nonce}.${groupId}.${userId}`)
@@ -148,9 +157,19 @@ export async function GET(
     );
   }
 
+  // Fail-closed: an empty AUTH_SECRET would silently disable the HMAC
+  // tamper check on the state nonce. Bounce back to the Connections UI
+  // with a stable code the operator can act on.
+  const authSecret = process.env.AUTH_SECRET?.trim();
+  if (!authSecret) {
+    return NextResponse.redirect(
+      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.STATE_MISCONFIGURED),
+    );
+  }
+
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.redirect(new URL('/login', baseUrl));
+    return NextResponse.redirect(new URL(LOGIN_PATH, baseUrl));
   }
 
   const isAdmin = await isGroupAdmin(session.user.id, groupId);
@@ -180,7 +199,15 @@ export async function GET(
     );
   }
 
-  if (!verifySignature(parsed.nonce, parsed.groupId, parsed.userId, parsed.signature)) {
+  if (
+    !verifySignature(
+      authSecret,
+      parsed.nonce,
+      parsed.groupId,
+      parsed.userId,
+      parsed.signature,
+    )
+  ) {
     return NextResponse.redirect(
       buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.STATE_MISMATCH),
     );
@@ -289,6 +316,11 @@ export async function GET(
   };
   const nextConfig = existing?.config ?? defaultConfig;
 
+  // Google's `sub` is the stable account identifier across email aliases;
+  // fall back to the email when `sub` is absent so we always have a
+  // non-null lookup key for "which group owns this Google account".
+  const providerAccountId = profile.sub ?? profile.email;
+
   const baseValues = {
     accessToken: tokenData.access_token,
     refreshToken: tokenData.refresh_token ?? existing?.refreshToken ?? null,
@@ -296,6 +328,7 @@ export async function GET(
     expiresAt,
     scope: tokenData.scope ?? null,
     accountEmail: profile.email,
+    providerAccountId,
     config: nextConfig,
     updatedAt: new Date(),
   };

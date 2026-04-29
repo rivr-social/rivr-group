@@ -56,9 +56,18 @@ function buildRedirect(
 /**
  * HMAC-sign the state nonce with AUTH_SECRET so the callback can detect
  * tampering even if the cookie is leaked or replayed across flows.
+ *
+ * The caller MUST verify `process.env.AUTH_SECRET` is set before invoking
+ * this — signing with an empty secret would silently downgrade the
+ * tamper check, so the GET handler fails closed with `not_configured`
+ * before reaching here.
  */
-function signState(nonce: string, groupId: string, userId: string): string {
-  const secret = process.env.AUTH_SECRET ?? '';
+function signState(
+  secret: string,
+  nonce: string,
+  groupId: string,
+  userId: string,
+): string {
   return crypto
     .createHmac('sha256', secret)
     .update(`${nonce}.${groupId}.${userId}`)
@@ -89,6 +98,16 @@ export async function GET(
     process.env.NEXT_PUBLIC_BASE_URL?.trim() ||
     new URL(request.url).origin;
 
+  // Fail-closed: signing the state with an empty AUTH_SECRET would make
+  // the tamper check trivially forgeable. Surface a stable error code so
+  // the Connections UI can tell the operator to configure the server.
+  const authSecret = process.env.AUTH_SECRET?.trim();
+  if (!authSecret) {
+    return NextResponse.redirect(
+      buildRedirect(baseUrl, groupId, GOOGLE_OAUTH_ERRORS.NOT_CONFIGURED),
+    );
+  }
+
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   if (!clientId) {
     return NextResponse.redirect(
@@ -101,7 +120,7 @@ export async function GET(
     `${baseUrl}/api/group/${groupId}/connections/google/callback`;
 
   const nonce = crypto.randomBytes(STATE_NONCE_BYTES).toString('hex');
-  const signature = signState(nonce, groupId, session.user.id);
+  const signature = signState(authSecret, nonce, groupId, session.user.id);
   const stateValue = JSON.stringify({
     groupId,
     userId: session.user.id,

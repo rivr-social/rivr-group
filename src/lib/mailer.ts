@@ -337,11 +337,17 @@ async function tryDeliverViaGroupGoogle(
     };
   }
 
+  // SMTP authentication MUST use the linked OAuth account email — the
+  // access/refresh tokens are bound to that identity. Any configured
+  // `fromAddress` is an alias and travels at the envelope level only.
+  // Operator note: for the alias to be accepted by Gmail, it must be
+  // configured as a verified "Send mail as" address in Google Workspace
+  // Admin / the linked account. See sendViaXoauth2 docstring.
   const fromAddress = configuredFromAddress ?? token.accountEmail;
 
   const local = await sendViaXoauth2(
     {
-      accountEmail: fromAddress,
+      accountEmail: token.accountEmail,
       accessToken: token.accessToken,
       refreshToken: token.refreshToken,
       expiresAt: token.expiresAt,
@@ -355,6 +361,7 @@ async function tryDeliverViaGroupGoogle(
       text: params.text,
       replyTo: params.replyTo,
     },
+    { fromAddress },
   );
 
   return toResultFromLocal(local);

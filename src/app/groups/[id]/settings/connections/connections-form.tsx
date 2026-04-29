@@ -62,7 +62,10 @@ export interface ConnectionsFormProps {
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
-  not_configured: "Google OAuth is not configured on this server.",
+  not_configured:
+    "Group connections are not configured on this server. Contact admin.",
+  state_misconfigured:
+    "Group connections are not configured on this server. Contact admin.",
   forbidden: "You must be a group admin to manage connections.",
   state_mismatch: "OAuth state mismatch. Please try connecting again.",
   state_missing: "OAuth state cookie was missing. Please try connecting again.",

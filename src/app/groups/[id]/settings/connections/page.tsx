@@ -51,7 +51,7 @@ export default async function GroupConnectionsSettingsPage(
 
   const session = await auth();
   if (!session?.user?.id) {
-    redirect(`/login?callbackUrl=/groups/${groupId}/settings/connections`);
+    redirect(`/auth/login?callbackUrl=/groups/${groupId}/settings/connections`);
   }
 
   const [group] = await db
