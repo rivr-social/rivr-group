@@ -779,30 +779,32 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
                 <Dialog open={offeringComposerOpen} onOpenChange={setOfferingComposerOpen}>
                   {offeringComposerOpen ? (
                     <DialogContent
-                      className="max-w-4xl max-h-[90vh] overflow-y-auto"
+                      className="max-w-4xl max-h-[90vh] grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-0 gap-0"
                       onInteractOutside={(event) => event.preventDefault()}
                       onEscapeKeyDown={(event) => event.preventDefault()}
                     >
-                      <DialogHeader>
+                      <DialogHeader className="px-6 pt-6 pb-2">
                         <DialogTitle>Configure Embedded Offering</DialogTitle>
                         <DialogDescription>
                           This offering will be created and attached when you publish the post. Visibility comes from the post scope.
                         </DialogDescription>
                       </DialogHeader>
-                      <CreateOfferingForm
-                        scopeMode="external"
-                        submitLabel="Use in Post"
-                        titleText="Embedded Offering"
-                        initialValues={{
-                          ...(draftOffering ?? {}),
-                          offeringType: draftOffering?.offeringType ?? OfferingType.Product,
-                        }}
-                        onCancel={() => setOfferingComposerOpen(false)}
-                        onSubmitPayload={(payload) => {
-                          setDraftOffering(payload)
-                          setOfferingComposerOpen(false)
-                        }}
-                      />
+                      <div className="overflow-y-auto px-6 pb-6">
+                        <CreateOfferingForm
+                          scopeMode="external"
+                          submitLabel="Use in Post"
+                          titleText="Embedded Offering"
+                          initialValues={{
+                            ...(draftOffering ?? {}),
+                            offeringType: draftOffering?.offeringType ?? OfferingType.Product,
+                          }}
+                          onCancel={() => setOfferingComposerOpen(false)}
+                          onSubmitPayload={(payload) => {
+                            setDraftOffering(payload)
+                            setOfferingComposerOpen(false)
+                          }}
+                        />
+                      </div>
                     </DialogContent>
                   ) : null}
                 </Dialog>

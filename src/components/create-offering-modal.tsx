@@ -32,18 +32,20 @@ export function CreateOfferingModal({
     <Dialog open={open} onOpenChange={(nextOpen) => {
       if (!nextOpen) onClose()
     }}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="max-w-4xl max-h-[90vh] grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-0 gap-0">
+        <DialogHeader className="px-6 pt-6 pb-2">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <CreateOfferingForm
-          initialValues={initialValues}
-          onCancel={onClose}
-          onCreated={onCreated}
-          onSubmitPayload={onSubmitPayload}
-        />
+        <div className="overflow-y-auto px-6 pb-6">
+          <CreateOfferingForm
+            initialValues={initialValues}
+            onCancel={onClose}
+            onCreated={onCreated}
+            onSubmitPayload={onSubmitPayload}
+          />
+        </div>
       </DialogContent>
     </Dialog>
   )
