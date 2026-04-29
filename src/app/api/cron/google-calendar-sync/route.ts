@@ -77,7 +77,7 @@ import { persistSyncRow } from '@/lib/google/calendar-sync';
 const FALLBACK_UPDATED_MIN_MARGIN_MS = 5 * 60 * 1000;
 
 /** Stable per-connection outcome codes, surfaced in the JSON response. */
-export const INBOUND_SYNC_OUTCOMES = {
+const INBOUND_SYNC_OUTCOMES = {
   PROCESSED: 'processed',
   TOKEN_INVALIDATED: 'token_invalidated',
   PROVIDER_ERROR: 'provider_error',
@@ -168,7 +168,7 @@ export function GET(): Response {
  * page, and returns a summary the cron and the manual "Sync now"
  * endpoint can both render.
  */
-export async function runInboundSyncForConnection(
+async function runInboundSyncForConnection(
   connection: GroupConnectionRecord,
 ): Promise<ConnectionSyncResult> {
   const calendarId = resolveCalendarId(connection);
