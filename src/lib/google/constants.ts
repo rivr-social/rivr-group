@@ -42,6 +42,21 @@ export const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 
 /**
+ * Base URL for the Google Calendar v3 REST API.
+ *
+ * All calendar HTTP calls in `src/lib/google/calendar.ts` build on this base.
+ * Centralized so no raw URL strings live in the API client itself.
+ */
+export const GOOGLE_CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3' as const;
+
+/**
+ * Default Google Calendar id when a group connection does not specify one.
+ * `'primary'` is Google's reserved alias for the linked account's primary
+ * calendar.
+ */
+export const GOOGLE_CALENDAR_DEFAULT_ID = 'primary' as const;
+
+/**
  * Granted scopes for a group-admin Workspace link. Joined into a single
  * space-delimited string at request time.
  */

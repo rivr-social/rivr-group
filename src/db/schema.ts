@@ -1726,3 +1726,114 @@ export const groupConnections = pgTable(
 
 export type GroupConnectionRecord = typeof groupConnections.$inferSelect;
 export type NewGroupConnectionRecord = typeof groupConnections.$inferInsert;
+
+/**
+ * Sidecar that pairs a Rivr resource (event) with its external counterpart on
+ * a third-party provider (PR2: Google Calendar).
+ *
+ * Purpose:
+ * - Records the foreign id, calendar id, etag, and "updated" timestamp the
+ *   provider returned for the paired event so we can:
+ *   - patch with optimistic concurrency (`If-Match: etag`),
+ *   - dedupe inbound polls by `(provider, externalCalendarId, externalId)`,
+ *   - detect echoes of our own outbound writes via `provenance` + matching
+ *     etag,
+ *   - run last-write-wins by comparing `externalUpdated` against newer
+ *     resource updates.
+ *
+ * Scope contract:
+ * - One row per `(resourceId, provider)`. The unique index enforces upsert
+ *   semantics from the outbound and inbound sync paths.
+ * - The sidecar pattern keeps the wide `resources` table free of provider
+ *   columns and naturally extends to additional providers in the future.
+ *
+ * Cleanup:
+ * - `ON DELETE CASCADE` from `resources` so dropping a Rivr event also
+ *   drops its external-sync row. Deleting in Google is handled separately
+ *   by the outbound deletion path.
+ */
+export const resourceExternalSync = pgTable(
+  'resource_external_sync',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    resourceId: uuid('resource_id')
+      .notNull()
+      .references(() => resources.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull().$type<'google_workspace'>(),
+    externalId: text('external_id').notNull(),
+    externalCalendarId: text('external_calendar_id').notNull(),
+    externalEtag: text('external_etag'),
+    externalUpdated: timestamp('external_updated', { withTimezone: true }),
+    /**
+     * Provenance of the most recent successful sync for this row:
+     * - `rivr_outbound` — Rivr created/updated the Google event (we wrote first)
+     * - `google_inbound` — Rivr imported/updated from a Google poll
+     *
+     * Used together with `externalEtag` for echo suppression: an inbound poll
+     * that returns the same etag we just wrote in an outbound push is our own
+     * echo and must be skipped.
+     */
+    provenance: text('provenance')
+      .notNull()
+      .$type<'rivr_outbound' | 'google_inbound'>(),
+    syncedAt: timestamp('synced_at', { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('resource_external_sync_resource_provider_idx').on(
+      table.resourceId,
+      table.provider,
+    ),
+    index('resource_external_sync_lookup_idx').on(
+      table.provider,
+      table.externalCalendarId,
+      table.externalId,
+    ),
+  ],
+);
+
+export type ResourceExternalSyncRecord = typeof resourceExternalSync.$inferSelect;
+export type NewResourceExternalSyncRecord = typeof resourceExternalSync.$inferInsert;
+
+/**
+ * Per-(connection, calendar) cron state for the Google Calendar inbound poll.
+ *
+ * Purpose:
+ * - Persists the Google Calendar incremental `syncToken` between polls so we
+ *   can ask Google "what changed since last time" instead of refetching the
+ *   full window. When no `syncToken` exists yet (first poll, or after a token
+ *   was invalidated by the provider), `lastSyncedAt` is used to derive an
+ *   `updatedMin` parameter with a small safety margin.
+ *
+ * Scope contract:
+ * - One row per `(connectionId, calendarId)`. The unique index enforces
+ *   upsert semantics from the cron path.
+ *
+ * Cleanup:
+ * - `ON DELETE CASCADE` from `groupConnections` so disconnecting a group's
+ *   Google account drops its sync cursor too.
+ */
+export const cronStateGoogleCalendar = pgTable(
+  'cron_state_google_calendar',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => groupConnections.id, { onDelete: 'cascade' }),
+    calendarId: text('calendar_id').notNull(),
+    syncToken: text('sync_token'),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('cron_state_google_calendar_connection_calendar_idx').on(
+      table.connectionId,
+      table.calendarId,
+    ),
+  ],
+);
+
+export type CronStateGoogleCalendarRecord = typeof cronStateGoogleCalendar.$inferSelect;
+export type NewCronStateGoogleCalendarRecord = typeof cronStateGoogleCalendar.$inferInsert;
