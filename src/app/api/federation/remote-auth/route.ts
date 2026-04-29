@@ -55,10 +55,10 @@
  */
 
 import { NextResponse } from "next/server";
-import { sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { agents } from "@/db/schema";
+import { agents, ledger } from "@/db/schema";
 import { getClientIp } from "@/lib/client-ip";
 import { rateLimit } from "@/lib/rate-limit";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
@@ -95,6 +95,65 @@ const IP_RATE_LIMIT_WINDOW_MS = 60 * 1000;
  * default (7d) matches the NextAuth JWT session lifetime on this app.
  */
 const VIEWER_SESSION_LIFETIME_SEC = REMOTE_VIEWER_DEFAULT_LIFETIME_SEC;
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readJoinSettings(metadata: Record<string, unknown>): Record<string, unknown> {
+  return metadataRecord(metadata.joinSettings);
+}
+
+function metadataAdminIds(metadata: Record<string, unknown>): string[] {
+  const adminIds = Array.isArray(metadata.adminIds)
+    ? metadata.adminIds.filter((value): value is string => typeof value === "string")
+    : [];
+  const sourceOwner = metadataRecord(metadata.sourceOwner);
+  const sourceOwnerId = typeof sourceOwner.actorId === "string" ? sourceOwner.actorId : null;
+  return sourceOwnerId ? Array.from(new Set([...adminIds, sourceOwnerId])) : adminIds;
+}
+
+async function canIssueViewerForPrimaryGroup(actorId: string): Promise<boolean> {
+  const config = getInstanceConfig();
+  if (config.instanceType !== "group" || !config.primaryAgentId) return true;
+
+  const primary = await db.query.agents.findFirst({
+    where: and(eq(agents.id, config.primaryAgentId), isNull(agents.deletedAt)),
+    columns: {
+      id: true,
+      visibility: true,
+      metadata: true,
+    },
+  });
+
+  if (!primary) return false;
+
+  const metadata = metadataRecord(primary.metadata);
+  if (metadataAdminIds(metadata).includes(actorId)) return true;
+
+  const joinSettings = readJoinSettings(metadata);
+  const joinVisibility = joinSettings.visibility === "hidden" ? "hidden" : "public";
+  const visibility = primary.visibility ?? "private";
+  const requiresExistingMembership =
+    joinVisibility === "hidden" || visibility === "private" || visibility === "members";
+
+  if (!requiresExistingMembership) return true;
+
+  const membership = await db.query.ledger.findFirst({
+    where: and(
+      eq(ledger.subjectId, actorId),
+      eq(ledger.objectId, primary.id),
+      eq(ledger.verb, "join"),
+      eq(ledger.isActive, true),
+      sql`(${ledger.expiresAt} IS NULL OR ${ledger.expiresAt} > NOW())`,
+    ),
+    columns: { id: true },
+  });
+
+  return Boolean(membership);
+}
 
 // ---------------------------------------------------------------------------
 // Route handler
@@ -188,6 +247,17 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const claims = result.claims;
+
+  const admissionAllowed = await canIssueViewerForPrimaryGroup(claims.actorId);
+  if (!admissionAllowed) {
+    return NextResponse.json(
+      { error: "Not eligible for this group" },
+      {
+        status: STATUS_UNAUTHORIZED,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
+  }
 
   // Mirror the federated identity into the local `agents` table so this
   // user shows up in local lookups (admin picker, mention search) without

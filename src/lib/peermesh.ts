@@ -1,3 +1,5 @@
+import { assertSafeOutboundUrl } from "@/lib/safe-outbound-url";
+
 const ALLOWED_PEERMESH_HOSTS = new Set(["spatial.peermesh.org", "peermesh.org"]);
 const UNIVERSAL_MANIFEST_CONTEXT =
   "https://universalmanifest.net/ns/universal-manifest/v0.1/schema.jsonld";
@@ -16,25 +18,16 @@ function isObject(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isAllowedPeermeshHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
-  return ALLOWED_PEERMESH_HOSTS.has(normalized) || normalized.endsWith(".peermesh.org");
-}
-
 function parseManifestUrl(value: string): URL {
-  let url: URL;
   try {
-    url = new URL(value.trim());
+    return assertSafeOutboundUrl(value, {
+      protocols: ["https:"],
+      allowedHostnames: [...ALLOWED_PEERMESH_HOSTS],
+      allowedHostnameSuffixes: ["peermesh.org"],
+    });
   } catch {
     throw new Error("Enter a valid PeerMesh manifest URL or pasted export JSON.");
   }
-  if (url.protocol !== "https:") {
-    throw new Error("PeerMesh manifests must use HTTPS.");
-  }
-  if (!isAllowedPeermeshHostname(url.hostname)) {
-    throw new Error("Only PeerMesh-hosted manifest URLs are allowed.");
-  }
-  return url;
 }
 
 function extractManifestPayload(data: unknown): JsonRecord {

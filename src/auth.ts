@@ -34,6 +34,7 @@ import { agents } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { verify } from "@node-rs/bcrypt";
 import type { NextAuthConfig } from "next-auth";
+import { safeOutboundUrlString } from "@/lib/safe-outbound-url";
 
 /**
  * Minimum allowed password length per NIST SP 800-63B guidelines.
@@ -66,7 +67,12 @@ async function verifyWithFederatedHome(params: {
   image: string | null;
 } | null> {
   try {
-    const response = await fetch(`${params.homeBaseUrl}/api/federation/remote-password/verify`, {
+    const verifyUrl = safeOutboundUrlString(
+      new URL("/api/federation/remote-password/verify", params.homeBaseUrl),
+      { protocols: ["https:", "http:"] },
+    );
+
+    const response = await fetch(verifyUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

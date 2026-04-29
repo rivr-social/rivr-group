@@ -40,6 +40,12 @@ export interface FederationAuthResult {
   reason?: string;
 }
 
+export interface FederationActorBindingResult {
+  authorized: boolean;
+  actorId?: string;
+  reason?: string;
+}
+
 /**
  * Returns the configured NODE_ADMIN_KEY.
  * No fallback is provided — the key must be explicitly set via the
@@ -151,6 +157,35 @@ export async function authorizeFederationRequest(request: Request): Promise<Fede
   }
 
   return { authorized: false, reason: "Authentication required" };
+}
+
+export function bindAuthorizedFederationActor(
+  authorization: FederationAuthResult,
+  requestedActorId: string | undefined,
+): FederationActorBindingResult {
+  if (!authorization.authorized) {
+    return { authorized: false, reason: authorization.reason ?? "Authentication required" };
+  }
+
+  if (!requestedActorId) {
+    return { authorized: false, reason: "actorId is required" };
+  }
+
+  if (!authorization.actorId) {
+    return {
+      authorized: false,
+      reason: "Federation mutations require an actor-bound session or remote viewer token.",
+    };
+  }
+
+  if (authorization.actorId !== requestedActorId) {
+    return {
+      authorized: false,
+      reason: "Authenticated actor does not match requested actorId.",
+    };
+  }
+
+  return { authorized: true, actorId: authorization.actorId };
 }
 
 /**

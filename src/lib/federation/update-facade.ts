@@ -2,6 +2,7 @@
 
 import { resolveHomeInstance, type HomeInstanceInfo } from "./resolution";
 import { getInstanceConfig } from "./instance-config";
+import { safeOutboundUrlString } from "@/lib/safe-outbound-url";
 
 /**
  * Mutation descriptor for the update facade.
@@ -102,7 +103,12 @@ export class UpdateFacade {
     try {
       const config = getInstanceConfig();
 
-      const response = await fetch(`${homeInstance.baseUrl}/api/federation/mutations`, {
+      const mutationUrl = safeOutboundUrlString(
+        new URL("/api/federation/mutations", homeInstance.baseUrl),
+        { protocols: ["https:", "http:"] },
+      );
+
+      const response = await fetch(mutationUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

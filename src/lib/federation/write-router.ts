@@ -16,6 +16,7 @@
 import { resolveHomeInstance, type HomeInstanceInfo } from "./resolution";
 import { getInstanceConfig } from "./instance-config";
 import { emitDomainEvent, EVENT_TYPES } from "./domain-events";
+import { safeOutboundUrlString } from "@/lib/safe-outbound-url";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -210,7 +211,9 @@ async function forwardToHomeInstance<T, R>(
   };
 
   try {
-    const url = `${homeInstance.baseUrl}${FEDERATION_MUTATIONS_PATH}`;
+    const url = safeOutboundUrlString(new URL(FEDERATION_MUTATIONS_PATH, homeInstance.baseUrl), {
+      protocols: ["https:", "http:"],
+    });
 
     console.log(
       `[write-router] Forwarding write to home instance ${homeInstance.slug} (${homeInstance.nodeId}):`,

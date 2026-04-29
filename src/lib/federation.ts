@@ -63,6 +63,45 @@ const EXPORTABLE_VISIBILITIES = new Set<VisibilityLevel>(["public", "locale", "m
 /** Maximum age (in milliseconds) for accepted federation events. Events older than this are rejected. */
 const EVENT_REPLAY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+function normalizeAuthorityUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}`.replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function authorityFieldMatches(
+  value: unknown,
+  expected: string | null,
+): boolean {
+  if (typeof value !== "string" || value.trim().length === 0 || !expected) return true;
+  const normalized = normalizeAuthorityUrl(value.trim());
+  return normalized === null || normalized === expected;
+}
+
+function payloadSourceMatchesPeer(
+  payload: Record<string, unknown>,
+  peerNode: { id: string; slug: string; baseUrl: string },
+): boolean {
+  const metadata = payload.metadata && typeof payload.metadata === "object"
+    ? (payload.metadata as Record<string, unknown>)
+    : {};
+  const expectedBaseUrl = normalizeAuthorityUrl(peerNode.baseUrl);
+
+  if (typeof metadata.sourceNodeId === "string" && metadata.sourceNodeId !== peerNode.id) return false;
+  if (typeof metadata.sourceNodeSlug === "string" && metadata.sourceNodeSlug !== peerNode.slug) return false;
+  if (!authorityFieldMatches(payload.homeBaseUrl, expectedBaseUrl)) return false;
+  if (!authorityFieldMatches(payload.baseUrl, expectedBaseUrl)) return false;
+  if (!authorityFieldMatches(metadata.homeBaseUrl, expectedBaseUrl)) return false;
+  if (!authorityFieldMatches(metadata.sourceBaseUrl, expectedBaseUrl)) return false;
+  if (!authorityFieldMatches(metadata.originBaseUrl, expectedBaseUrl)) return false;
+  if (!authorityFieldMatches(metadata.canonicalHomeBaseUrl, expectedBaseUrl)) return false;
+
+  return true;
+}
+
 function getNodeSlug(): string {
   // Slug is a stable node identifier used in routing and peer lookup.
   return process.env.NODE_SLUG?.trim() || "global-host";
@@ -753,6 +792,13 @@ export async function importFederationEvents(params: {
     // to prevent ID collisions with local entities.
     if (event.entityType === "agent" && event.eventType === "upsert") {
       const payload = event.payload;
+      if (!payloadSourceMatchesPeer(payload, peerNode)) {
+        rejected.push({ index: i, reason: "source authority mismatch" });
+        console.warn(
+          `[federation] Rejected event ${i} from ${params.fromPeerSlug}: source authority mismatch`
+        );
+        continue;
+      }
       const externalId = typeof payload.id === "string" ? payload.id : null;
       const name = typeof payload.name === "string" ? payload.name : null;
       const type = typeof payload.type === "string" ? payload.type : null;
@@ -786,6 +832,13 @@ export async function importFederationEvents(params: {
 
     if (event.entityType === "resource" && event.eventType === "upsert") {
       const payload = event.payload;
+      if (!payloadSourceMatchesPeer(payload, peerNode)) {
+        rejected.push({ index: i, reason: "source authority mismatch" });
+        console.warn(
+          `[federation] Rejected event ${i} from ${params.fromPeerSlug}: source authority mismatch`
+        );
+        continue;
+      }
       const externalId = typeof payload.id === "string" ? payload.id : null;
       const name = typeof payload.name === "string" ? payload.name : null;
       const type = typeof payload.type === "string" ? payload.type : null;
