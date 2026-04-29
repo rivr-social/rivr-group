@@ -13,7 +13,7 @@ import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { auth } from "@/auth";
 import { db } from "@/db";
-import { agents, cronStateGoogleCalendar, groupConnections } from "@/db/schema";
+import { agents, groupConnections } from "@/db/schema";
 import { isGroupAdmin } from "@/app/actions/group-admin";
 import {
   Card,
@@ -111,7 +111,6 @@ export default async function GroupConnectionsSettingsPage(
 
   const [row] = await db
     .select({
-      id: groupConnections.id,
       accountEmail: groupConnections.accountEmail,
       scope: groupConnections.scope,
       expiresAt: groupConnections.expiresAt,
@@ -126,28 +125,6 @@ export default async function GroupConnectionsSettingsPage(
     )
     .limit(1);
 
-  // Pick the most recent calendar sync timestamp across any (connection,
-  // calendarId) cursor. The Connections UI surfaces this so an admin can
-  // see how stale the inbound sync is at a glance.
-  let lastCalendarSyncedAt: string | null = null;
-  if (row) {
-    const cursors = await db
-      .select({
-        lastSyncedAt: cronStateGoogleCalendar.lastSyncedAt,
-      })
-      .from(cronStateGoogleCalendar)
-      .where(eq(cronStateGoogleCalendar.connectionId, row.id));
-    for (const cursor of cursors) {
-      if (!cursor.lastSyncedAt) continue;
-      if (
-        !lastCalendarSyncedAt ||
-        cursor.lastSyncedAt.toISOString() > lastCalendarSyncedAt
-      ) {
-        lastCalendarSyncedAt = cursor.lastSyncedAt.toISOString();
-      }
-    }
-  }
-
   const summary: GroupGoogleConnectionSummary | null = row
     ? {
         accountEmail: row.accountEmail,
@@ -160,7 +137,6 @@ export default async function GroupConnectionsSettingsPage(
           fromAddress: row.config?.fromAddress,
           calendarId: row.config?.calendarId,
         },
-        lastCalendarSyncedAt,
       }
     : null;
 

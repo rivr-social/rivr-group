@@ -22,7 +22,6 @@ import {
   Mail,
   CalendarDays,
   AlertCircle,
-  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,8 +53,6 @@ export interface GroupGoogleConnectionSummary {
     fromAddress?: string;
     calendarId?: string;
   };
-  /** Most recent successful calendar sync timestamp (ISO), or null. */
-  lastCalendarSyncedAt: string | null;
 }
 
 export interface ConnectionsFormProps {
@@ -79,31 +76,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   userinfo_failed: "Could not read account email from Google.",
   provider_error: "Google reported an error during consent.",
   invalid_group: "Invalid group identifier.",
-  unauthenticated: "You must sign in to sync.",
-  not_linked: "No Google Workspace connection is linked.",
-  disabled: "Calendar sync is turned off. Enable the toggle and save first.",
 };
-
-/**
- * Render a human-readable "X ago" string for a sync timestamp.
- *
- * Inlined (rather than pulling in `date-fns/formatDistanceToNow`) because
- * the precision we need here is coarse and we want zero new dependencies
- * for one tiny label.
- */
-function formatSyncedAgo(iso: string | null): string {
-  if (!iso) return "Never synced";
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return "Never synced";
-  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (seconds < 60) return "Last synced just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `Last synced ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `Last synced ${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.floor(hours / 24);
-  return `Last synced ${days} day${days === 1 ? "" : "s"} ago`;
-}
 
 export function ConnectionsForm({
   groupId,
@@ -169,45 +142,6 @@ export function ConnectionsForm({
       }
       toast({ title: "Google Workspace disconnected" });
       router.refresh();
-    });
-  };
-
-  const onSyncNow = () => {
-    if (!connection) return;
-    startTransition(async () => {
-      try {
-        const response = await fetch(
-          `/api/group/${groupId}/connections/google/sync-now`,
-          { method: "POST" },
-        );
-        const payload = (await response.json().catch(() => null)) as
-          | { ok?: boolean; error?: string; result?: { applied?: number; skipped?: number; errors?: number } }
-          | null;
-        if (!response.ok || !payload?.ok) {
-          const code = payload?.error ?? "provider_error";
-          toast({
-            title: "Sync failed",
-            description: ERROR_MESSAGES[code] ?? `Error: ${code}`,
-            variant: "destructive",
-          });
-          return;
-        }
-        const result = payload.result ?? {};
-        toast({
-          title: "Calendar synced",
-          description:
-            `Applied ${result.applied ?? 0} change(s); ` +
-            `skipped ${result.skipped ?? 0}; errors ${result.errors ?? 0}.`,
-        });
-        router.refresh();
-      } catch (error) {
-        toast({
-          title: "Sync failed",
-          description:
-            error instanceof Error ? error.message : "Unknown error",
-          variant: "destructive",
-        });
-      }
     });
   };
 
@@ -280,29 +214,9 @@ export function ConnectionsForm({
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Two-way sync with Google Calendar. Group events created
-                    here are pushed to the configured calendar; changes in
-                    Google flow back on the next poll.
+                    Reserved for the next release. Leave on so the next deploy
+                    can begin syncing immediately.
                   </p>
-                  {connection.config.calendarSyncEnabled ? (
-                    <div className="flex items-center justify-between gap-2 pt-1">
-                      <p className="text-xs text-muted-foreground">
-                        {formatSyncedAgo(connection.lastCalendarSyncedAt)}
-                      </p>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={onSyncNow}
-                        disabled={isPending}
-                      >
-                        <RefreshCw
-                          className={`h-3.5 w-3.5 mr-1.5 ${isPending ? "animate-spin" : ""}`}
-                        />
-                        Sync now
-                      </Button>
-                    </div>
-                  ) : null}
                 </div>
               </div>
 
