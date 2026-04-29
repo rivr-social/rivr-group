@@ -31,8 +31,8 @@
  * Auth:
  * - Matches the `BILLING_CRON_SECRET` pattern used by
  *   `/api/billing/trial-reminders`. The configured secret is read from
- *   `CALENDAR_CRON_SECRET` and presented via the `Authorization: Bearer
- *   <secret>` header by the external scheduler. POST is the mutation
+ *   `GOOGLE_CALENDAR_SYNC_CRON_SECRET` and presented via the
+ *   `Authorization: Bearer <secret>` header by the external scheduler. POST is the mutation
  *   verb; GET is rejected so an accidental browser hit cannot run the
  *   job.
  *
@@ -102,7 +102,7 @@ interface ConnectionSyncResult {
 // ---------------------------------------------------------------------------
 
 function isAuthorized(request: Request): boolean {
-  const configured = process.env.CALENDAR_CRON_SECRET?.trim();
+  const configured = process.env.GOOGLE_CALENDAR_SYNC_CRON_SECRET?.trim();
   if (!configured) return false;
   const header = request.headers.get('authorization');
   return header === `Bearer ${configured}`;
@@ -201,6 +201,7 @@ export async function runInboundSyncForConnection(
       const isTokenGone =
         error instanceof GoogleCalendarError &&
         error.code === GOOGLE_CALENDAR_ERROR_CODES.NOT_FOUND &&
+        error.status === 410 &&
         usedSyncToken;
       if (isTokenGone) {
         // Reset and retry once with updatedMin.
@@ -403,6 +404,33 @@ async function applyExistingMapping(
     return 'skipped';
   }
 
+  const [resourceRow] = await db
+    .select({
+      metadata: resources.metadata,
+      updatedAt: resources.updatedAt,
+    })
+    .from(resources)
+    .where(and(eq(resources.id, existing.resourceId), isNull(resources.deletedAt)))
+    .limit(1);
+
+  if (!resourceRow) {
+    // Resource was deleted in Rivr; record the inbound state but don't
+    // resurrect a soft-deleted row.
+    await persistSyncRow({
+      resourceId: existing.resourceId,
+      calendarId,
+      googleEventId: event.id,
+      etag: event.etag ?? null,
+      googleUpdated: event.updated ?? null,
+      provenance: 'google_inbound',
+    });
+    return 'skipped';
+  }
+
+  if (incomingUpdated && resourceRow.updatedAt && incomingUpdated <= resourceRow.updatedAt) {
+    return 'skipped';
+  }
+
   // Cancelled inbound — soft-delete the linked resource.
   if (event.status === 'cancelled') {
     await db
@@ -422,30 +450,6 @@ async function applyExistingMapping(
 
   const patch = googleEventToResourcePatch(event);
   if (!patch) return 'skipped';
-
-  // Merge the incoming patch metadata onto the existing metadata to keep
-  // any Rivr-side fields the importer doesn't know about.
-  const [resourceRow] = await db
-    .select({
-      metadata: resources.metadata,
-    })
-    .from(resources)
-    .where(and(eq(resources.id, existing.resourceId), isNull(resources.deletedAt)))
-    .limit(1);
-
-  if (!resourceRow) {
-    // Resource was deleted in Rivr; record the inbound state but don't
-    // resurrect a soft-deleted row.
-    await persistSyncRow({
-      resourceId: existing.resourceId,
-      calendarId,
-      googleEventId: event.id,
-      etag: event.etag ?? null,
-      googleUpdated: event.updated ?? null,
-      provenance: 'google_inbound',
-    });
-    return 'skipped';
-  }
 
   const mergedMetadata = {
     ...(resourceRow.metadata ?? {}),

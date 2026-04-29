@@ -354,9 +354,11 @@ export async function createEventResource(input: {
       // has an active Workspace connection with calendarSyncEnabled. Failures
       // are logged but never propagated — calendar sync must not block event
       // creation. Inbound polling is handled by the dedicated cron route.
-      if (input.groupId && result.resourceId) {
+      const groupIdForSync =
+        input.groupId ?? (ownerId !== resolvedUserId ? ownerId : null);
+      if (groupIdForSync && result.resourceId) {
         try {
-          const outcome = await syncResourceToGoogle(result.resourceId, input.groupId);
+          const outcome = await syncResourceToGoogle(result.resourceId, groupIdForSync);
           if (!outcome.ok) {
             console.error(
               `[createEventResource] google calendar sync (${outcome.code}) for ${result.resourceId}: ${outcome.message ?? ""}`,

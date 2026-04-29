@@ -218,7 +218,7 @@ export async function updateResource(input: UpdateResourceInput): Promise<Action
       // last-write-wins are handled inside syncResourceToGoogle.
       if (isEventResource) {
         const candidateGroupId =
-          (verifiedResource.metadata as Record<string, unknown> | null)?.groupId;
+          (mergedMetadata as Record<string, unknown>).groupId;
         const groupIdForSync =
           typeof candidateGroupId === "string" && candidateGroupId.length > 0
             ? candidateGroupId
