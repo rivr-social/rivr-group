@@ -17,6 +17,7 @@ import {
   createResourceWithLedger,
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
+import { syncResourceToGoogle } from "@/lib/google/calendar-sync";
 import type { ActionResult, EventTicketInput, NormalizedEventTicket } from "./types";
 import { normalizeEventTickets } from "./types";
 
@@ -347,6 +348,23 @@ export async function createEventResource(input: {
         });
       } catch (error) {
         console.error("[createEventResource] companion offering creation failed:", error);
+      }
+
+      // Best-effort outbound sync to Google Calendar when the owning group
+      // has an active Workspace connection with calendarSyncEnabled. Failures
+      // are logged but never propagated — calendar sync must not block event
+      // creation. Inbound polling is handled by the dedicated cron route.
+      if (input.groupId && result.resourceId) {
+        try {
+          const outcome = await syncResourceToGoogle(result.resourceId, input.groupId);
+          if (!outcome.ok) {
+            console.error(
+              `[createEventResource] google calendar sync (${outcome.code}) for ${result.resourceId}: ${outcome.message ?? ""}`,
+            );
+          }
+        } catch (error) {
+          console.error("[createEventResource] google calendar sync threw:", error);
+        }
       }
 
       // Create ledger grants for scoped groups and users

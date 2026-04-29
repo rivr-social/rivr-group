@@ -56,6 +56,8 @@ export interface OutboundGoogleEventBody {
   location?: string;
   start: { dateTime: string; timeZone?: string };
   end: { dateTime: string; timeZone?: string };
+  // Pass-through for forward-compatibility with `GoogleCalendarEventPatch`.
+  [key: string]: unknown;
 }
 
 import type { GoogleCalendarEvent } from './calendar';

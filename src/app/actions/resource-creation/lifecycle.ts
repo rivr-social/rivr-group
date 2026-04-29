@@ -24,6 +24,7 @@ import {
   createResourceWithLedger,
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
+import { syncResourceToGoogle } from "@/lib/google/calendar-sync";
 import type { ActionResult, UpdateResourceInput } from "./types";
 import { normalizeEventTickets } from "./types";
 import { syncEventTicketOfferings } from "./events";
@@ -208,6 +209,33 @@ export async function updateResource(input: UpdateResourceInput): Promise<Action
           });
         } catch (error) {
           console.error("[updateResource] companion offering sync failed:", error);
+        }
+      }
+
+      // Best-effort outbound sync to Google Calendar for event resources
+      // owned by a group. Failures are logged but never propagated — sync
+      // must not block resource updates. Echo suppression and 412
+      // last-write-wins are handled inside syncResourceToGoogle.
+      if (isEventResource) {
+        const candidateGroupId =
+          (verifiedResource.metadata as Record<string, unknown> | null)?.groupId;
+        const groupIdForSync =
+          typeof candidateGroupId === "string" && candidateGroupId.length > 0
+            ? candidateGroupId
+            : nextOwnerId !== userId
+              ? nextOwnerId
+              : null;
+        if (groupIdForSync) {
+          try {
+            const outcome = await syncResourceToGoogle(input.resourceId, groupIdForSync);
+            if (!outcome.ok) {
+              console.error(
+                `[updateResource] google calendar sync (${outcome.code}) for ${input.resourceId}: ${outcome.message ?? ""}`,
+              );
+            }
+          } catch (error) {
+            console.error("[updateResource] google calendar sync threw:", error);
+          }
         }
       }
 

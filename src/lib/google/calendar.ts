@@ -100,10 +100,19 @@ export interface GoogleCalendarEventDateTime {
 }
 
 /**
- * Patch body when creating or updating a Google Calendar event. We accept a
- * minimal typed shape and pass extra fields through.
+ * Patch body when creating or updating a Google Calendar event. Accepts the
+ * common fields the sync code writes plus an open-ended pass-through for any
+ * additional Google fields a future caller wants to set.
  */
-export type GoogleCalendarEventPatch = Partial<GoogleCalendarEvent>;
+export interface GoogleCalendarEventPatch {
+  summary?: string;
+  description?: string;
+  location?: string;
+  status?: 'confirmed' | 'tentative' | 'cancelled';
+  start?: GoogleCalendarEventDateTime;
+  end?: GoogleCalendarEventDateTime;
+  [key: string]: unknown;
+}
 
 export interface ListEventsResult {
   events: GoogleCalendarEvent[];
