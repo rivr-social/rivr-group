@@ -166,9 +166,8 @@ export const authConfig: NextAuthConfig = {
           return null;
         }
 
-        if (!agent.passwordHash) {
-          const homeBaseUrl = getFederatedHomeBaseUrl(agent.metadata);
-          if (!homeBaseUrl) return null;
+        const homeBaseUrl = getFederatedHomeBaseUrl(agent.metadata);
+        if (homeBaseUrl) {
           const verified = await verifyWithFederatedHome({ homeBaseUrl, email, password });
           if (!verified || verified.id !== agent.id) return null;
           return {
@@ -177,6 +176,10 @@ export const authConfig: NextAuthConfig = {
             email: agent.email ?? verified.email,
             image: agent.image ?? verified.image,
           };
+        }
+
+        if (!agent.passwordHash) {
+          return null;
         }
 
         const passwordValid = await verify(password, agent.passwordHash);
