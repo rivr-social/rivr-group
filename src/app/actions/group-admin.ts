@@ -841,6 +841,74 @@ export async function isGroupAdmin(userId: string, groupId: string): Promise<boo
 }
 
 /**
+ * Check whether a user has any active membership in a group.
+ *
+ * Broader than {@link isGroupAdmin}: accepts admin, moderator, and plain
+ * member roles. Used by federation import paths to gate which actors are
+ * allowed to project resources into this group's local surface — without
+ * this gate any trusted peer could federate events claiming arbitrary
+ * actors as members of arbitrary local groups.
+ *
+ * Membership sources, in order:
+ * - active `ledger` row with `verb in (belong, join)` and any role;
+ * - group `metadata.creatorId === userId`;
+ * - group `metadata.adminIds` includes `userId`;
+ * - group `metadata.memberIds` includes `userId` (legacy / non-ledger groups).
+ *
+ * @param userId  Local agent id of the candidate member.
+ * @param groupId Local agent id of the target group.
+ * @returns true if the user has any positive-permission relationship to the group.
+ */
+export async function isGroupMember(
+  userId: string,
+  groupId: string,
+): Promise<boolean> {
+  const now = new Date();
+  const [memberEntry] = await db
+    .select({ id: ledger.id })
+    .from(ledger)
+    .where(
+      and(
+        eq(ledger.subjectId, userId),
+        eq(ledger.objectId, groupId),
+        eq(ledger.isActive, true),
+        or(eq(ledger.verb, "belong"), eq(ledger.verb, "join")),
+        or(isNull(ledger.expiresAt), sql`${ledger.expiresAt} > ${now}`),
+      ),
+    )
+    .limit(1);
+
+  if (memberEntry) return true;
+
+  const [group] = await db
+    .select({ metadata: agents.metadata })
+    .from(agents)
+    .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
+    .limit(1);
+
+  if (!group?.metadata || typeof group.metadata !== "object") {
+    return false;
+  }
+
+  const metadata = group.metadata as Record<string, unknown>;
+  if (metadata.creatorId === userId) return true;
+
+  if (Array.isArray(metadata.adminIds)) {
+    if (metadata.adminIds.some((id: unknown) => typeof id === "string" && id === userId)) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(metadata.memberIds)) {
+    if (metadata.memberIds.some((id: unknown) => typeof id === "string" && id === userId)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Replace the admin roster for a group.
  *
  * Writes `metadata.adminIds` as the new canonical list of admin user IDs.

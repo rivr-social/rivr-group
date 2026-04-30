@@ -21,6 +21,7 @@ import {
 } from "@/lib/federation-crypto";
 import { generatePeerSecret } from "@/lib/federation-auth";
 import { logFederationAudit } from "@/lib/federation-audit";
+import { isGroupMember } from "@/app/actions/group-admin";
 
 /**
  * Core federation orchestration for node lifecycle, peer trust, event export/import,
@@ -965,6 +966,35 @@ export async function importFederationEvents(params: {
             // surface scoped to events that target this instance.
             continue;
           }
+
+          // Membership gate: a peer can only project resources scoped to
+          // this group when the originating actor is a member of the
+          // group locally. Without this gate any trusted peer could
+          // federate events claiming arbitrary actors as members of
+          // arbitrary local groups, bypassing the group-admin model.
+          //
+          // The actor is `payload.metadata.creatorId` when set, otherwise
+          // the resource owner. Both are mapped through
+          // `federation_entity_map` to local agent ids before the check.
+          const sourceMetadataForActor =
+            (payload.metadata as Record<string, unknown> | undefined) ?? {};
+          const declaredCreatorId =
+            typeof sourceMetadataForActor.creatorId === "string"
+              ? sourceMetadataForActor.creatorId
+              : null;
+          const externalActorId = declaredCreatorId ?? externalOwnerId;
+          const localActorId = await resolveLocalEntityId(
+            peerNode.id,
+            externalActorId,
+            "agent",
+          );
+          const actorIsMember = await isGroupMember(localActorId, primaryAgentId);
+          if (!actorIsMember) {
+            console.warn(
+              `[federation] Rejected resource ${externalId} from ${peerNode.slug}: actor ${externalActorId} (local ${localActorId}) is not a member of target group ${primaryAgentId}`,
+            );
+            continue;
+          }
         }
 
         const localId = await resolveLocalEntityId(peerNode.id, externalId, "resource");
@@ -977,6 +1007,11 @@ export async function importFederationEvents(params: {
           externalEntityId: externalId,
         };
 
+        // True upsert by stable local id: re-imports update the existing
+        // mirror row in place rather than no-op'ing on conflict. This is
+        // what makes Camalot edits to the same event propagate to Spirit
+        // without creating duplicate resource rows. `id` and `createdAt`
+        // are intentionally not in the SET clause so they remain stable.
         await db
           .insert(resources)
           .values({
@@ -989,7 +1024,19 @@ export async function importFederationEvents(params: {
             metadata: metadataWithAttribution,
             tags: Array.isArray(payload.tags) ? (payload.tags as string[]) : [],
           })
-          .onConflictDoNothing({ target: resources.id });
+          .onConflictDoUpdate({
+            target: resources.id,
+            set: {
+              name,
+              type: type as typeof resources.$inferInsert.type,
+              ownerId: localOwnerId,
+              visibility: event.visibility,
+              description: typeof payload.description === "string" ? payload.description : null,
+              metadata: metadataWithAttribution,
+              tags: Array.isArray(payload.tags) ? (payload.tags as string[]) : [],
+              updatedAt: new Date(),
+            },
+          });
       }
     }
 
