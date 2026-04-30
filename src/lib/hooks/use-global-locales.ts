@@ -58,15 +58,14 @@ function isFresh(entry: CacheEntry | null): entry is CacheEntry {
 }
 
 /**
- * Low-level fetch. Tries the `?kind=locale` filtered endpoint first, then
- * falls back to the full registry and filters client-side.
+ * Low-level fetch. Talks only to the same-origin proxy route on this peer,
+ * which fetches GLOBAL server-side so the browser never needs cross-origin
+ * access to the registry.
  */
 async function fetchGlobalLocales(): Promise<GlobalLocaleEntry[]> {
-  const base = GLOBAL_BASE_URL;
-
   const attempts: Array<() => Promise<Response>> = [
-    () => fetch(`${base}/api/federation/registry?kind=locale`, { cache: "no-store" }),
-    () => fetch(`${base}/api/federation/registry`, { cache: "no-store" }),
+    () => fetch("/api/federation/global-registry?kind=locale", { cache: "no-store" }),
+    () => fetch("/api/federation/global-registry", { cache: "no-store" }),
   ];
 
   let lastError: unknown = null;

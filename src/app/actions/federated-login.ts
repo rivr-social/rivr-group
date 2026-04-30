@@ -162,7 +162,7 @@ export async function federatedLoginAction(
   });
 
   if (!remoteResponse.ok) {
-    // Verify failed on this peer — do NOT fall back to local credentials
+    // Verify failed on this peer. Do NOT fall back to local credentials
     // here because we have a signed assertion from global that this peer
     // actively rejected. That is a real security signal, not a "this user
     // hasn't migrated yet" signal.
