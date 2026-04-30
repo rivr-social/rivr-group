@@ -63,6 +63,35 @@ const EXPORTABLE_VISIBILITIES = new Set<VisibilityLevel>(["public", "locale", "m
 /** Maximum age (in milliseconds) for accepted federation events. Events older than this are rejected. */
 const EVENT_REPLAY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+/**
+ * Event types that the resource materializer treats as upsert-equivalent.
+ *
+ * `upsert` is the legacy/local export verb; `*.created` and `*.updated`
+ * are the verbs that `emitDomainEvent` uses on rivr-person and other
+ * sovereign apps. Accepting both keeps cross-app federation working
+ * without forcing peers to translate event types before sending.
+ */
+const RESOURCE_UPSERT_EVENT_TYPES = new Set<string>([
+  "upsert",
+  "resource.created",
+  "resource.updated",
+  "event.created",
+  "event.updated",
+]);
+
+/**
+ * Event types that the resource materializer treats as soft-delete.
+ *
+ * The materializer marks the local mirror row's `deletedAt` to now;
+ * if no mirror exists yet (delete arrived before the create), the
+ * branch is a no-op so the row stays absent rather than getting
+ * tombstoned out of order.
+ */
+const RESOURCE_DELETE_EVENT_TYPES = new Set<string>([
+  "resource.deleted",
+  "event.deleted",
+]);
+
 function normalizeAuthorityUrl(value: string): string | null {
   try {
     const url = new URL(value);
@@ -830,7 +859,7 @@ export async function importFederationEvents(params: {
       }
     }
 
-    if (event.entityType === "resource" && event.eventType === "upsert") {
+    if (event.entityType === "resource" && RESOURCE_UPSERT_EVENT_TYPES.has(event.eventType)) {
       const payload = event.payload;
       if (!payloadSourceMatchesPeer(payload, peerNode)) {
         rejected.push({ index: i, reason: "source authority mismatch" });
@@ -876,6 +905,40 @@ export async function importFederationEvents(params: {
             tags: Array.isArray(payload.tags) ? (payload.tags as string[]) : [],
           })
           .onConflictDoNothing({ target: resources.id });
+      }
+    }
+
+    if (event.entityType === "resource" && RESOURCE_DELETE_EVENT_TYPES.has(event.eventType)) {
+      const payload = event.payload;
+      if (!payloadSourceMatchesPeer(payload, peerNode)) {
+        rejected.push({ index: i, reason: "source authority mismatch" });
+        console.warn(
+          `[federation] Rejected event ${i} from ${params.fromPeerSlug}: source authority mismatch`
+        );
+        continue;
+      }
+
+      // Delete events identify the target via `payload.id` (preferred) or
+      // fall back to the envelope `entityId`. The mirror row is located
+      // through the entity map so namespace-mapped local UUIDs resolve.
+      const externalId = typeof payload.id === "string" ? payload.id : null;
+      if (externalId) {
+        const mapping = await db.query.federationEntityMap.findFirst({
+          where: and(
+            eq(federationEntityMap.originNodeId, peerNode.id),
+            eq(federationEntityMap.externalEntityId, externalId),
+            eq(federationEntityMap.entityType, "resource"),
+          ),
+        });
+        if (mapping) {
+          await db
+            .update(resources)
+            .set({ deletedAt: new Date() })
+            .where(eq(resources.id, mapping.localEntityId));
+        }
+        // No-op when no mapping exists: the local mirror was never
+        // created, so there is nothing to soft-delete. The federation
+        // event itself is still persisted above for audit.
       }
     }
   }
