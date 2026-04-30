@@ -92,6 +92,50 @@ const RESOURCE_DELETE_EVENT_TYPES = new Set<string>([
   "event.deleted",
 ]);
 
+/**
+ * Env var holding this instance's primary agent id (in the local
+ * namespace). Used by the importer's resource-scope filter to decide
+ * whether a peer-emitted resource event targets this instance.
+ *
+ * When unset, the filter is permissive — legacy behavior — so
+ * deployments must set it explicitly to opt into strict scoping.
+ */
+const PRIMARY_AGENT_ID_ENV = "PRIMARY_AGENT_ID";
+
+/**
+ * Extract candidate scope target ids (in the peer's namespace) from a
+ * resource-event payload. The materializer maps each through
+ * `federation_entity_map` to its local id and compares to the
+ * configured `PRIMARY_AGENT_ID`.
+ *
+ * Recognized payload shapes:
+ *   - `payload.metadata.scopedGroupIds: string[]`
+ *   - `payload.metadata.groupId: string`
+ *
+ * `payload.ownerId` is appended by the caller — it is also a valid
+ * scope target (the resource is owned by this instance's primary agent).
+ */
+function collectScopedExternalAgentIds(payload: Record<string, unknown>): Set<string> {
+  const out = new Set<string>();
+  const metadata =
+    payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
+      ? (payload.metadata as Record<string, unknown>)
+      : null;
+  if (metadata) {
+    const scoped = metadata.scopedGroupIds;
+    if (Array.isArray(scoped)) {
+      for (const id of scoped) {
+        if (typeof id === "string" && id.length > 0) out.add(id);
+      }
+    }
+    const groupId = metadata.groupId;
+    if (typeof groupId === "string" && groupId.length > 0) {
+      out.add(groupId);
+    }
+  }
+  return out;
+}
+
 function normalizeAuthorityUrl(value: string): string | null {
   try {
     const url = new URL(value);
@@ -880,6 +924,47 @@ export async function importFederationEvents(params: {
         if (!owner) {
           // Skip orphaned resources until their owner has been imported.
           continue;
+        }
+
+        // Scope filter: only project resources targeting this instance's
+        // primary agent. Without this gate, every public Camalot/global
+        // resource event would be mirrored into every connected peer.
+        //
+        // Comparison runs in the local namespace: Camalot's
+        // `scopedGroupIds`/`groupId`/`ownerId` are in its own namespace,
+        // so we map each through `federation_entity_map` (the same
+        // helper `resolveLocalEntityId` already used for the owner lookup
+        // above) before checking against `PRIMARY_AGENT_ID`.
+        //
+        // When `PRIMARY_AGENT_ID` is unset, the filter is permissive
+        // (legacy behavior preserved); deployments that want strict
+        // scoping must set it explicitly.
+        const primaryAgentId = process.env[PRIMARY_AGENT_ID_ENV]?.trim() ?? null;
+        if (primaryAgentId) {
+          const candidateExternalIds = collectScopedExternalAgentIds(payload);
+          // Owner is also a valid scope target (the resource is owned by
+          // this instance's primary agent).
+          candidateExternalIds.add(externalOwnerId);
+
+          let scopeMatches = false;
+          for (const externalScopeId of candidateExternalIds) {
+            const localScopeId = await resolveLocalEntityId(
+              peerNode.id,
+              externalScopeId,
+              "agent",
+            );
+            if (localScopeId === primaryAgentId) {
+              scopeMatches = true;
+              break;
+            }
+          }
+
+          if (!scopeMatches) {
+            // Persist the federation_event row above for audit/recovery,
+            // but do NOT mirror into `resources`. This keeps the local
+            // surface scoped to events that target this instance.
+            continue;
+          }
         }
 
         const localId = await resolveLocalEntityId(peerNode.id, externalId, "resource");
