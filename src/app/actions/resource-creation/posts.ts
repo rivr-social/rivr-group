@@ -220,9 +220,17 @@ export async function createPostResource(input: {
   const hasScopedGroups = scopedGroupIds.length > 0;
   const hasScopedUsers = scopedUserIds.length > 0;
   const wantsGlobal = input.isGlobal !== false;
+  // Visibility precedence:
+  //   - scopedUserIds is the only true "private" case (DM-style scoping).
+  //   - isGlobal=true keeps the post federation-projectable even when group-scoped,
+  //     so a member posting "as the group, share to global" reaches peers.
+  //   - group-scoped without global stays at members-level.
+  //   - locale-scoped or explicit non-global falls back to locale visibility.
   let visibility: VisibilityLevel = "public";
-  if (hasScopedGroups || hasScopedUsers) {
+  if (hasScopedUsers) {
     visibility = "private";
+  } else if (hasScopedGroups && !wantsGlobal) {
+    visibility = "members";
   } else if (hasScopedLocales || !wantsGlobal) {
     visibility = "locale";
   }
@@ -621,9 +629,17 @@ export async function createPostCommerceResource(input: {
   const hasScopedGroups = scopedGroupIds.length > 0;
   const hasScopedUsers = scopedUserIds.length > 0;
   const wantsGlobal = input.isGlobal !== false;
+  // Visibility precedence:
+  //   - scopedUserIds is the only true "private" case (DM-style scoping).
+  //   - isGlobal=true keeps the post federation-projectable even when group-scoped,
+  //     so a member posting "as the group, share to global" reaches peers.
+  //   - group-scoped without global stays at members-level.
+  //   - locale-scoped or explicit non-global falls back to locale visibility.
   let visibility: VisibilityLevel = "public";
-  if (hasScopedGroups || hasScopedUsers) {
+  if (hasScopedUsers) {
     visibility = "private";
+  } else if (hasScopedGroups && !wantsGlobal) {
+    visibility = "members";
   } else if (hasScopedLocales || !wantsGlobal) {
     visibility = "locale";
   }
