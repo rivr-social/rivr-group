@@ -564,11 +564,15 @@ function parseSignedAssertion(
   }
   if (o.email !== undefined && typeof o.email !== "string") return null;
   if (o.handle !== undefined && typeof o.handle !== "string") return null;
+  if (o.name !== undefined && typeof o.name !== "string") return null;
+  if (o.avatarUrl !== undefined && typeof o.avatarUrl !== "string") return null;
 
   const claims: SsoAssertionClaims = {
     actorId: o.actorId,
     ...(typeof o.email === "string" ? { email: o.email } : {}),
     ...(typeof o.handle === "string" ? { handle: o.handle } : {}),
+    ...(typeof o.name === "string" ? { name: o.name } : {}),
+    ...(typeof o.avatarUrl === "string" ? { avatarUrl: o.avatarUrl } : {}),
     homeBaseUrl: o.homeBaseUrl,
     globalIssuerBaseUrl: o.globalIssuerBaseUrl,
     targetBaseUrl: o.targetBaseUrl,
