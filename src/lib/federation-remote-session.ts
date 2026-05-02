@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { getEnv } from "@/lib/env";
+import { decodeRemoteViewerSession } from "@/lib/federation/remote-viewer-session";
 
 const REMOTE_VIEWER_TOKEN_TYPE = "remote_viewer";
 export const REMOTE_VIEWER_COOKIE_NAME = "rivr_remote_viewer";
@@ -178,10 +179,24 @@ export function validateRemoteViewerToken(
   localInstanceId: string,
 ): RemoteViewerSessionPayload | null {
   const payload = verifyPackedPayload<RemoteViewerSessionPayload>(token);
-  if (!payload) return null;
-  if (payload.type !== REMOTE_VIEWER_TOKEN_TYPE) return null;
-  if (payload.localInstanceId !== localInstanceId) return null;
-  const expiresAt = new Date(payload.expiresAt).getTime();
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
-  return payload;
+  if (payload) {
+    if (payload.type !== REMOTE_VIEWER_TOKEN_TYPE) return null;
+    if (payload.localInstanceId !== localInstanceId) return null;
+    const expiresAt = new Date(payload.expiresAt).getTime();
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+    return payload;
+  }
+
+  const modernPayload = decodeRemoteViewerSession(token, resolveFederationSecret());
+  if (!modernPayload) return null;
+
+  return {
+    type: REMOTE_VIEWER_TOKEN_TYPE,
+    actorId: modernPayload.actorId,
+    homeBaseUrl: modernPayload.homeBaseUrl,
+    localInstanceId,
+    issuedAt: new Date(modernPayload.iat * 1000).toISOString(),
+    expiresAt: new Date(modernPayload.exp * 1000).toISOString(),
+    nonce: "",
+  };
 }
