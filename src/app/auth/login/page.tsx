@@ -68,6 +68,7 @@ export default function LoginPage() {
   const searchParams = useSearchParams();
   const callbackUrl = safeRedirectUrl(searchParams.get("callbackUrl"));
   const isVerified = searchParams.get("verified") === "true";
+  const signupUrl = `/auth/signup?callbackUrl=${encodeURIComponent(callbackUrl)}`;
 
   /**
    * Handles form submission: calls `federatedLoginAction` which tries
@@ -266,7 +267,7 @@ export default function LoginPage() {
             </div>
 
             <Button variant="outline" className="w-full" asChild>
-              <Link href="/auth/signup">Create new account</Link>
+              <Link href={signupUrl}>Create new account</Link>
             </Button>
           </CardFooter>
         </Card>
