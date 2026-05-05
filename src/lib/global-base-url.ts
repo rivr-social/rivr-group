@@ -9,7 +9,7 @@
  * Resolution order:
  *   1. `NEXT_PUBLIC_GLOBAL_IDENTITY_AUTHORITY_URL` (client-visible override)
  *   2. `GLOBAL_IDENTITY_AUTHORITY_URL` (server-side env, if forwarded)
- *   3. `https://a.rivr.social` — primary development edge (testA)
+ *   3. `https://app.rivr.social` — production global
  *
  * No trailing slash.
  */
@@ -26,7 +26,7 @@ function readEnv(): string | undefined {
 }
 
 export const GLOBAL_BASE_URL: string = (
-  readEnv() || "https://a.rivr.social"
+  readEnv() || "https://app.rivr.social"
 ).replace(/\/+$/, "");
 
 /**
