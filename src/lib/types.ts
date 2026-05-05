@@ -89,6 +89,16 @@ export type Post = {
   tags?: string[]
   groupTags?: string[]
   chapterTags?: string[]
+  /** Rich link/OpenGraph embeds attached at post time. */
+  embeds?: Array<{
+    url: string
+    kind: "link" | "internal" | "video" | "image"
+    ogTitle?: string
+    ogDescription?: string
+    ogImage?: string
+    siteName?: string
+    favicon?: string
+  }>
 
   type?: string
   postType?: PostType

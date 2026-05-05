@@ -26,6 +26,8 @@ import { ImageUpload } from "@/components/image-upload"
 import { ReactionButton } from "@/components/reaction-button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { RelativeTime } from "@/components/relative-time"
+import { LinkPreviewCard } from "@/components/link-preview-card"
+import type { ResourceEmbed } from "@/db/schema"
 
 function buildOfferingHref(post: Post, listing: MarketplaceListing): string {
   const postDealCents =
@@ -243,6 +245,17 @@ export function PostDetailClient({
                 </Button>
               ) : null}
             </div>
+
+            {post.embeds && post.embeds.length > 0 ? (
+              <div className="mb-4 space-y-2">
+                {post.embeds.map((embed, i) => (
+                  <LinkPreviewCard
+                    key={`${post.id}-embed-${i}`}
+                    preview={embed as ResourceEmbed}
+                  />
+                ))}
+              </div>
+            ) : null}
 
             {displayImages && displayImages.length > 0 ? (
               <div className="mb-4 flex w-full items-center justify-center rounded-lg bg-muted/40 p-4">

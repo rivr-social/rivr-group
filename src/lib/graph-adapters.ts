@@ -561,6 +561,7 @@ export function resourceToPost(resource: SerializedResource, author?: Serialized
     auditValues: meta.auditValues && typeof meta.auditValues === "object" && !Array.isArray(meta.auditValues)
       ? (meta.auditValues as Record<string, number>)
       : undefined,
+    embeds: Array.isArray(resource.embeds) ? resource.embeds : undefined,
   };
 }
 

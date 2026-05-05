@@ -60,6 +60,8 @@ export interface FederatedWriteResult<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  /** Machine-readable error code for programmatic handling */
+  errorCode?: string;
   /** Whether the write was executed locally or forwarded to a remote instance */
   executedOn: "local" | "remote";
   /** Slug of the instance that handled the write */
@@ -98,6 +100,7 @@ export async function federatedWrite<T, R = unknown>(
     success: result.success,
     data: result.data,
     error: result.error,
+    errorCode: result.errorCode,
     executedOn: result.executedOn,
     handledBy: result.homeInstance.slug,
   };

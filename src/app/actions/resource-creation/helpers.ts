@@ -274,6 +274,7 @@ export async function createResourceWithLedger(input: CreateResourceInput): Prom
           visibility: input.visibility ?? "public",
           tags: input.tags ?? [],
           metadata: input.metadata ?? {},
+          embeds: input.embeds ?? [],
           ...(input.location ? {
             location: {
               type: "Point" as const,

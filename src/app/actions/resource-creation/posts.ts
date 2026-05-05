@@ -8,6 +8,7 @@ import {
   resources,
   type NewLedgerEntry,
   type NewResource,
+  type ResourceEmbed,
   type VisibilityLevel,
 } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
@@ -17,7 +18,7 @@ import { embedResource, scheduleEmbedding } from "@/lib/ai";
 import { getAgent } from "@/lib/queries/agents";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { getHostedNodeForOwner, queueEntityExportEvents } from "@/lib/federation";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
+import { federatedWrite, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
 
 import {
   resolveAuthenticatedUserId,
@@ -159,6 +160,7 @@ export async function createPostResource(input: {
   eftValues?: Record<string, number>;
   capitalValues?: Record<string, number>;
   auditValues?: Record<string, number>;
+  embeds?: ResourceEmbed[];
   federate?: boolean;
 }): Promise<ActionResult> {
   if (!input.content || !input.content.trim()) {
@@ -245,8 +247,9 @@ export async function createPostResource(input: {
   const authorAgent = await getAgent(userId);
 
   // Scope tags encode chapter/group visibility hints used by feed and discovery queries.
+  // federatedWrite resolves the home instance and forwards remotely if needed.
   const targetAgentId = input.groupId || userId;
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: "createPostResource",
       actorId: userId,
@@ -260,6 +263,7 @@ export async function createPostResource(input: {
         content: input.content,
         visibility,
         tags: scopeTags,
+        embeds: input.embeds ?? [],
         ...(isLive && input.liveLocation ? { location: input.liveLocation } : {}),
         metadata: {
           entityType: "post",
@@ -416,6 +420,7 @@ export async function createPostCommerceResource(input: {
   eftValues?: Record<string, number>;
   capitalValues?: Record<string, number>;
   auditValues?: Record<string, number>;
+  embeds?: ResourceEmbed[];
   federate?: boolean;
 }): Promise<ActionResult> {
   if (!input.content || !input.content.trim()) {
@@ -692,7 +697,7 @@ export async function createPostCommerceResource(input: {
   }
 
   const commerceTargetAgentId = input.groupId || userId;
-  const commerceFacadeResult = await updateFacade.execute(
+  const commerceFacadeResult = await federatedWrite(
     {
       type: "createPostCommerceResource",
       actorId: userId,
@@ -816,6 +821,7 @@ export async function createPostCommerceResource(input: {
           ownerId: userId,
           visibility,
           tags: scopeTags,
+          embeds: input.embeds ?? [],
           metadata: {
             entityType: "post",
             postType: input.postType ?? "social",

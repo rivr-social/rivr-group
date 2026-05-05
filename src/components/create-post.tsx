@@ -43,6 +43,9 @@ import {
   CreateOfferingForm,
   type OfferingDraftPayload,
 } from "@/components/create-offering-form"
+import { LinkPreviewCard } from "@/components/link-preview-card"
+import { extractUrls } from "@/lib/link-preview-client"
+import type { ResourceEmbed } from "@/db/schema"
 
 interface CreatePostProps {
   eventId?: string
@@ -112,6 +115,13 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
   const [isGlobalPost, setIsGlobalPost] = useState(true)
   const [shouldFederate, setShouldFederate] = useState(false)
   const [federationState, setFederationState] = useState<FederationState>({ status: "idle" })
+  // Link-preview state: embeds currently attached to the draft post, keyed by URL.
+  // `pendingUrls` tracks URLs we've started fetching so we don't double-request.
+  // `dismissedUrls` remembers URLs the user explicitly removed so we don't
+  // auto-re-fetch them when their text stays in the body.
+  const [linkEmbeds, setLinkEmbeds] = useState<Record<string, ResourceEmbed>>({})
+  const [linkEmbedsLoading, setLinkEmbedsLoading] = useState<Record<string, boolean>>({})
+  const [dismissedLinkUrls, setDismissedLinkUrls] = useState<Set<string>>(() => new Set())
   // Lazy marketplace fetch: only load when the composer is expanded AND an Offer
   // post type is selected.  This prevents the 1000+ server action calls that were
   // firing on mount (the event Updates tab rendered CreatePost immediately but the
@@ -217,6 +227,118 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
     }
   }, [currentUser?.id, isExpanded, postType])
 
+  /**
+   * Link-preview debounce effect.
+   *
+   * On every content change, wait 500ms of idle and then diff the URLs in the
+   * body against what's already attached or being fetched. Any newly-seen URL
+   * (that hasn't been dismissed by the user) is POSTed to /api/link-preview;
+   * the returned embed is merged into `linkEmbeds`. URLs that were previously
+   * attached but have since been deleted from the body are pruned, so the
+   * preview tracks the text as the user edits.
+   */
+  useEffect(() => {
+    if (!content) {
+      // Empty body — drop everything, including loading flags.
+      setLinkEmbeds((prev) => (Object.keys(prev).length === 0 ? prev : {}))
+      setLinkEmbedsLoading((prev) => (Object.keys(prev).length === 0 ? prev : {}))
+      return
+    }
+
+    const timer = setTimeout(() => {
+      const urls = extractUrls(content)
+      const urlSet = new Set(urls)
+
+      // Prune embeds/loading entries for URLs no longer in the text.
+      setLinkEmbeds((prev) => {
+        let changed = false
+        const next: Record<string, ResourceEmbed> = {}
+        for (const [key, val] of Object.entries(prev)) {
+          if (urlSet.has(key)) next[key] = val
+          else changed = true
+        }
+        return changed ? next : prev
+      })
+      setLinkEmbedsLoading((prev) => {
+        let changed = false
+        const next: Record<string, boolean> = {}
+        for (const [key, val] of Object.entries(prev)) {
+          if (urlSet.has(key)) next[key] = val
+          else changed = true
+        }
+        return changed ? next : prev
+      })
+
+      // Fetch any new URL we haven't fetched and the user hasn't dismissed.
+      for (const url of urls) {
+        if (dismissedLinkUrls.has(url)) continue
+        if (linkEmbeds[url]) continue
+        if (linkEmbedsLoading[url]) continue
+        void (async () => {
+          setLinkEmbedsLoading((prev) => ({ ...prev, [url]: true }))
+          try {
+            const res = await fetch("/api/link-preview", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url }),
+            })
+            if (!res.ok) return
+            const data = (await res.json()) as
+              | { ok: true; preview: ResourceEmbed & { fetchStatus?: string }; cached?: boolean }
+              | { ok: false }
+            if (!data.ok) return
+            const { preview } = data
+            // Drop previews that carry no useful metadata — shows as noisy
+            // empty cards otherwise.
+            const hasAnyMetadata =
+              Boolean(preview.ogTitle) ||
+              Boolean(preview.ogDescription) ||
+              Boolean(preview.ogImage) ||
+              preview.kind === "internal"
+            if (!hasAnyMetadata) return
+            setLinkEmbeds((prev) => ({
+              ...prev,
+              [url]: {
+                url: preview.url || url,
+                kind: preview.kind ?? "link",
+                ogTitle: preview.ogTitle,
+                ogDescription: preview.ogDescription,
+                ogImage: preview.ogImage,
+                siteName: preview.siteName,
+                favicon: preview.favicon,
+              },
+            }))
+          } catch {
+            // Silent: link preview is best-effort, never blocks post submission.
+          } finally {
+            setLinkEmbedsLoading((prev) => {
+              const next = { ...prev }
+              delete next[url]
+              return next
+            })
+          }
+        })()
+      }
+    }, 500)
+
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content, dismissedLinkUrls])
+
+  /** Manually dismiss a preview. The URL stays in the body; the card disappears. */
+  const handleDismissLinkPreview = (url: string) => {
+    setLinkEmbeds((prev) => {
+      const next = { ...prev }
+      delete next[url]
+      return next
+    })
+    setDismissedLinkUrls((prev) => {
+      const next = new Set(prev)
+      next.add(url)
+      return next
+    })
+  }
+
   const handleLiveInvitationToggle = (checked: boolean) => {
     setIsLiveInvitation(checked)
     if (checked && !liveLocation) {
@@ -276,6 +398,9 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
     })
     setIsGlobalPost(true)
     setShouldFederate(false)
+    setLinkEmbeds({})
+    setLinkEmbedsLoading({})
+    setDismissedLinkUrls(new Set())
   }
 
   const handleImageSelect = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -428,6 +553,7 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
             auditValues: auditValues && Object.values(auditValues).some(v => v > 0) ? auditValues : undefined,
             gratitudeRecipientId: gratitudeRecipientIdValue,
             gratitudeRecipientName: gratitudeRecipientNameValue,
+            embeds: Object.values(linkEmbeds),
             federate,
           })
         : await createPostResource({
@@ -450,6 +576,7 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
             auditValues: auditValues && Object.values(auditValues).some(v => v > 0) ? auditValues : undefined,
             gratitudeRecipientId: gratitudeRecipientIdValue,
             gratitudeRecipientName: gratitudeRecipientNameValue,
+            embeds: Object.values(linkEmbeds),
             federate,
           })
 
@@ -484,6 +611,7 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
         gratitudeRecipientName: postType === PostType.Gratitude ? gratitudeRecipientName : undefined,
         chapterTags:
           localeIds,
+        embeds: Object.values(linkEmbeds),
       }
 
       // Side effects on success: notify parent, reset composer, toast, and refresh route data.
@@ -527,6 +655,30 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
               placeholder={`What's on your mind, ${currentUser?.name}?`}
               className={`resize-none transition-all duration-300 ${isExpanded ? "min-h-[120px]" : "min-h-[40px]"}`}
             />
+            {/* Link preview cards. Rendered between the textarea and advanced
+                controls so the user sees the unfurl attach in place. */}
+            {Object.keys(linkEmbeds).length > 0 || Object.keys(linkEmbedsLoading).length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {Object.entries(linkEmbeds).map(([url, preview]) => (
+                  <LinkPreviewCard
+                    key={url}
+                    preview={preview}
+                    onRemove={() => handleDismissLinkPreview(url)}
+                  />
+                ))}
+                {Object.entries(linkEmbedsLoading)
+                  .filter(([url]) => !linkEmbeds[url])
+                  .map(([url]) => (
+                    <div
+                      key={`loading-${url}`}
+                      className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+                    >
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span className="truncate">Fetching preview for {url}</span>
+                    </div>
+                  ))}
+              </div>
+            ) : null}
             {/* Conditional rendering: advanced composer controls appear only after focus. */}
             {isExpanded && (
               <div className="space-y-3 mt-3">

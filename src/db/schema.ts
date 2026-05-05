@@ -868,6 +868,15 @@ export const federationEntityMap = pgTable(
     externalEntityId: text('external_entity_id').notNull(),
     localEntityId: uuid('local_entity_id').notNull(),
     entityType: text('entity_type', { enum: ['agent', 'resource'] }).notNull(),
+    /**
+     * Direction of the mapping. mirrored_remote = local id is a projection of
+     * a remote canonical actor; resolveViaEntityMap forwards writes to the
+     * remote home. local_alias = local id is canonical and just has a known
+     * alias on the remote; resolveViaEntityMap leaves it local.
+     */
+    relationship: text('relationship', {
+      enum: ['mirrored_remote', 'local_alias'],
+    }).notNull().default('mirrored_remote'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -879,6 +888,7 @@ export const federationEntityMap = pgTable(
     ),
     index('federation_entity_map_local_entity_idx').on(table.localEntityId),
     index('federation_entity_map_origin_node_idx').on(table.originNodeId),
+    index('federation_entity_map_relationship_idx').on(table.relationship),
   ]
 );
 

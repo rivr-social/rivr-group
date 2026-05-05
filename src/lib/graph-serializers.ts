@@ -5,7 +5,7 @@
  * declarative graph-query module can reuse them without circular imports.
  */
 
-import type { Agent, Resource } from "@/db/schema";
+import type { Agent, Resource, ResourceEmbed } from "@/db/schema";
 import { normalizeAssetUrl } from "@/lib/asset-url";
 
 // ─── Serialized Interfaces ───────────────────────────────────────────────────
@@ -39,6 +39,12 @@ export interface SerializedResource {
   visibility?: string | null;
   metadata: Record<string, unknown>;
   tags: string[];
+  /**
+   * Rich OG/link embeds attached to this resource at creation time.
+   * Optional on the type so call-sites that construct `SerializedResource`
+   * manually don't regress; serializer always returns an array.
+   */
+  embeds?: ResourceEmbed[];
   createdAt: string;
   updatedAt: string;
 }
@@ -101,6 +107,7 @@ export function serializeResource(resource: Resource): SerializedResource {
     visibility: resource.visibility ?? null,
     metadata: (toJsonSafe(resource.metadata ?? {}) as Record<string, unknown>),
     tags: (resource.tags ?? []) as string[],
+    embeds: (Array.isArray(resource.embeds) ? resource.embeds : []) as ResourceEmbed[],
     createdAt: toISOString(resource.createdAt),
     updatedAt: toISOString(resource.updatedAt),
   };

@@ -12,7 +12,7 @@ import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { and, eq } from "drizzle-orm";
 
 import { getOperatingAgentId } from "@/lib/persona";
-import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
+import { federatedWrite, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
 import type { ActionResult, CommentData } from "./types";
 
 const MAX_COMMENT_CONTENT_LENGTH = 10000;
@@ -64,7 +64,7 @@ export async function postCommentAction(
     .limit(1);
   const targetAgentId = resourceOwner?.ownerId ?? userId;
 
-  const facadeResult = await updateFacade.execute(
+  const facadeResult = await federatedWrite(
     {
       type: "postCommentAction",
       actorId: userId,

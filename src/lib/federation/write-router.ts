@@ -220,18 +220,35 @@ async function forwardToHomeInstance<T, R>(
       { type: write.type, targetAgentId: write.targetAgentId, url },
     );
 
+    // Cross-instance auth: prefer peer-secret (per-peer scoped) over the
+    // global admin key. Receiver hashes the secret and matches against its
+    // node_peers row keyed by our slug.
+    const peerSecretEnv = `FEDERATION_PEER_SECRET_${homeInstance.slug.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+    const peerSecret = process.env[peerSecretEnv]?.trim();
+    const adminKey = process.env.NODE_ADMIN_KEY?.trim();
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Instance-Id": config.instanceId,
+      "X-Instance-Slug": config.instanceSlug,
+      "X-Idempotency-Key": idempotencyKey,
+      "X-Correlation-Id": correlationId,
+    };
+    if (peerSecret) {
+      headers["x-peer-slug"] = config.instanceSlug;
+      headers["x-peer-secret"] = peerSecret;
+    } else if (adminKey) {
+      headers["X-Node-Admin-Key"] = adminKey;
+    } else {
+      console.warn(
+        `[write-router] No ${peerSecretEnv} or NODE_ADMIN_KEY configured for forward to ${homeInstance.slug}; ` +
+          `the receiver will reject this request.`,
+      );
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Instance-Id": config.instanceId,
-        "X-Instance-Slug": config.instanceSlug,
-        "X-Idempotency-Key": idempotencyKey,
-        "X-Correlation-Id": correlationId,
-        ...(process.env.NODE_ADMIN_KEY?.trim()
-          ? { "X-Node-Admin-Key": process.env.NODE_ADMIN_KEY.trim() }
-          : {}),
-      },
+      headers,
       body: JSON.stringify({
         type: write.type,
         actorId: write.actorId,
