@@ -17,12 +17,15 @@ import {
   getAllResources,
   getMarketplaceListings as queryMarketplaceListings,
   getResource,
+  getEventsByProjectId,
 } from "@/lib/queries/resources";
 import {
   requireActorId,
   tryActorId,
   canViewAgent,
   canViewResource,
+  filterViewableResources,
+  filterPubliclyCrawlableResources,
 } from "./helpers";
 import { isUuid, isAnonymousCrawlableVisibility } from "./types";
 
@@ -343,4 +346,35 @@ export async function fetchEventDetail(eventId: string): Promise<SerializedAgent
     createdAt: toISOString(eventResource.createdAt),
     updatedAt: toISOString(eventResource.updatedAt),
   };
+}
+
+/**
+ * Returns event resources linked to a project via metadata-based association.
+ *
+ * Looks up rows from the resources table whose metadata links them to the
+ * supplied projectId, then permission-filters according to the caller's
+ * authentication state.
+ *
+ * @param projectId Project resource UUID.
+ * @param limit Max events to return. Defaults to `100`.
+ * @returns Serialized event resources visible to the caller.
+ * @throws {Error} May throw on datastore failures.
+ * @example
+ * ```ts
+ * const events = await fetchProjectEvents(projectId);
+ * ```
+ */
+export async function fetchProjectEvents(
+  projectId: string,
+  limit = 100,
+): Promise<SerializedResource[]> {
+  if (!isUuid(projectId)) return [];
+  const actorId = await tryActorId();
+  const rows = await getEventsByProjectId(projectId, limit);
+
+  const visible = actorId
+    ? await filterViewableResources(actorId, rows as Resource[])
+    : await filterPubliclyCrawlableResources(rows as Resource[]);
+
+  return visible.map((row) => serializeResource(row));
 }

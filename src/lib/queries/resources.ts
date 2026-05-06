@@ -194,6 +194,55 @@ export async function getResourcesForGroup(groupId: string, limit = 200): Promis
 }
 
 /**
+ * Returns event resources linked to a project via metadata.
+ *
+ * Linkage shapes accepted:
+ * - `metadata.projectId` matches the supplied `projectId` (canonical link).
+ * - `metadata.managingProjectId` also accepted (set on event create alongside `projectId`).
+ * - `metadata.project_id` (snake_case) is also accepted as a tolerance alias for
+ *   any historical rows that may have been written under a non-canonical key.
+ *
+ * Type matching:
+ * - Accepts rows where `type = 'event'` OR `metadata.resourceKind = 'event'` OR
+ *   `metadata.entityType = 'event'`, since events have historically been written
+ *   under multiple shapes.
+ *
+ * @param projectId Project resource UUID (string).
+ * @param limit Max rows to return. Defaults to `100`.
+ * @returns Matching non-deleted event resources ordered newest first.
+ * @throws Propagates database/connection errors from the underlying query.
+ * @example
+ * ```ts
+ * const events = await getEventsByProjectId(projectId);
+ * ```
+ */
+export async function getEventsByProjectId(
+  projectId: string,
+  limit = 100,
+): Promise<Resource[]> {
+  const result = await db.execute(sql`
+    SELECT r.*
+    FROM resources r
+    WHERE r.deleted_at IS NULL
+      AND (
+        r.type = 'event'
+        OR r.metadata->>'resourceKind' = 'event'
+        OR r.metadata->>'entityType' = 'event'
+      )
+      AND (
+        r.metadata->>'projectId' = ${projectId}
+        OR r.metadata->>'managingProjectId' = ${projectId}
+        OR r.metadata->>'project_id' = ${projectId}
+        OR r.metadata->>'managing_project_id' = ${projectId}
+      )
+    ORDER BY r.created_at DESC
+    LIMIT ${limit}
+  `);
+
+  return (result as Record<string, unknown>[]).map(rowToResource);
+}
+
+/**
  * Returns resources that contain a specific tag in the `tags` array column.
  *
  * @param tag Tag to match.

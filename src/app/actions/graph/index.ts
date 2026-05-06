@@ -43,6 +43,7 @@ export {
   fetchMarketplaceListingById,
   fetchPostDetail,
   fetchEventDetail,
+  fetchProjectEvents,
 } from "./resources";
 
 // places
