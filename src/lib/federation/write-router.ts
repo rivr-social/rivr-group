@@ -122,10 +122,103 @@ export async function resolveWriteTarget(agentId: string): Promise<{
  * @param localExecutor - Function that executes the mutation locally
  * @returns WriteRouterResult with the outcome and routing metadata
  */
+/**
+ * Action types that must execute on the local instance regardless of the
+ * resolved home for the target. Identity / recovery / hosted-wallet stay on
+ * the actor's home instance; aggregation-layer interactions
+ * (comment / reaction / follow / RSVP / hidden / open-group join) land
+ * wherever the viewer is and emit advisory domain events that a future
+ * actor-bound federation pass can mirror outward.
+ */
+const IDENTITY_AUTHORITY_TYPES = new Set<string>([
+  "auth.signIn",
+  "auth.signOut",
+  "auth.signUp",
+  "auth.changePassword",
+  "auth.verifyEmail",
+  "recovery.requestEmailReset",
+  "recovery.confirmEmailReset",
+  "recovery.requestSeedRecovery",
+  "recovery.completeSeedRecovery",
+  "recovery.assertion",
+  "wallet.deposit",
+  "wallet.withdraw",
+  "wallet.setEthAddress",
+  "settings.update_email",
+  "settings.update_phone",
+  "mcp.token.issue",
+  "mcp.token.revoke",
+  "mcp.device.approve",
+  "mcp.device.deny",
+]);
+
+const LOCAL_ONLY_INTERACTION_TYPES = new Set<string>([
+  "postCommentAction",
+  "setReactionOnTarget",
+  "toggleLikeOnTarget",
+  "toggleThankOnTarget",
+  "toggleFollowAgent",
+  "toggleHiddenContent",
+  "rsvpToEvent",
+  "fetchReactionSummaries",
+  "toggleJoinGroup",
+]);
+
+function isLocalOnlyAction(type: string): boolean {
+  if (IDENTITY_AUTHORITY_TYPES.has(type)) return true;
+  if (LOCAL_ONLY_INTERACTION_TYPES.has(type)) return true;
+  return (
+    type.startsWith("auth.") ||
+    type.startsWith("recovery.") ||
+    type.startsWith("mcp.token.") ||
+    type.startsWith("mcp.device.") ||
+    type.startsWith("comment.") ||
+    type.startsWith("reaction.") ||
+    type.startsWith("follow.") ||
+    type.startsWith("rsvp.")
+  );
+}
+
 export async function routeWrite<T, R = unknown>(
   write: RoutedWrite<T>,
   localExecutor: () => Promise<R>,
 ): Promise<WriteRouterResult<R>> {
+  // Aggregation-layer + identity-authority actions execute locally regardless
+  // of where the target's canonical home resolves. See sets above.
+  if (isLocalOnlyAction(write.type)) {
+    try {
+      const data = await localExecutor();
+      return {
+        success: true,
+        data,
+        executedOn: "local",
+        homeInstance: {
+          nodeId: "",
+          instanceType: "local",
+          slug: "local",
+          baseUrl: "",
+          isLocal: true,
+          migrationStatus: "active",
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Local execution failed",
+        errorCode: "LOCAL_EXECUTION_FAILED",
+        executedOn: "local",
+        homeInstance: {
+          nodeId: "",
+          instanceType: "local",
+          slug: "local",
+          baseUrl: "",
+          isLocal: true,
+          migrationStatus: "active",
+        },
+      };
+    }
+  }
+
   let homeInstance: HomeInstanceInfo;
 
   try {
