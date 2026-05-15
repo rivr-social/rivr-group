@@ -34,7 +34,7 @@ import { agents } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { verify } from "@node-rs/bcrypt";
 import type { NextAuthConfig } from "next-auth";
-import { safeOutboundUrlString } from "@/lib/safe-outbound-url";
+import { verifyWithGlobalIdentityAuthority } from "@/lib/auth/global-credential-authority";
 
 /**
  * Minimum allowed password length per NIST SP 800-63B guidelines.
@@ -49,64 +49,6 @@ const MINIMUM_PASSWORD_LENGTH = 8;
  */
 const MAXIMUM_PASSWORD_LENGTH = 72;
 const buildFallbackAuthSecret = "build-only-auth-secret-not-for-runtime";
-
-function getFederatedHomeBaseUrl(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
-  const homeBaseUrl = (metadata as Record<string, unknown>).federatedHomeBaseUrl;
-  return typeof homeBaseUrl === "string" && homeBaseUrl.length > 0 ? homeBaseUrl.replace(/\/+$/, "") : null;
-}
-
-async function verifyWithFederatedHome(params: {
-  homeBaseUrl: string;
-  email: string;
-  password: string;
-}): Promise<{
-  id: string;
-  name: string | null;
-  email: string | null;
-  image: string | null;
-} | null> {
-  try {
-    const verifyUrl = safeOutboundUrlString(
-      new URL("/api/federation/remote-password/verify", params.homeBaseUrl),
-      { protocols: ["https:", "http:"] },
-    );
-
-    const response = await fetch(verifyUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        email: params.email,
-        password: params.password,
-      }),
-      signal: AbortSignal.timeout(5_000),
-    });
-    const data = await response.json().catch(() => null) as {
-      success?: boolean;
-      actor?: {
-        id?: string;
-        name?: string | null;
-        email?: string | null;
-        image?: string | null;
-      };
-    } | null;
-    if (!response.ok || data?.success !== true || (data.actor?.id !== undefined && data.actor.id.length === 0)) {
-      return null;
-    }
-    if (!data.actor?.id) return null;
-    return {
-      id: data.actor.id,
-      name: data.actor.name ?? null,
-      email: data.actor.email ?? params.email,
-      image: data.actor.image ?? null,
-    };
-  } catch {
-    return null;
-  }
-}
 
 function clearStaleTokenIdentity(token: Record<string, unknown>) {
   delete token.sub;
@@ -146,7 +88,7 @@ export const authConfig: NextAuthConfig = {
           return null;
         }
 
-        const email = credentials.email as string;
+        const email = (credentials.email as string).trim().toLowerCase();
         const password = credentials.password as string;
 
         if (
@@ -156,29 +98,49 @@ export const authConfig: NextAuthConfig = {
           return null;
         }
 
+        // Primary path: delegate credential verification to global's
+        // universal identity authority. This is the architectural rule —
+        // global is the credential register that survives the user losing
+        // their sovereign instance (recoverable via seed-phrase).
+        const verified = await verifyWithGlobalIdentityAuthority({ email, password });
+
+        if (verified) {
+          const [agent] = await db
+            .select()
+            .from(agents)
+            .where(eq(agents.email, email))
+            .limit(1);
+
+          if (agent) {
+            return {
+              id: agent.id,
+              name: agent.name ?? verified.name,
+              email: agent.email ?? verified.email,
+              image: agent.image ?? verified.image,
+            };
+          }
+
+          // Federation-projected row hasn't landed yet for this user on
+          // this instance. Return the verified identity using global's
+          // canonical id so the JWT callback can self-heal when the
+          // federation upsert arrives.
+          return {
+            id: verified.id,
+            name: verified.name,
+            email: verified.email ?? email,
+            image: verified.image,
+          };
+        }
+
+        // Fallback: local bcrypt for legacy/local-only accounts and for
+        // resilience if global is temporarily unreachable.
         const [agent] = await db
           .select()
           .from(agents)
           .where(eq(agents.email, email))
           .limit(1);
 
-        if (!agent) {
-          return null;
-        }
-
-        const homeBaseUrl = getFederatedHomeBaseUrl(agent.metadata);
-        if (homeBaseUrl) {
-          const verified = await verifyWithFederatedHome({ homeBaseUrl, email, password });
-          if (!verified || verified.id !== agent.id) return null;
-          return {
-            id: agent.id,
-            name: agent.name ?? verified.name,
-            email: agent.email ?? verified.email,
-            image: agent.image ?? verified.image,
-          };
-        }
-
-        if (!agent.passwordHash) {
+        if (!agent || !agent.passwordHash) {
           return null;
         }
 
