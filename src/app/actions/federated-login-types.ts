@@ -14,10 +14,11 @@
  */
 
 /**
- * Default global identity authority. Primary development edge is
- * `a.rivr.social` per the workspace deployment map. Any env override wins.
+ * Default global identity authority. Production global is `app.rivr.social`
+ * per the 2026-05-04 lane policy in ecosystem.yaml; sovereigns federate
+ * credentials there. Any env override wins.
  */
-export const DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL = "https://a.rivr.social";
+export const DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL = "https://app.rivr.social";
 
 /** Authentication path taken by the action. */
 export type FederatedLoginMethod =
