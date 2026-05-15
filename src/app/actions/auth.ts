@@ -38,6 +38,7 @@ import { provisionMatrixUser } from "@/lib/matrix-admin";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { getClientIp } from "@/lib/client-ip";
 import { hashToken } from "@/lib/token-hash";
+import { DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL } from "./federated-login-types";
 
 const BCRYPT_SALT_ROUNDS = 12;
 // NIST SP 800-63B recommends a minimum password length of 8 characters
@@ -239,121 +240,61 @@ export async function signupAction(data: {
     };
   }
 
+  // Delegate identity creation to global. Per the credential-authority
+  // architecture, ALL canonical agents rows + identity_authority rows live
+  // on global; sovereigns do NOT create their own local user records at
+  // signup time. Federation projection from global fills in the local
+  // shadow agents row on subsequent ticks. This is what enables a user
+  // who loses their sovereign instance to recover via the Ed25519 seed
+  // phrase against global's recovery_public_key and still log in.
+  const globalUrl = (
+    process.env.GLOBAL_IDENTITY_AUTHORITY_URL?.trim() ||
+    DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL
+  ).replace(/\/+$/, "");
+  const signupUrl = `${globalUrl}/api/federation/signup`;
+
   try {
-    const [existingAgent] = await db
-      .select({ id: agents.id, metadata: agents.metadata, emailVerified: agents.emailVerified })
-      .from(agents)
-      .where(eq(agents.email, email.toLowerCase()))
-      .limit(1);
-
-    if (existingAgent) {
-      const existingMeta = existingAgent.metadata as Record<string, unknown> | null;
-
-      // Guest merge: upgrade a guest agent (noSignin) to a real account.
-      if (existingMeta?.noSignin === true) {
-        const passwordHash = await hash(password, BCRYPT_SALT_ROUNDS);
-
-        // Remove noSignin flag and preserve other metadata.
-        const { noSignin: _, ...remainingMeta } = existingMeta;
-
-        await db
-          .update(agents)
-          .set({
-            name: name.trim(),
-            passwordHash,
-            metadata: {
-              ...remainingMeta,
-              emailNotifications,
-              notificationSettings: {
-                ...(remainingMeta.notificationSettings as Record<string, unknown> | undefined),
-                emailNotifications,
-              },
-              termsAcceptedAt: new Date().toISOString(),
-              murmurationsPublishing,
-            },
-            updatedAt: new Date(),
-          })
-          .where(eq(agents.id, existingAgent.id));
-
-        // Ensure platform org membership for the upgraded guest.
-        await ensureRivrMembership(existingAgent.id);
-
-        // Fire-and-forget: embed the user for semantic discovery.
-        scheduleEmbedding(() => embedAgent(existingAgent.id, name.trim()));
-
-        // Provision Matrix user (non-blocking).
-        provisionMatrixUserForAgent(existingAgent.id, name.trim(), email.toLowerCase().trim());
-        if (murmurationsPublishing) {
-          void syncMurmurationsProfilesForActor(existingAgent.id).catch((err) => {
-            console.error("[murmurations] Failed to sync upgraded guest profiles:", err);
-          });
-        }
-
-        void sendVerificationEmail({
-          agentId: existingAgent.id,
-          name: name.trim(),
-          email: email.toLowerCase().trim(),
-        }).catch((err) => console.error("[email] Failed to send verification email:", err));
-
-        return { success: true };
-      }
-
-      if (!existingAgent.emailVerified) {
-        return { success: true };
-      }
-
-      // Keep duplicate-account handling non-enumerating by returning the same
-      // public flow used for new and existing-unverified accounts.
-      return { success: true };
-    }
-
-    const passwordHash = await hash(password, BCRYPT_SALT_ROUNDS);
-
-    const [newAgent] = await db
-      .insert(agents)
-      .values({
+    const response = await fetch(signupUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
         name: name.trim(),
         email: email.toLowerCase().trim(),
-        passwordHash,
-        type: "person",
-        metadata: {
-          emailNotifications,
-          notificationSettings: {
-            emailNotifications,
-          },
-          termsAcceptedAt: new Date().toISOString(),
-          murmurationsPublishing,
-        },
-      } as NewAgent)
-      .returning({ id: agents.id });
+        password,
+        emailNotifications,
+        acceptedTerms: true,
+        murmurationsPublishing,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
 
-    // Ensure every user is a member of the platform org (RIVR).
-    await ensureRivrMembership(newAgent.id);
-
-    // Fire-and-forget: embed the new user's name for semantic discovery.
-    scheduleEmbedding(() => embedAgent(newAgent.id, name.trim()));
-
-    // Provision Matrix user account (non-blocking — signup succeeds even if Matrix is unavailable).
-    provisionMatrixUserForAgent(newAgent.id, name.trim(), email.toLowerCase().trim());
-    if (murmurationsPublishing) {
-      void syncMurmurationsProfilesForActor(newAgent.id).catch((err) => {
-        console.error("[murmurations] Failed to sync signup profiles:", err);
-      });
+    if (response.status >= 500) {
+      console.error(
+        `[signup] federated signup got ${response.status} from ${signupUrl}`,
+      );
+      return {
+        success: false,
+        error: "Account service is temporarily unavailable. Please try again.",
+      };
     }
 
-    void sendVerificationEmail({
-      agentId: newAgent.id,
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-    }).catch((err) => console.error("[email] Failed to send verification email:", err));
-
-    // Do NOT auto-login — require email verification first.
-    return { success: true };
+    const result = (await response.json().catch(() => null)) as AuthResult | null;
+    if (!result) {
+      return {
+        success: false,
+        error: "Account service returned an unexpected response. Please try again.",
+      };
+    }
+    return result;
   } catch (error) {
-    if (error instanceof AuthError) {
-      return { success: false, error: "Authentication failed. Please try again." };
-    }
-    throw error;
+    console.error("[signup] federated signup threw:", error);
+    return {
+      success: false,
+      error: "Account service is temporarily unavailable. Please try again.",
+    };
   }
 }
 
