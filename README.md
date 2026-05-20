@@ -23,6 +23,19 @@ You need the host foundation first.
 
 You do not need the full Rivr monorepo to build or run this repo.
 
+## Current Source Shape
+
+Source verification on 2026-05-20 found:
+
+- 689 TS/TSX files under `src`
+- 48 page routes
+- 57 route handlers total: 46 under `/api` plus 11 non-API route handlers
+  (`.well-known`, text/assets, and symbolic media routes)
+- 126 server-action files
+- 203 component files
+- 140 `lib` files
+- 41 SQL migration files under `src/db/migrations`
+
 ## Group Instance Model
 
 The root route redirects to the configured primary group:
@@ -73,7 +86,7 @@ INSTANCE_TYPE=group
 INSTANCE_ID=<node-uuid>
 INSTANCE_SLUG=<slug>
 PRIMARY_AGENT_ID=<group-agent-uuid>
-REGISTRY_URL=https://b.rivr.social/api/federation/registry
+REGISTRY_URL=https://app.rivr.social/api/federation/registry
 NEXTAUTH_URL=https://group.<your-domain>
 NEXT_PUBLIC_BASE_URL=https://group.<your-domain>
 DATABASE_URL=postgres://...
@@ -112,6 +125,23 @@ Basic checks:
 curl https://group.<your-domain>/api/health
 curl -I https://group.<your-domain>/
 ```
+
+## Current Source Caveats
+
+This README describes the intended group-instance shape. Current source-review
+findings are tracked in the workspace root:
+
+- `../../docs/active/source-code-review-2026-05-18.md`
+- `../../docs/active/open-issues.md`
+
+As of 2026-05-19, known group issues include stale local navigation targets,
+search links to a missing local `/explore` route, missing local
+`/api/locations/suggest`, a Cesium map default tile URL that points at a
+missing local `/api/map-style-tiles/{z}/{x}/{y}` route unless a basemap URL is
+configured, event date adaptation drift, hardcoded job-detail identity, and
+federation mutation handlers that can return accepted stub states.
+Check those docs and the GitHub issues before treating every listed surface as
+fully wired.
 
 ## Docs
 

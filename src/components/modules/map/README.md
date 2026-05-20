@@ -1,114 +1,29 @@
 # Map Module
 
-Interactive map visualization using Mapbox GL for displaying geographic data points.
+Source-verified on 2026-05-20 against the colocated `MainMap.tsx`,
+`MainMap.test.tsx`, and `index.ts`.
 
-## Component: MainMap
+`MainMap` is a client-side CesiumJS globe component that imports the `cesium` package directly.
 
-A client-side React component that renders an interactive Mapbox map with customizable markers.
+The component accepts marker/model `items`, optional `[lng, lat]` center,
+optional zoom, marker/layer visibility controls, optional GeoJSON overlays,
+optional marker click handling, and optional camera orbit completion handling.
 
-### Features
+Runtime map configuration is read from `NEXT_PUBLIC_LOCAL_BASEMAP_URL`,
+`NEXT_PUBLIC_STREETS_TILES_URL`, `NEXT_PUBLIC_LOCAL_TERRAIN_URL`,
+`NEXT_PUBLIC_CESIUM_TERRAIN_URL`, `NEXT_PUBLIC_LOCAL_BUILDINGS_3DTILES_URL`,
+`NEXT_PUBLIC_CESIUM_BUILDINGS_URL`, `NEXT_PUBLIC_CESIUM_ION_TOKEN`, and
+`NEXT_PUBLIC_TERRAIN_EXAGGERATION`. The default map center is Boulder,
+Colorado: `[-105.2705, 40.015]`; default zoom is `10`.
 
-- **Interactive Map**: Pan, zoom, and navigate a Mapbox dark theme map
-- **Custom Markers**: Display location markers with glowing effect animations
-- **Boulder, CO Default**: Initially centered on Boulder, Colorado
-- **Responsive**: Full width and height layout
-- **Error Handling**: Graceful fallback when Mapbox token is missing
+Tests live in `MainMap.test.tsx` and mock Cesium viewer, entity, camera, and
+event-handler behavior.
 
-### Props
+## Current Wiring Gap
 
-```typescript
-interface GeoLocation {
-  lat: number;
-  lng: number;
-}
-
-interface MapItem {
-  id: string;
-  geo: GeoLocation;
-}
-
-interface MainMapProps {
-  items: MapItem[];
-}
-```
-
-### Usage
-
-```tsx
-import { MainMap } from "@/components/modules/map";
-
-const items = [
-  { id: "location-1", geo: { lat: 40.015, lng: -105.2705 } },
-  { id: "location-2", geo: { lat: 40.02, lng: -105.28 } },
-];
-
-export default function MapPage() {
-  return (
-    <div className="w-screen h-screen">
-      <MainMap items={items} />
-    </div>
-  );
-}
-```
-
-### Environment Variables
-
-Required environment variable:
-
-```bash
-NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_token_here
-```
-
-Get your Mapbox token from: https://account.mapbox.com/access-tokens/
-
-### Initial Viewport
-
-- **Longitude**: -105.2705
-- **Latitude**: 40.015
-- **Zoom**: 12
-- **Location**: Boulder, Colorado
-
-### Map Style
-
-Uses Mapbox dark theme: `mapbox://styles/mapbox/dark-v11`
-
-### Marker Styling
-
-Markers feature a dual-layer glowing effect:
-- **Outer glow**: Pulsing blue halo with blur effect
-- **Inner dot**: Blue dot with white border and shadow
-
-### Testing
-
-Run the test suite:
-
-```bash
-npm test MainMap.test.tsx
-```
-
-The test suite covers:
-- Initialization with correct viewport
-- Map style configuration
-- Environment token usage
-- Error handling for missing tokens
-- Marker rendering and positioning
-- Glowing effect styling
-- Edge cases (empty arrays, extreme coordinates)
-- TypeScript interface compliance
-
-### Dependencies
-
-- `react-map-gl`: ^7.x
-- `mapbox-gl`: ^2.x
-- React 18+
-- Next.js 13+ (for "use client" directive)
-
-### File Structure
-
-```
-src/components/modules/map/
-├── MainMap.tsx          # Main component
-├── MainMap.test.tsx     # Test suite
-├── index.ts             # Exports
-└── README.md            # Documentation
-```
+The component defaults to `/api/map-style-tiles/{z}/{x}/{y}` when no basemap URL
+is configured, and the group repo currently has map mirror/verify scripts.
+Unlike `repos/global`, this repo does not currently contain
+`src/app/api/map-style-tiles/[z]/[x]/[y]/route.ts`. A group deployment must
+configure a valid basemap URL or add/proxy the tile route before relying on that
+default path.
