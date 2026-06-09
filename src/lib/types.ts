@@ -363,6 +363,19 @@ export type JoinQuestion = {
 
 export type GroupDiscoveryMode = "public" | "hidden"
 
+/** Visibility level controlling who can see a group tab. */
+export type TabVisibilityLevel = "public" | "members" | "admin" | "hidden"
+
+/** Canonical tab keys for group pages. */
+export const GROUP_TAB_KEYS = [
+  "about", "feed", "events", "groups", "members", "documents",
+  "jobs", "marketplace", "governance", "badges", "stake", "press", "treasury",
+] as const
+export type GroupTabKey = (typeof GROUP_TAB_KEYS)[number]
+
+/** Per-tab visibility settings stored in group metadata. */
+export type TabVisibilitySettings = Partial<Record<GroupTabKey, TabVisibilityLevel>>
+
 /** Group join workflow configuration model. */
 export type GroupJoinSettings = {
   joinType: JoinType

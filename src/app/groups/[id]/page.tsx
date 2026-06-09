@@ -309,6 +309,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         publishActivity={publishActivity}
         resourceCount={detail.resources.length}
         passwordRequired={Boolean(group.joinSettings?.passwordRequired)}
+        tabVisibility={(groupMeta.tabVisibility ?? {}) as Record<string, string>}
       />
     </AgentPageShell>
   )

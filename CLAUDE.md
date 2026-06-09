@@ -61,22 +61,42 @@ src/
 These are copied components that reference routes this app does not have.
 **Do not add these routes — fix the components to remove or redirect the links.**
 
-| Component | Broken Link | Issue |
-| --- | --- | --- |
-| `src/components/bottom-nav.tsx` | `/explore`, `/map` | [#2](https://github.com/rivr-social/rivr-group/issues/2) |
-| `src/components/search-bar.tsx`, `search-header.tsx` | `/explore?q=...` | [#3](https://github.com/rivr-social/rivr-group/issues/3) |
-| `src/components/CommandBar.tsx` | `/members`, `/docs`, `/governance`, `/marketplace` | [#4](https://github.com/rivr-social/rivr-group/issues/4) |
-| `src/components/user-menu.tsx` | `/groups` (index) | [#5](https://github.com/rivr-social/rivr-group/issues/5) |
-| `src/components/location-autocomplete-input.tsx` | `/api/locations/suggest` (global only) | [#7](https://github.com/rivr-social/rivr-group/issues/7) |
-| `src/components/map.tsx` | `/api/map-style-tiles/` (missing route) | [#12](https://github.com/rivr-social/rivr-group/issues/12) |
+| Component | Broken Link | Issue | Status |
+| --- | --- | --- | --- |
+| `src/components/map.tsx` (`modules/map/MainMap.tsx`) | `/api/map-style-tiles/` (missing route) | [#12](https://github.com/rivr-social/rivr-group/issues/12) | open (low: `MainMap` is not rendered by any route; has Natural Earth fallback + `NEXT_PUBLIC_*` tile overrides) |
+
+Resolved 2026-05-31 (sovereign route drift sweep — fixes adapted to this app's
+own structure, NOT copied from the person app):
+
+- **#2** `bottom-nav.tsx` — `/explore` and `/map` are global-discovery surfaces
+  that don't exist here; both now link out to the federated global hub via
+  `getGlobalUrl()` (matching the existing CommandBar map behavior).
+- **#3** `search-bar.tsx` / `search-header.tsx` — the "search everything" /
+  "see all results" action routed to a nonexistent local `/explore`; now routes
+  to the global hub's `/explore?q=…` (this app has no local search-results
+  surface; global aggregates federated content).
+- **#4** `CommandBar.tsx` — `/members`, `/docs`, `/governance` now deep-link
+  into the primary group's tabs via `/?tab=members|documents|governance` (the
+  root page forwards a valid `?tab=` to `/groups/{PRIMARY_AGENT_ID}`).
+  `/marketplace` was never drift — that route exists locally. The external
+  global `/map` command is intentional and unchanged.
+- **#5** `user-menu.tsx` — "My Groups" → `/groups` (no index) now points to `/`
+  (the group home) and is relabeled "My Group" for this single-group instance.
+- **#7** `location-autocomplete-input.tsx` — added a local, sovereign-safe
+  `src/app/api/locations/suggest/route.ts` sourcing suggestions from local
+  place/locale graph nodes (no global call); the component already degraded
+  gracefully on a missing endpoint. Route was already in the `route-access.ts`
+  public allowlist.
 
 ### Other Known Issues
 
 - [#6](https://github.com/rivr-social/rivr-group/issues/6): Event dates render
   as creation time — `graph-adapters.ts` reads `metadata.startDate` but create
   flow writes `metadata.date`
-- [#8](https://github.com/rivr-social/rivr-group/issues/8): Jobs detail uses
-  hardcoded `currentUserId = "user1"`
+- [#8](https://github.com/rivr-social/rivr-group/issues/8): RESOLVED 2026-06-01
+  — jobs detail page now resolves the real `auth()` session user and threads it
+  (or `null` for anonymous) through `JobDetailClient` and its tabs; no more
+  hardcoded `currentUserId = "user1"`.
 - [#9](https://github.com/rivr-social/rivr-group/issues/9): Federation mutation
   handlers return `accepted: true` for mutations not actually forwarded
 - [#10](https://github.com/rivr-social/rivr-group/issues/10): Sovereign key

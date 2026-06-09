@@ -14,7 +14,7 @@ import { agents, ledger, type MembershipTier } from "@/db/schema";
 import { eq, and, or, isNull, sql } from "drizzle-orm";
 import { hash } from "@node-rs/bcrypt";
 import { revalidatePath } from "next/cache";
-import { JoinType, type GroupJoinSettings } from "@/lib/types";
+import { JoinType, GROUP_TAB_KEYS, type GroupJoinSettings, type TabVisibilitySettings, type TabVisibilityLevel } from "@/lib/types";
 import {
   normalizeGroupMembershipPlans,
   readGroupMembershipPlans,
@@ -72,6 +72,7 @@ type GroupSettingsResult = {
     writeMembershipTier?: MembershipTier | null;
     writeMembershipPlanId?: string | null;
     marketplaceFeeBps?: number;
+    tabVisibility: TabVisibilitySettings;
     modelUrl?: string;
     hasPassword: boolean;
   };
@@ -347,6 +348,7 @@ export async function fetchGroupAdminSettings(
           ? metadata.writeMembershipPlanId.trim()
           : null,
       marketplaceFeeBps: normalizeMarketplaceFeeBps(metadata.marketplaceFeeBps) ?? undefined,
+      tabVisibility: parseTabVisibility(metadata.tabVisibility),
       modelUrl: typeof metadata.modelUrl === "string" ? metadata.modelUrl : undefined,
       hasPassword: Boolean(group.groupPasswordHash),
     },
@@ -796,9 +798,119 @@ export async function updateGroupMembershipPlans(
   return { success: false, error: facadeResult.error ?? "Failed to update membership plans." };
 }
 
+/**
+ * Update per-tab visibility settings for a group's public page.
+ *
+ * Auth requirement: caller must be authenticated and authorized as a group admin.
+ * Each tab key is validated against the canonical set; unknown keys are dropped.
+ * Visibility values are restricted to the allow-list to prevent injection.
+ *
+ * @param {string} groupId - UUID of the target group.
+ * @param {TabVisibilitySettings} tabVisibility - Map of tab key to visibility level.
+ * @returns {Promise<GroupAdminResult>} Success flag or user-facing error message.
+ */
+export async function updateGroupTabVisibility(
+  groupId: string,
+  tabVisibility: TabVisibilitySettings,
+): Promise<GroupAdminResult> {
+  const actorId = await requireActorId();
+  if (!actorId) {
+    return { success: false, error: "Authentication required." };
+  }
+  if (!groupId || !UUID_RE.test(groupId)) {
+    return { success: false, error: "Invalid group identifier." };
+  }
+
+  const facadeResult = await updateFacade.execute(
+    {
+      type: "updateGroupTabVisibility",
+      actorId,
+      targetAgentId: groupId,
+      payload: { tabVisibility },
+    },
+    async () => {
+      if (!(await isGroupAdmin(actorId, groupId))) {
+        return { success: false, error: "Only group admins can edit tab visibility settings." };
+      }
+
+      const normalized = normalizeTabVisibility(tabVisibility);
+
+      const [current] = await db
+        .select({ metadata: agents.metadata })
+        .from(agents)
+        .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
+        .limit(1);
+
+      if (!current) {
+        return { success: false, error: "Group not found." };
+      }
+
+      const existingMetadata =
+        current.metadata && typeof current.metadata === "object"
+          ? (current.metadata as Record<string, unknown>)
+          : {};
+
+      const nextMetadata = {
+        ...existingMetadata,
+        tabVisibility: normalized,
+      };
+
+      await db
+        .update(agents)
+        .set({ metadata: nextMetadata, updatedAt: new Date() })
+        .where(eq(agents.id, groupId));
+
+      revalidatePath(`/groups/${groupId}`);
+      revalidatePath(`/groups/${groupId}/settings`);
+
+      return { success: true } as GroupAdminResult;
+    },
+  );
+
+  if (facadeResult.success && facadeResult.data) {
+    const data = facadeResult.data as GroupAdminResult;
+    if (data.success) {
+      await emitDomainEvent({
+        eventType: EVENT_TYPES.GROUP_SETTINGS_UPDATED,
+        entityType: "agent",
+        entityId: groupId,
+        actorId,
+        payload: { setting: "tabVisibility" },
+      }).catch(() => {});
+    }
+    return data;
+  }
+
+  return { success: false, error: facadeResult.error ?? "Failed to update tab visibility settings." };
+}
+
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+const VALID_TAB_VISIBILITY_LEVELS: TabVisibilityLevel[] = ["public", "members", "admin", "hidden"];
+const VALID_TAB_KEYS = new Set<string>(GROUP_TAB_KEYS);
+
+/**
+ * Normalize raw tab visibility input: drop unknown keys and invalid levels.
+ */
+function normalizeTabVisibility(raw: unknown): TabVisibilitySettings {
+  if (!raw || typeof raw !== "object") return {};
+  const result: TabVisibilitySettings = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!VALID_TAB_KEYS.has(key)) continue;
+    if (typeof value !== "string" || !VALID_TAB_VISIBILITY_LEVELS.includes(value as TabVisibilityLevel)) continue;
+    result[key as keyof TabVisibilitySettings] = value as TabVisibilityLevel;
+  }
+  return result;
+}
+
+/**
+ * Parse stored tab visibility from metadata, returning safe defaults for missing/malformed data.
+ */
+function parseTabVisibility(raw: unknown): TabVisibilitySettings {
+  return normalizeTabVisibility(raw);
+}
 
 export async function isGroupAdmin(userId: string, groupId: string): Promise<boolean> {
   const now = new Date();

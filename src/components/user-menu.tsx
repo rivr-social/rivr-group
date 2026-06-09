@@ -142,12 +142,12 @@ export function UserMenu({ open, onClose }: UserMenuProps) {
               <span>Profile Settings</span>
             </Link>
             <Link
-              href="/groups"
-              onClick={() => handleNavigation("/groups")}
+              href="/"
+              onClick={() => handleNavigation("/")}
               className="flex items-center gap-3 p-2 hover:bg-muted rounded-md transition-colors"
             >
               <Users className="h-5 w-5" />
-              <span>My Groups</span>
+              <span>My Group</span>
             </Link>
             <Link
               href="/messages"

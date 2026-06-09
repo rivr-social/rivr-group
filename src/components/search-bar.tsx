@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { useRouter } from "next/navigation"
 import { useHomeFeed, useLocalesAndBasins } from "@/lib/hooks/use-graph-data"
+import { getGlobalUrl } from "@/lib/federation/global-url"
 
 interface SearchBarProps {
   onChapterSelect?: (chapterId: string) => void
@@ -169,7 +170,13 @@ export function SearchBar({
 
   const handleSearch = () => {
     if (query.trim()) {
-      router.push(`/explore?q=${encodeURIComponent(query)}&chapter=${selectedChapter}`)
+      // This sovereign group instance has no local /explore search-results
+      // surface; cross-instance search/discovery lives on the federated global
+      // hub. Route the "search everything" action there so it resolves and
+      // actually returns aggregated results instead of 404-ing locally.
+      window.location.href = getGlobalUrl(
+        `/explore?q=${encodeURIComponent(query)}&chapter=${selectedChapter}`,
+      )
       setIsOpen(false)
     }
   }

@@ -18,7 +18,7 @@
  */
 import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Plus, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,7 +27,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ResponsiveTabsList } from "@/components/responsive-tabs-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { JoinType, type GroupJoinSettings } from "@/lib/types";
+import { JoinType, type GroupJoinSettings, type TabVisibilitySettings } from "@/lib/types";
 import { GroupAdminPassword } from "@/components/group-admin-password";
 import { GroupBroadcastCard } from "@/components/group-broadcast-card";
 import { GroupJoinRequestsCard } from "@/components/group-join-requests-card";
@@ -36,7 +36,9 @@ import {
   fetchGroupAdminSettings,
   updateGroupJoinSettings,
   updateGroupMembershipPlans,
+  updateGroupTabVisibility,
 } from "@/app/actions/group-admin";
+import { TabVisibilityEditor } from "@/components/tab-visibility-editor";
 import { updateGroupResource } from "@/app/actions/create-resources";
 import { type GroupMembershipPlan } from "@/lib/group-memberships";
 import { useToast } from "@/components/ui/use-toast";
@@ -56,6 +58,7 @@ const TAB_VALUES = {
   MEMBERSHIPS: "memberships",
   JOIN: "join",
   REQUESTS: "requests",
+  TAB_VISIBILITY: "tab-visibility",
   CHAT: "chat",
   ANNOUNCEMENTS: "announcements",
   CONNECTIONS: "connections",
@@ -137,6 +140,8 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
   });
 
   const [membershipPlans, setMembershipPlans] = useState<EditableMembershipPlan[]>([]);
+  const [tabVisibility, setTabVisibility] = useState<TabVisibilitySettings>({});
+  const [savingTabVisibility, setSavingTabVisibility] = useState(false);
   const [connection, setConnection] = useState<GroupGoogleConnectionSummary | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("both");
   const [hasMatrixRoom, setHasMatrixRoom] = useState(false);
@@ -189,6 +194,7 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
             ]
       );
 
+      setTabVisibility(result.group.tabVisibility ?? {});
       setModelUrl(result.group.modelUrl ?? null);
       setHasGroupPassword(result.group.hasPassword);
 
@@ -240,6 +246,22 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
     }
 
     toast({ title: "Join settings saved" });
+  };
+
+  /**
+   * Persists tab visibility settings through the group-admin server action.
+   */
+  const onSaveTabVisibility = async () => {
+    setSavingTabVisibility(true);
+    const result = await updateGroupTabVisibility(groupId, tabVisibility);
+    setSavingTabVisibility(false);
+
+    if (!result.success) {
+      toast({ title: "Could not save tab visibility", description: result.error, variant: "destructive" });
+      return;
+    }
+
+    toast({ title: "Tab visibility saved" });
   };
 
   /**
@@ -493,6 +515,10 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
           <TabsTrigger value={TAB_VALUES.REQUESTS} className="inline-flex items-center gap-2">
             <UserPlus className="h-4 w-4" />
             Requests
+          </TabsTrigger>
+          <TabsTrigger value={TAB_VALUES.TAB_VISIBILITY} className="inline-flex items-center gap-2">
+            <Eye className="h-4 w-4" />
+            Tab Visibility
           </TabsTrigger>
           <TabsTrigger value={TAB_VALUES.CHAT} className="inline-flex items-center gap-2">
             <MessageSquare className="h-4 w-4" />
@@ -781,6 +807,30 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
 
         <TabsContent value="requests" className="space-y-4">
           <GroupJoinRequestsCard groupId={groupId} />
+        </TabsContent>
+
+        {/* Tab Visibility controls which tabs appear for public, members, and admins. */}
+        <TabsContent value="tab-visibility" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Tab Visibility</CardTitle>
+              <CardDescription>
+                Control which tabs are visible on the group page. Set each tab to Public
+                (everyone), Members (group members only), Admin (admins only), or Hidden
+                (completely removed).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <TabVisibilityEditor
+                value={tabVisibility}
+                onChange={setTabVisibility}
+                groupType={groupType}
+              />
+              <Button type="button" onClick={onSaveTabVisibility} disabled={savingTabVisibility}>
+                {savingTabVisibility ? "Saving..." : "Save Tab Visibility"}
+              </Button>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Chat tab controls the group's messaging mode (ledger/matrix/both). */}

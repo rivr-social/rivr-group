@@ -19,6 +19,7 @@ import { useHomeFeed, usePosts, useLocalesAndBasins } from "@/lib/hooks/use-grap
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { getInitials } from "@/lib/utils"
+import { getGlobalUrl } from "@/lib/federation/global-url"
 
 type SearchResult = {
   id: string
@@ -367,7 +368,11 @@ export function SearchHeader({ selectedChapter, onChapterChange }: SearchHeaderP
                     <button
                       className="w-full text-center text-sm text-primary hover:underline"
                       onClick={() => {
-                        router.push(`/explore?q=${encodeURIComponent(searchQuery)}&chapter=${selectedChapter}`)
+                        // No local /explore search-results surface on this sovereign
+                        // group instance — aggregated search lives on the global hub.
+                        window.location.href = getGlobalUrl(
+                          `/explore?q=${encodeURIComponent(searchQuery)}&chapter=${selectedChapter}`,
+                        )
                         setIsSearchOpen(false)
                       }}
                     >

@@ -35,7 +35,7 @@ import { GroupRelationshipManager } from "@/components/group-relationship-manage
 import { FlowPassModal } from "@/components/flow-pass-modal"
 import { GroupAccessDialog } from "@/components/group-access-dialog"
 import type { Document } from "@/types/domain"
-import type { User, MemberStake, Post } from "@/lib/types"
+import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel, GroupTabKey } from "@/lib/types"
 import { ProposalStatus } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
 
@@ -97,6 +97,7 @@ export interface GroupTabsClientProps {
   publishActivity: ActivityEntry[]
   resourceCount: number
   passwordRequired?: boolean
+  tabVisibility?: TabVisibilitySettings
 }
 
 export function GroupTabsClient({
@@ -132,6 +133,7 @@ export function GroupTabsClient({
   publishActivity,
   resourceCount,
   passwordRequired,
+  tabVisibility,
 }: GroupTabsClientProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -142,14 +144,19 @@ export function GroupTabsClient({
     () => !!currentUserId && members.some((m) => m.id === currentUserId),
     [currentUserId, members],
   )
-  const visibleTabs = useMemo(
-    () => (
-      isBasicGroup
-        ? ["about", "feed", "events", "groups", "members", "documents"]
-        : ["about", "feed", "events", "groups", "members", "documents", "jobs", "marketplace", "governance", "badges", "stake", "press", "treasury"]
-    ),
-    [isBasicGroup]
-  )
+  const visibleTabs = useMemo(() => {
+    const allTabs: GroupTabKey[] = isBasicGroup
+      ? ["about", "feed", "events", "groups", "members", "documents"]
+      : ["about", "feed", "events", "groups", "members", "documents", "jobs", "marketplace", "governance", "badges", "stake", "press", "treasury"]
+
+    return allTabs.filter((tab) => {
+      const level: TabVisibilityLevel = tabVisibility?.[tab] ?? "public"
+      if (level === "hidden") return false
+      if (level === "admin") return isGroupAdmin
+      if (level === "members") return isGroupMember || isGroupAdmin
+      return true
+    })
+  }, [isBasicGroup, tabVisibility, isGroupAdmin, isGroupMember])
   const requestedTab = searchParams.get("tab")
 
   const [offeringModalOpen, setOfferingModalOpen] = useState(false)
@@ -158,11 +165,11 @@ export function GroupTabsClient({
     () => !!passwordRequired && !isGroupMember
   )
   const [activeTab, setActiveTab] = useState(() => (
-    requestedTab && visibleTabs.includes(requestedTab) ? requestedTab : "about"
+    requestedTab && visibleTabs.includes(requestedTab as GroupTabKey) ? requestedTab : "about"
   ))
 
   useEffect(() => {
-    if (!requestedTab || !visibleTabs.includes(requestedTab)) {
+    if (!requestedTab || !visibleTabs.includes(requestedTab as GroupTabKey)) {
       setActiveTab("about")
       return
     }
@@ -383,23 +390,19 @@ export function GroupTabsClient({
     <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
       <div className="overflow-x-auto -mx-4 px-4 scrollbar-hide">
         <TabsList className="inline-flex w-max min-w-full gap-1">
-          <TabsTrigger value="about" className="shrink-0">About</TabsTrigger>
-          <TabsTrigger value="feed" className="shrink-0">Feed</TabsTrigger>
-          <TabsTrigger value="events" className="shrink-0">Events</TabsTrigger>
-          <TabsTrigger value="groups" className="shrink-0">Groups</TabsTrigger>
-          <TabsTrigger value="members" className="shrink-0">Members</TabsTrigger>
-          <TabsTrigger value="documents" className="shrink-0">Docs</TabsTrigger>
-          {!isBasicGroup && (
-            <>
-              <TabsTrigger value="jobs" className="shrink-0">Jobs</TabsTrigger>
-              <TabsTrigger value="marketplace" className="shrink-0">Mart</TabsTrigger>
-              <TabsTrigger value="governance" className="shrink-0">Governance</TabsTrigger>
-              <TabsTrigger value="badges" className="shrink-0">Badges</TabsTrigger>
-              <TabsTrigger value="stake" className="shrink-0">Stake</TabsTrigger>
-              <TabsTrigger value="press" className="shrink-0">Press</TabsTrigger>
-              <TabsTrigger value="treasury" className="shrink-0">Treasury</TabsTrigger>
-            </>
-          )}
+          {visibleTabs.includes("about") && <TabsTrigger value="about" className="shrink-0">About</TabsTrigger>}
+          {visibleTabs.includes("feed") && <TabsTrigger value="feed" className="shrink-0">Feed</TabsTrigger>}
+          {visibleTabs.includes("events") && <TabsTrigger value="events" className="shrink-0">Events</TabsTrigger>}
+          {visibleTabs.includes("groups") && <TabsTrigger value="groups" className="shrink-0">Groups</TabsTrigger>}
+          {visibleTabs.includes("members") && <TabsTrigger value="members" className="shrink-0">Members</TabsTrigger>}
+          {visibleTabs.includes("documents") && <TabsTrigger value="documents" className="shrink-0">Docs</TabsTrigger>}
+          {visibleTabs.includes("jobs") && <TabsTrigger value="jobs" className="shrink-0">Jobs</TabsTrigger>}
+          {visibleTabs.includes("marketplace") && <TabsTrigger value="marketplace" className="shrink-0">Mart</TabsTrigger>}
+          {visibleTabs.includes("governance") && <TabsTrigger value="governance" className="shrink-0">Governance</TabsTrigger>}
+          {visibleTabs.includes("badges") && <TabsTrigger value="badges" className="shrink-0">Badges</TabsTrigger>}
+          {visibleTabs.includes("stake") && <TabsTrigger value="stake" className="shrink-0">Stake</TabsTrigger>}
+          {visibleTabs.includes("press") && <TabsTrigger value="press" className="shrink-0">Press</TabsTrigger>}
+          {visibleTabs.includes("treasury") && <TabsTrigger value="treasury" className="shrink-0">Treasury</TabsTrigger>}
         </TabsList>
       </div>
 

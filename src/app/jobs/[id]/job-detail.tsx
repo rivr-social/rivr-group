@@ -18,11 +18,12 @@ interface JobDetailClientProps {
   jobShifts: JobShift[]
   projects: ProjectRecord[]
   userBadgeIds: string[]
+  currentUserId: string | null
 }
 
-export function JobDetailClient({ jobId, jobShifts, projects, userBadgeIds }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, jobShifts, projects, userBadgeIds, currentUserId }: JobDetailClientProps) {
   const router = useRouter()
-  const currentUserId = "user1" // In a real app, this would come from auth
+  const effectiveUserId = currentUserId ?? ""
 
   // Derive initial job and parentProject from jobId (pure lookup)
   const initialJob = useMemo(() => jobShifts.find((j) => j.id === jobId) || null, [jobId, jobShifts])
@@ -58,7 +59,7 @@ export function JobDetailClient({ jobId, jobShifts, projects, userBadgeIds }: Jo
     )
   }
 
-  const _isAssigned = job.assignees.includes(currentUserId)
+  const _isAssigned = job.assignees.includes(effectiveUserId)
   const completedTasks = job.tasks.filter((task) => task.completed).length
   const totalTasks = job.tasks.length
   const progress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0
@@ -190,15 +191,15 @@ export function JobDetailClient({ jobId, jobShifts, projects, userBadgeIds }: Jo
         </TabsList>
 
         <TabsContent value="about" className="mt-6">
-          <JobAboutTab job={job} currentUserId={currentUserId} />
+          <JobAboutTab job={job} currentUserId={effectiveUserId} />
         </TabsContent>
 
         <TabsContent value="tasks" className="mt-6">
-          <JobTasksTab job={job} currentUserId={currentUserId} userBadgeIds={userBadgeIds} onTaskUpdate={(updatedJob) => setJobOverride(updatedJob)} />
+          <JobTasksTab job={job} currentUserId={effectiveUserId} userBadgeIds={userBadgeIds} onTaskUpdate={(updatedJob) => setJobOverride(updatedJob)} />
         </TabsContent>
 
         <TabsContent value="timer" className="mt-6">
-          <JobTimerTab job={job} currentUserId={currentUserId} />
+          <JobTimerTab job={job} currentUserId={effectiveUserId} />
         </TabsContent>
       </Tabs>
     </div>

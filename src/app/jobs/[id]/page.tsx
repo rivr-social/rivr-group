@@ -9,23 +9,26 @@
  * Data requirements:
  * - Fetches shifts, projects, and user badge IDs from the database.
  *
- * Auth: Uses a hardcoded `currentUserId` mock; no server-side auth gate.
+ * Auth: Public route. Badge permissions are derived from the server-side
+ *   `auth()` session when present; anonymous visitors resolve to no badges.
  * Metadata: No `metadata` export; metadata is inherited from the layout.
  *
  * @module jobs/[id]/page
  */
+import { auth } from "@/auth"
 import { getShifts, getProjects, getUserBadgeIds } from "@/lib/queries/resources"
 import { JobDetailClient } from "./job-detail"
 
 export default async function JobPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params
   const jobId = params.id as string
-  const currentUserId = "user1" // In a real app, this would come from auth
+  const session = await auth()
+  const currentUserId = session?.user?.id ?? null
 
   const [jobShifts, projects, userBadgeIds] = await Promise.all([
     getShifts(),
     getProjects(),
-    getUserBadgeIds(currentUserId),
+    currentUserId ? getUserBadgeIds(currentUserId) : Promise.resolve<string[]>([]),
   ])
 
   return (
@@ -34,6 +37,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       jobShifts={jobShifts}
       projects={projects}
       userBadgeIds={userBadgeIds}
+      currentUserId={currentUserId}
     />
   )
 }
