@@ -21,6 +21,7 @@ import {
 } from "@/lib/federation-crypto";
 import { generatePeerSecret } from "@/lib/federation-auth";
 import { logFederationAudit } from "@/lib/federation-audit";
+import { getInstanceConfig } from "@/lib/federation/instance-config";
 import { isGroupMember } from "@/app/actions/group-admin";
 
 /**
@@ -213,12 +214,25 @@ function getBaseUrl(): string {
  */
 export async function ensureLocalNode(ownerAgentId?: string) {
   const slug = getNodeSlug();
+  const configuredInstanceId = getInstanceConfig().instanceId;
 
   const existing = await db.query.nodes.findFirst({
     where: eq(nodes.slug, slug),
   });
 
   if (existing) {
+    if (existing.id !== configuredInstanceId) {
+      // The signers (SSO, authority events, recovery) and the write-router
+      // all look the local node up by config.instanceId. A slug-matched row
+      // with a different id means this instance was bootstrapped before
+      // INSTANCE_ID was configured; signing and local-write resolution will
+      // fail until the operator reconciles the nodes row id with INSTANCE_ID.
+      console.error(
+        `[federation] Local node slug "${slug}" exists with id ${existing.id}, ` +
+          `but INSTANCE_ID is ${configuredInstanceId}. Migrate the nodes row id ` +
+          `(and its FK references) to match INSTANCE_ID, or fix the env.`,
+      );
+    }
     // Backfill keys for legacy nodes so all exported events can be signed.
     if (!existing.privateKey || !existing.publicKey) {
       const keyPair = generateNodeKeyPair();
@@ -239,6 +253,9 @@ export async function ensureLocalNode(ownerAgentId?: string) {
   const keyPair = generateNodeKeyPair();
 
   const values: NewNodeRecord = {
+    // Anchor the bootstrap row to the configured instance id so id-based
+    // lookups (signers, resolution, write-router) agree with slug-based ones.
+    id: configuredInstanceId,
     slug,
     displayName: getNodeDisplayName(),
     role: getNodeRole(),
