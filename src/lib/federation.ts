@@ -1162,7 +1162,7 @@ export async function importFederationEvents(params: {
       // Delete events identify the target via `payload.id` (preferred) or
       // fall back to the envelope `entityId`. The mirror row is located
       // through the entity map so namespace-mapped local UUIDs resolve.
-      const externalId = typeof payload.id === "string" ? payload.id : null;
+      const externalId = typeof payload.id === "string" ? payload.id : eventEntityId;
       if (externalId) {
         const mapping = await db.query.federationEntityMap.findFirst({
           where: and(
