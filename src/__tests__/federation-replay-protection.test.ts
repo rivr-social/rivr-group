@@ -46,6 +46,12 @@ vi.mock("@/lib/federation-audit", () => ({
   logDeadLetter: vi.fn(),
 }));
 
+// Mock group-admin to avoid @/auth -> next-auth -> next/server import chain.
+// The membership gate only runs when PRIMARY_AGENT_ID is set (unset in tests).
+vi.mock("@/app/actions/group-admin", () => ({
+  isGroupMember: vi.fn(async () => true),
+}));
+
 vi.mock("@/db", () => ({
   db: {
     query: {
@@ -310,6 +316,44 @@ describe("importFederationEvents - replay protection", () => {
     expect(result.imported).toBe(0);
     expect(result.rejected).toBe(1);
     expect(result.rejections[0].reason).toBe("expired");
+  });
+
+  it("accepts events outside the replay window when allowHistorical is set (pull-sync catch-up)", async () => {
+    setupMocks();
+
+    const { importFederationEvents } = await loadFederationModule();
+
+    // Create an event from 10 days ago (beyond the 7-day window)
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+    const result = await importFederationEvents({
+      localNodeId: LOCAL_NODE_ID,
+      fromPeerSlug: PEER_SLUG,
+      events: [makeAgentEvent({ createdAt: tenDaysAgo, nonce: "historical-nonce" })],
+      allowHistorical: true,
+    });
+
+    expect(result.imported).toBe(1);
+    expect(result.rejected).toBe(0);
+  });
+
+  it("allowHistorical still rejects duplicate nonces", async () => {
+    setupMocks({ nonceExists: true });
+
+    const { importFederationEvents } = await loadFederationModule();
+
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+    const result = await importFederationEvents({
+      localNodeId: LOCAL_NODE_ID,
+      fromPeerSlug: PEER_SLUG,
+      events: [makeAgentEvent({ createdAt: tenDaysAgo, nonce: "historical-dup-nonce" })],
+      allowHistorical: true,
+    });
+
+    expect(result.imported).toBe(0);
+    expect(result.rejected).toBe(1);
+    expect(result.rejections[0].reason).toBe("duplicate nonce");
   });
 
   it("accepts events within the replay time window", async () => {

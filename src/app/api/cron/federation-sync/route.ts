@@ -200,14 +200,14 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        // `importFederationEvents` in rivr-group accepts only the
-        // signature-relevant per-event fields; entity/actor identity is
-        // recovered from the payload during materialization.
+        // Persist via the same path the import API uses so signature +
+        // replay + version checks all run identically.
         const importResult = await importFederationEvents({
           localNodeId: localNode.id,
           fromPeerSlug: peer.peerSlug,
           events: fetched.map((e) => ({
             id: e.id,
+            entityId: e.entityId ?? null,
             entityType: e.entityType,
             eventType: e.eventType,
             visibility: e.visibility,
@@ -217,6 +217,10 @@ export async function GET(request: NextRequest) {
             eventVersion: e.eventVersion ?? undefined,
             createdAt: e.createdAt,
           })),
+          // Locally initiated cursor pull: accept events older than the
+          // replay window so this instance can catch up after extended
+          // downtime (signature + nonce dedup still apply).
+          allowHistorical: true,
         });
 
         const newCursor = data.cursor ?? cursor;

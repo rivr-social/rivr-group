@@ -38,6 +38,9 @@ const mockInsert = vi.fn();
 const mockValues = vi.fn();
 const mockOnConflictDoNothing = vi.fn();
 const mockReturning = vi.fn().mockReturnValue([{ id: "mock-dead-letter-id" }]);
+const mockUpdate = vi.fn();
+const mockUpdateSet = vi.fn();
+const mockUpdateWhere = vi.fn();
 
 // Mock federation-auth to avoid @/auth -> next/server import chain
 vi.mock("@/lib/federation-auth", () => ({
@@ -51,6 +54,12 @@ vi.mock("@/lib/federation-auth", () => ({
 vi.mock("@/lib/federation-audit", () => ({
   logFederationAudit: vi.fn(),
   logDeadLetter: vi.fn(),
+}));
+
+// Mock group-admin to avoid @/auth -> next-auth -> next/server import chain.
+// The membership gate only runs when PRIMARY_AGENT_ID is set (unset in tests).
+vi.mock("@/app/actions/group-admin", () => ({
+  isGroupMember: vi.fn(async () => true),
 }));
 
 vi.mock("@/db", () => ({
@@ -71,7 +80,24 @@ vi.mock("@/db", () => ({
               mockOnConflictDoNothing(...cArgs);
               return { returning: mockReturning };
             },
+            onConflictDoUpdate: vi.fn(() => ({
+              returning: mockReturning,
+            })),
             returning: mockReturning,
+          };
+        },
+      };
+    },
+    update: (...args: unknown[]) => {
+      mockUpdate(...args);
+      return {
+        set: (...sArgs: unknown[]) => {
+          mockUpdateSet(...sArgs);
+          return {
+            where: (...wArgs: unknown[]) => {
+              mockUpdateWhere(...wArgs);
+              return Promise.resolve();
+            },
           };
         },
       };
@@ -191,7 +217,10 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("importFederationEvents - entity namespace mapping", () => {
-  function setupStandardMocks(entityMapResults: Record<string, unknown | null> = {}) {
+  function setupStandardMocks(
+    entityMapResults: Record<string, unknown | null> = {},
+    opts: { localAgent?: unknown } = {},
+  ) {
     mockFindFirst.mockImplementation((method: string) => {
       if (method === "nodes.findFirst") return makePeerNode();
       if (method === "nodePeers.findFirst") return makeTrustedLink();
@@ -204,7 +233,9 @@ describe("importFederationEvents - entity namespace mapping", () => {
       }
 
       if (method === "agents.findFirst") {
-        return { id: "some-owner", name: "Owner Agent", type: "person" };
+        // Default: no pre-existing local agent — the import path projects
+        // placeholder owners and inserts mapped agents itself.
+        return opts.localAgent ?? null;
       }
 
       return null;
@@ -393,5 +424,93 @@ describe("importFederationEvents - entity namespace mapping", () => {
     expect(metadata.sourceNodeId).toBe(PEER_NODE_ID);
     expect(metadata.sourceNodeSlug).toBe(PEER_SLUG);
     expect(metadata.externalEntityId).toBe(REMOTE_RESOURCE_ID);
+  });
+
+  it("projects a placeholder owner agent when a resource arrives before its owner", async () => {
+    setupStandardMocks();
+
+    const { importFederationEvents } = await loadFederationModule();
+
+    await importFederationEvents({
+      localNodeId: LOCAL_NODE_ID,
+      fromPeerSlug: PEER_SLUG,
+      events: [makeResourceEvent()],
+    });
+
+    // The unknown owner should be projected as a private placeholder agent
+    // instead of the resource being silently dropped.
+    const placeholderInserts = mockValues.mock.calls.filter(
+      (call) => call[0]?.metadata?.federatedPlaceholder === true
+    );
+    expect(placeholderInserts.length).toBe(1);
+    const placeholder = placeholderInserts[0][0];
+    expect(placeholder.name).toBe(`Federated agent (${PEER_SLUG})`);
+    expect(placeholder.visibility).toBe("private");
+    expect(placeholder.metadata.sourceNodeId).toBe(PEER_NODE_ID);
+    expect(placeholder.metadata.externalEntityId).toBe(REMOTE_OWNER_ID);
+
+    // The resource itself still materializes.
+    const resourceInserts = mockValues.mock.calls.filter(
+      (call) => call[0]?.name === "Remote Document"
+    );
+    expect(resourceInserts.length).toBe(1);
+  });
+
+  it("upgrades a federated placeholder agent in place on agent upsert", async () => {
+    setupStandardMocks({}, {
+      localAgent: {
+        id: "placeholder-local-id",
+        metadata: { federatedPlaceholder: true, sourceNodeId: PEER_NODE_ID },
+      },
+    });
+
+    const { importFederationEvents } = await loadFederationModule();
+
+    await importFederationEvents({
+      localNodeId: LOCAL_NODE_ID,
+      fromPeerSlug: PEER_SLUG,
+      events: [makeAgentEvent()],
+    });
+
+    // The placeholder is upgraded via update, not re-inserted.
+    const agentInserts = mockValues.mock.calls.filter(
+      (call) => call[0]?.name === "Remote Agent"
+    );
+    expect(agentInserts.length).toBe(0);
+
+    const upgradeSets = mockUpdateSet.mock.calls.filter(
+      (call) => call[0]?.name === "Remote Agent"
+    );
+    expect(upgradeSets.length).toBe(1);
+    expect(upgradeSets[0][0].metadata.sourceNodeId).toBe(PEER_NODE_ID);
+    expect(upgradeSets[0][0].metadata.externalEntityId).toBe(REMOTE_AGENT_ID);
+  });
+
+  it("never overwrites non-placeholder local agents on agent upsert", async () => {
+    setupStandardMocks({}, {
+      localAgent: {
+        id: "locally-owned-agent",
+        metadata: {},
+      },
+    });
+
+    const { importFederationEvents } = await loadFederationModule();
+
+    await importFederationEvents({
+      localNodeId: LOCAL_NODE_ID,
+      fromPeerSlug: PEER_SLUG,
+      events: [makeAgentEvent()],
+    });
+
+    // Neither inserted nor updated — locally owned agents win.
+    const agentInserts = mockValues.mock.calls.filter(
+      (call) => call[0]?.name === "Remote Agent"
+    );
+    expect(agentInserts.length).toBe(0);
+
+    const upgradeSets = mockUpdateSet.mock.calls.filter(
+      (call) => call[0]?.name === "Remote Agent"
+    );
+    expect(upgradeSets.length).toBe(0);
   });
 });

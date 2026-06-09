@@ -97,8 +97,10 @@ own structure, NOT copied from the person app):
   — jobs detail page now resolves the real `auth()` session user and threads it
   (or `null` for anonymous) through `JobDetailClient` and its tabs; no more
   hardcoded `currentUserId = "user1"`.
-- [#9](https://github.com/rivr-social/rivr-group/issues/9): Federation mutation
-  handlers return `accepted: true` for mutations not actually forwarded
+- [#9](https://github.com/rivr-social/rivr-group/issues/9): RESOLVED
+  2026-06-09 — unimplemented mutation types now return `accepted: false` with
+  `MUTATION_NOT_IMPLEMENTED` (501) or `UNKNOWN_MUTATION_TYPE` (400) instead of
+  claiming success.
 - [#10](https://github.com/rivr-social/rivr-group/issues/10): Sovereign key
   cryptography is preview-only
 - [#12](https://github.com/rivr-social/rivr-group/issues/12): Map tile default
@@ -106,15 +108,22 @@ own structure, NOT copied from the person app):
 
 ### Federation Gaps
 
-- **Materializer parity:** This app's `importFederationEvents` only handles
-  `eventType === "upsert"`. Global emits `resource.created`, `post.created`,
-  `event.created`, etc. Real-time creates from global will not materialize here
-  until the event type set is aligned.
-- **Auto-projected agents:** When federation events reference unknown agents,
-  `resolveLocalEntityId` creates entity_map rows but not agents rows — the
-  materializer silently drops those resources.
-- **Forwarding stubs:** Some mutation types return success without actually
-  forwarding the work.
+Resolved 2026-06-09 (coordinated parity sweep with global + person):
+
+- **Materializer parity:** RESOLVED — the importer handles the full
+  upsert/delete event-type sets via `RESOURCE_UPSERT_EVENT_TYPES` /
+  `RESOURCE_DELETE_EVENT_TYPES` (no `post.*` types — this app does not
+  support posts; that exclusion is intentional).
+- **Auto-projected agents:** RESOLVED — resources arriving before their
+  owner's agent event project a minimal private placeholder agent
+  (`metadata.federatedPlaceholder: true`) AFTER passing the
+  `PRIMARY_AGENT_ID` scope filter and group-membership gate; the next agent
+  upsert from the same peer upgrades it in place. Locally owned agents are
+  never overwritten.
+- **Forwarding stubs:** RESOLVED — see #9 above.
+- **Replay-window catch-up:** RESOLVED — the pull-sync cron passes
+  `allowHistorical: true` so this instance can catch up after >7-day downtime
+  (signature + nonce dedup still apply); push routes remain strict.
 
 ## Development
 

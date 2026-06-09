@@ -624,24 +624,31 @@ async function handleLegacyMutation(
     });
   }
 
-  return NextResponse.json({
-    success: true,
-    phase: "forwarding-stub",
-    instanceId: config.instanceId,
-    accepted: true,
-    knownType: isKnownType,
-    message: isKnownType
-      ? `Mutation type '${type}' recognized. Dispatch pending full implementation.`
-      : `Mutation type '${type}' not in known dispatch map. Logged for review.`,
-    ...(routedFrom
-      ? {
-          routedFrom: {
-            originInstanceSlug: routedFrom.originInstanceSlug,
-            originInstanceId: routedFrom.originInstanceId,
-          },
-        }
-      : {}),
-  });
+  // Honesty contract (rivr-group#9): mutation types without a real dispatch
+  // path must NOT claim acceptance. Returning a non-2xx with accepted:false
+  // lets the forwarding instance surface a real error to the acting user
+  // instead of silently dropping their write.
+  return NextResponse.json(
+    {
+      success: false,
+      accepted: false,
+      instanceId: config.instanceId,
+      knownType: isKnownType,
+      errorCode: isKnownType ? "MUTATION_NOT_IMPLEMENTED" : "UNKNOWN_MUTATION_TYPE",
+      error: isKnownType
+        ? `Mutation type '${type}' is recognized but not yet implemented on this instance.`
+        : `Mutation type '${type}' is not in the known dispatch map.`,
+      ...(routedFrom
+        ? {
+            routedFrom: {
+              originInstanceSlug: routedFrom.originInstanceSlug,
+              originInstanceId: routedFrom.originInstanceId,
+            },
+          }
+        : {}),
+    },
+    { status: isKnownType ? 501 : 400 },
+  );
 }
 
 function withTargetOwner(payload: unknown, targetAgentId: string): Record<string, unknown> {
