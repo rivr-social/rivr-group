@@ -1,5 +1,6 @@
 import { db } from "@/db";
 import { agents, resources } from "@/db/schema";
+import { createPostResource } from "@/app/actions/resource-creation/posts";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
 import * as kg from "@/lib/kg/autobot-kg-client";
 import { resolveHomeInstance } from "@/lib/federation/resolution";
@@ -26,6 +27,10 @@ export type McpToolDefinition = {
 
 function getString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 async function listPersonasForController(context: McpToolCallContext) {
@@ -240,6 +245,51 @@ export const MCP_TOOL_DEFINITIONS: McpToolDefinition[] = [
         kg_context_length: kgContext.length,
         scope: { type: scopeType, id: scopeId },
       };
+    },
+  },
+  {
+    name: "rivr.posts.create",
+    description:
+      "Create a post as the active actor. Pass groupId (typically this instance's primary group) to post into a group the actor has write access to; group posting requires membership/admin write access.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["content"],
+      properties: {
+        title: { type: "string" },
+        content: { type: "string" },
+        postType: { type: "string" },
+        groupId: { type: "string", description: "Group to post into. Defaults to a personal post when omitted." },
+        localeId: { type: "string" },
+        imageUrl: { type: "string" },
+        isGlobal: { type: "boolean", description: "Whether the post is federation-projectable. Default: true" },
+      },
+    },
+    enabledFor: ["session", "token"],
+    handler: async (args) => {
+      const content = getString(args.content);
+      if (!content) {
+        throw new Error("content is required.");
+      }
+
+      // Extract URLs from the body so posts created via MCP get the same
+      // rich embed rendering as posts composed through the UI. Each URL
+      // becomes a `{url, kind: 'link'}` embed resolved client-side by
+      // LinkPreviewCard — no server-side link-preview scrape required.
+      const { extractUrls } = await import("@/lib/link-preview-client");
+      const urls = extractUrls(content);
+      const embeds = urls.map((url) => ({ url, kind: "link" as const }));
+
+      return createPostResource({
+        title: getString(args.title) ?? undefined,
+        content,
+        postType: getString(args.postType) ?? "social",
+        groupId: getString(args.groupId) ?? undefined,
+        localeId: getString(args.localeId) ?? undefined,
+        imageUrl: getString(args.imageUrl),
+        isGlobal: getBoolean(args.isGlobal, true),
+        embeds,
+      });
     },
   },
   {
