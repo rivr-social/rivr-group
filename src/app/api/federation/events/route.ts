@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { federationEvents } from "@/db/schema";
 import { gt, and, eq } from "drizzle-orm";
+import { authorizeFederationRequest } from "@/lib/federation-auth";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
@@ -10,10 +11,18 @@ const MAX_LIMIT = 500;
  * GET /api/federation/events?since={sequence}&limit={limit}
  *
  * Cursor-based event sync endpoint. Remote instances poll this
- * to get events they haven't processed yet.
+ * to get events they haven't processed yet. Requires peer auth,
+ * session auth, or admin key.
  */
 export async function GET(request: Request) {
   try {
+    const authResult = await authorizeFederationRequest(request);
+    if (!authResult.authorized) {
+      return NextResponse.json(
+        { success: false, error: authResult.reason ?? "Unauthorized" },
+        { status: 401 },
+      );
+    }
     const url = new URL(request.url);
     const since = parseInt(url.searchParams.get("since") || "0", 10);
     const limit = Math.min(
