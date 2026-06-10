@@ -191,7 +191,7 @@ const COMMANDS: CommandDefinition[] = [
     id: "marketplace",
     label: "Marketplace",
     description: "Open marketplace listings and purchases.",
-    path: "/marketplace",
+    path: "/?tab=marketplace",
     group: "Navigate",
     icon: ShoppingBag,
     aliases: ["marketplace", "shop", "listings", "/marketplace"],
