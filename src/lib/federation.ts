@@ -1201,41 +1201,21 @@ export async function importFederationEvents(params: {
     }
   }
 
-  // Store rejected events as dead letters in the federation_events table.
-  // Nullify the nonce for dead-letter records to avoid unique constraint
-  // violations (the original nonce may already exist for "duplicate nonce" rejections).
-  for (const rejection of rejected) {
-    const event = params.events[rejection.index];
-    const [deadLetterEvent] = await db
-      .insert(federationEvents)
-      .values({
-        originNodeId: peerNode.id,
-        targetNodeId: params.localNodeId,
-        entityType: event.entityType,
-        eventType: event.eventType,
-        visibility: event.visibility,
-        payload: event.payload,
-        signature: event.signature ?? null,
-        nonce: null,
-        eventVersion: event.eventVersion ?? null,
-        status: "failed",
-        error: rejection.reason,
-      })
-      .returning();
-
-    await logFederationAudit({
-      eventType: "import",
-      nodeId: params.localNodeId,
-      peerNodeId: peerNode.id,
-      federationEventId: deadLetterEvent.id,
-      status: "rejected",
-      detail: {
-        reason: rejection.reason,
-        eventIndex: rejection.index,
-        entityType: event.entityType,
-        originalNonce: event.nonce,
-      },
-    });
+  // Log rejected events as a summary warning — do NOT persist them as dead
+  // letters in the database. The old pattern of inserting a `status='failed'`
+  // row per rejection caused unbounded DB growth (2M+ rows on one instance)
+  // when historical pull replayed unsigned events every sync cycle.
+  if (rejected.length > 0) {
+    const reasonCounts = new Map<string, number>();
+    for (const r of rejected) {
+      reasonCounts.set(r.reason, (reasonCounts.get(r.reason) ?? 0) + 1);
+    }
+    const summary = Array.from(reasonCounts.entries())
+      .map(([reason, count]) => `${reason}: ${count}`)
+      .join(", ");
+    console.warn(
+      `[federation] Rejected ${rejected.length} events from ${peerNode.slug}: ${summary}`,
+    );
   }
 
   if (imports.length === 0) {
