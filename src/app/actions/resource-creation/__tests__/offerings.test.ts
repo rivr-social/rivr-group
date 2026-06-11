@@ -62,6 +62,7 @@ import { auth } from "@/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import { hasEntitlement } from "@/lib/billing";
 import { createOfferingResource, createMarketplaceListingResource } from "../offerings";
+import { dollarsToCents } from "../types";
 
 // =============================================================================
 // Constants
@@ -251,6 +252,22 @@ describe("offering creation actions", () => {
 
         expect(result.success).toBe(true);
       }));
+
+    // Pricing — dollars → cents conversion. Regression for the off-by-100
+    // forward-path bug: a sovereign-homed offering with `basePrice: 12` ($12)
+    // was persisting `totalPriceCents: 12` ($0.12) because the dollars→cents
+    // conversion was missing on this instance's create path.
+    it("dollarsToCents helper converts dollars to integer cents", () => {
+      expect(dollarsToCents(5)).toBe(500);
+      expect(dollarsToCents(12)).toBe(1200);
+      expect(dollarsToCents(4.5)).toBe(450);
+      expect(dollarsToCents(0.01)).toBe(1);
+      expect(dollarsToCents(0)).toBe(0);
+      expect(dollarsToCents(-1)).toBe(0);
+      expect(dollarsToCents(undefined)).toBe(0);
+      expect(dollarsToCents(null)).toBe(0);
+      expect(dollarsToCents(Number.NaN)).toBe(0);
+    });
   });
 
   // ===========================================================================

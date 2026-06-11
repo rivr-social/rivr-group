@@ -73,6 +73,21 @@ export const GROUP_LIKE_OWNER_AGENT_TYPES = [
   "org",
 ] as const;
 
+/**
+ * Convert a dollar amount to integer cents. Offering/listing prices arrive from
+ * the form as DOLLARS but are persisted (and forwarded over federation) in
+ * CENTS — so this helper is the single conversion point.
+ *
+ * Returns 0 for non-finite or non-positive inputs so callers can safely
+ * compare against `0` to detect "no price".
+ */
+export function dollarsToCents(amount: number | null | undefined): number {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return 0;
+  }
+  return Math.round(amount * 100);
+}
+
 // --- Event ticket types and helpers ---
 
 export type EventTicketInput = {

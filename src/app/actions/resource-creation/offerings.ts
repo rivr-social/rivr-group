@@ -24,7 +24,7 @@ import {
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
 import type { ActionResult } from "./types";
-import { getAllowedTerms, deriveOfferingListingType } from "./types";
+import { getAllowedTerms, deriveOfferingListingType, dollarsToCents } from "./types";
 
 const MAX_OFFERING_DESCRIPTION_LENGTH = 50000;
 
@@ -249,9 +249,12 @@ export async function createOfferingResource(input: {
     const derivedListingType = validatedItems.length > 0
       ? deriveOfferingListingType(validatedItems)
       : (input.offeringType ?? "standalone");
+    // `input.basePrice` is DOLLARS; convert to cents for storage and downstream
+    // wire fields. Items already arrive as `priceCents` so they are summed as-is.
+    const basePriceCents = dollarsToCents(input.basePrice);
     const totalPriceCents = validatedItems.length > 0
       ? validatedItems.reduce((sum, i) => sum + i.priceCents, 0)
-      : (input.basePrice ?? 0);
+      : basePriceCents;
 
     // Paid offerings (price > 0) require a "seller" tier (or higher).
     if (totalPriceCents > 0) {
@@ -343,7 +346,10 @@ export async function createOfferingResource(input: {
       ...(input.capitalValues ? { capitalValues: input.capitalValues } : {}),
       ...(input.auditValues ? { auditValues: input.auditValues } : {}),
         ...(input.offeringType ? { offeringType: input.offeringType } : {}),
-        ...(input.basePrice !== undefined ? { basePrice: input.basePrice } : {}),
+        // `meta.basePrice` is persisted in CENTS to match downstream consumers
+        // (graph-adapters formats it via `meta.basePrice / 100`). The action
+        // accepts dollars (`input.basePrice`) and normalizes here.
+        ...(input.basePrice !== undefined ? { basePrice: basePriceCents } : {}),
         ...(input.currency ? { currency: input.currency } : {}),
         ...(input.acceptedCurrencies?.length
           ? { acceptedCurrencies: Array.from(new Set(input.acceptedCurrencies)) }
