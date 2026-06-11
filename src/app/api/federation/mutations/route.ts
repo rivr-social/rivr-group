@@ -24,6 +24,7 @@ import type { RoutingProvenance } from "@/lib/federation/write-router";
 import { toggleFollowAgent, toggleJoinGroup } from "@/app/actions/interactions/social";
 import { createEventResource } from "@/app/actions/resource-creation/events";
 import { createOfferingResource } from "@/app/actions/resource-creation/offerings";
+import { createPostResource } from "@/app/actions/resource-creation/posts";
 import * as kg from "@/lib/kg/autobot-kg-client";
 import {
   AUTHORITY_GUARD_REASONS,
@@ -587,6 +588,26 @@ async function handleLegacyMutation(
   if (type === "createEventResource") {
     const result = await runWithFederationExecutionContext(authorizedActorId, () =>
       createEventResource(withTargetOwner(payload, targetAgentId) as Parameters<typeof createEventResource>[0]),
+    );
+    return NextResponse.json({
+      success: result.success,
+      data: result,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(routedFrom
+        ? {
+            routedFrom: {
+              originInstanceSlug: routedFrom.originInstanceSlug,
+              originInstanceId: routedFrom.originInstanceId,
+            },
+          }
+        : {}),
+    });
+  }
+
+  if (type === "createPostResource") {
+    const result = await runWithFederationExecutionContext(authorizedActorId, () =>
+      createPostResource(withTargetOwner(payload, targetAgentId) as Parameters<typeof createPostResource>[0]),
     );
     return NextResponse.json({
       success: result.success,
