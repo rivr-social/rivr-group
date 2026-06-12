@@ -106,6 +106,25 @@ own structure, NOT copied from the person app):
 - [#12](https://github.com/rivr-social/rivr-group/issues/12): Map tile default
   points to missing local API route
 
+Resolved 2026-06-12 (join-flow E2E on Regen Hub — same bugs existed in all 5
+repos; fixes ported to global/person/locale/region working trees):
+
+- **Pending join requests granted instant membership** — `requestGroupMembership`
+  wrote the `membership_request` ledger row with `isActive: true`, and every
+  membership predicate (`findActiveMembership`, `isGroupMember`, member counts)
+  matches any active `join`/`belong` row, so applying to an approval-required
+  group made you a member immediately; the approval queue was decorative.
+  Fixed: pending requests are `isActive: false`; the two pending-request
+  lookups key on `metadata.reviewStatus = 'pending'` instead of `isActive`.
+  (`reviewGroupJoinRequest` already inserts the real membership row on approve.)
+- **Badges tab 500** — `fetchUserBadges` joined `ledger.object_id = r.id::text`
+  and `fetchVoucherClaims` joined `l.subject_id = a.id::text`, but both ledger
+  columns are `uuid` on every live DB → `operator does not exist: uuid = text`.
+  Casts removed; string params now cast `::uuid`.
+- **Federated avatars blocked by CSP** — sovereign instances render images
+  hosted on the global hub's asset store (`s3.rivr.social`), which was not in
+  `img-src`. `middleware.ts` now derives the hub S3 origin from `REGISTRY_URL`.
+
 ### Federation Gaps
 
 Resolved 2026-06-09 (coordinated parity sweep with global + person):

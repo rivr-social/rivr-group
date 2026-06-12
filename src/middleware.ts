@@ -46,6 +46,21 @@ function buildCspHeader(nonce: string): string {
   const matrixWss = matrixUrl?.replace(/^https:\/\//, "wss://");
   const publicDomain = process.env.NEXT_PUBLIC_DOMAIN?.trim();
   const minioPublicUrl = process.env.ASSET_PUBLIC_BASE_URL?.trim() || process.env.NEXT_PUBLIC_MINIO_URL?.trim();
+
+  // Federated content (avatars, group images) references the global hub's
+  // asset store. Derive the hub's S3 origin from REGISTRY_URL
+  // (https://app.<domain> -> https://s3.<domain>) so those images render.
+  const registryUrl = process.env.REGISTRY_URL?.trim();
+  let federatedAssetSource: string | undefined;
+  if (registryUrl) {
+    try {
+      const registryHost = new URL(registryUrl).hostname;
+      federatedAssetSource = `https://s3.${registryHost.replace(/^app\./, "")}`;
+    } catch {
+      federatedAssetSource = undefined;
+    }
+  }
+
   const imageSources = [
     "'self'",
     "data:",
@@ -53,6 +68,7 @@ function buildCspHeader(nonce: string): string {
     "http://localhost:9000",
     ...(minioPublicUrl ? [minioPublicUrl] : []),
     ...(publicDomain ? [`https://s3.${publicDomain}`] : []),
+    ...(federatedAssetSource ? [federatedAssetSource] : []),
     "http://*.virtualearth.net",
     "http://dev.virtualearth.net",
     "https://*.virtualearth.net",

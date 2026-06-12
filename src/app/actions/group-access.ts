@@ -490,7 +490,6 @@ export async function fetchGroupJoinRuntime(
         eq(ledger.subjectId, actorId),
         eq(ledger.objectId, groupId),
         eq(ledger.verb, "join"),
-        eq(ledger.isActive, true),
         sql`${ledger.metadata}->>'interactionType' = 'membership_request'`,
         sql`COALESCE(${ledger.metadata}->>'reviewStatus', 'pending') = 'pending'`
       )
@@ -624,7 +623,6 @@ export async function requestGroupMembership(
         eq(ledger.subjectId, actorId),
         eq(ledger.objectId, groupId),
         eq(ledger.verb, "join"),
-        eq(ledger.isActive, true),
         sql`${ledger.metadata}->>'interactionType' = 'membership_request'`,
         sql`COALESCE(${ledger.metadata}->>'reviewStatus', 'pending') = 'pending'`
       )
@@ -651,7 +649,11 @@ export async function requestGroupMembership(
       subjectId: actorId,
       objectId: groupId,
       objectType: "agent",
-      isActive: true,
+      // NOT a membership grant: pending applications must stay invisible to
+      // every membership predicate (findActiveMembership, isGroupMember,
+      // member counts), which match any active join/belong row. The request
+      // lifecycle is tracked via metadata.reviewStatus instead.
+      isActive: false,
       visibility: "private",
       metadata: {
         interactionType: "membership_request",
