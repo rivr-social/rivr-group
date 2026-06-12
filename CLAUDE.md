@@ -125,6 +125,30 @@ Resolved 2026-06-09 (coordinated parity sweep with global + person):
   `allowHistorical: true` so this instance can catch up after >7-day downtime
   (signature + nonce dedup still apply); push routes remain strict.
 
+Resolved 2026-06-11 (Spirit instance — deployed live to `pmdl_rivr_group_boulder`):
+
+- **Pull-sync peer auth:** RESOLVED — the deployed `federation-sync` cron was
+  sending only `X-Instance-*` headers (no `x-peer-slug`/`x-peer-secret`), so
+  every peer pull returned 401 and the instance ingested nothing. The cron now
+  calls `resolvePeerAuthHeaders(peer.peerSlug, config.instanceSlug)` and sends
+  the per-peer secret (`x-peer-slug` = US, the sender). This restored both the
+  `cameron` (person) and `global` peer pulls.
+- **Resource materializer fidelity:** RESOLVED — the importer's
+  `resources` upsert mapped `name`/`type`/`description`/`metadata`/`tags` but
+  dropped `content` and `embeds`, so federated posts materialized as
+  title-only shells (body + linked offering/voucher embed lost). The
+  materializer now carries `payload.content` and `payload.embeds`
+  (coerced to the NOT-NULL `[]` default) on both insert and
+  `onConflictDoUpdate`. Posts DO flow into the group via the generic `upsert`
+  event (the `post.*` event-type exclusion above is unchanged — `post.created`
+  is logged but the paired `upsert` is what materializes the row).
+- **Deploy note:** these were undeployed local drift fixes; the live Spirit
+  build predated them. Shipped via exact-file sync + `docker compose build
+  rivr-group-boulder` + force-recreate. A peer-secret `.env` collision
+  (`FEDERATION_PEER_SECRET_CAMERON` defined twice in `/opt/docker-lab/.env`,
+  shared with the prod `rivr` service) also had to be split into a
+  Spirit-scoped `SPIRIT_FEDERATION_PEER_SECRET_CAMERON` var.
+
 ## Development
 
 ```bash
