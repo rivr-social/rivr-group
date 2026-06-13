@@ -15,18 +15,23 @@ import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { UserPlus, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp } from "lucide-react"
-import type { JoinRequest, User } from "@/lib/types"
+import type { JoinQuestion, JoinRequest, User } from "@/lib/types"
 import { EmptyState } from "@/components/empty-state"
 
 interface JoinRequestsManagerProps {
   groupId: string
   requests: JoinRequest[]
+  /** The group's configured join questions, used to label applicant answers. */
+  questions?: JoinQuestion[]
   getUser: (userId: string) => User | undefined
   onApprove: (requestId: string, notes?: string) => void
   onReject: (requestId: string, notes?: string) => void
 }
 
-export function JoinRequestsManager({ groupId: _groupId, requests, getUser, onApprove, onReject }: JoinRequestsManagerProps) {
+export function JoinRequestsManager({ groupId: _groupId, requests, questions = [], getUser, onApprove, onReject }: JoinRequestsManagerProps) {
+  const questionLabelById = new Map(
+    questions.map((q) => [q.id, q.label?.trim() || q.question?.trim() || ""]),
+  )
   const [activeTab, setActiveTab] = useState("pending")
   const [expandedRequests, setExpandedRequests] = useState<Record<string, boolean>>({})
   const [adminNotes, setAdminNotes] = useState<Record<string, string>>({})
@@ -118,7 +123,9 @@ export function JoinRequestsManager({ groupId: _groupId, requests, getUser, onAp
                   <div className="space-y-2">
                     {request.answers.map((answer, index) => (
                       <div key={index} className="bg-muted/50 p-3 rounded-md">
-                        <p className="text-sm font-medium">Question {index + 1}</p>
+                        <p className="text-sm font-medium">
+                          {questionLabelById.get(answer.questionId) || `Question ${index + 1}`}
+                        </p>
                         <p className="text-sm mt-1">{answer.answer}</p>
                       </div>
                     ))}

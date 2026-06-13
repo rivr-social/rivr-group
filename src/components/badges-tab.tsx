@@ -393,7 +393,12 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
               <Star className="h-5 w-5 text-yellow-600" />
               <div>
                 <p className="text-sm font-medium">Progress</p>
-                <p className="text-2xl font-bold">{Math.round((userBadges.length / groupBadges.length) * 100)}%</p>
+                <p className="text-2xl font-bold">
+                  {groupBadges.length > 0
+                    ? Math.round((userBadges.length / groupBadges.length) * 100)
+                    : 0}
+                  %
+                </p>
               </div>
             </div>
           </CardContent>
@@ -417,6 +422,16 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
                 <BadgeCard key={badge.id} badge={badge} />
               ))}
             </div>
+          ) : groupBadges.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <Star className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No badges yet</h3>
+                <p className="text-muted-foreground">
+                  This group hasn&apos;t created any badges yet. Check back later.
+                </p>
+              </CardContent>
+            </Card>
           ) : (
             <Card>
               <CardContent className="p-8 text-center">

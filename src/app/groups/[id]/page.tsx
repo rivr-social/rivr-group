@@ -256,7 +256,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
 
   return (
     <AgentPageShell
-      backHref="/groups"
+      backHref="/?tab=groups"
       backLabel="Back to groups"
       header={header}
       structuredDataJson={structuredData ? serializeJsonLd(structuredData) : null}

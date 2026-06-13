@@ -31,7 +31,7 @@ export function GroupActions({ groupId, groupName, groupDescription, ownerId }: 
       entityDescription={groupDescription}
       ownerId={ownerId}
       entityLabel="group"
-      redirectPath="/groups"
+      redirectPath="/?tab=groups"
     />
   )
 }

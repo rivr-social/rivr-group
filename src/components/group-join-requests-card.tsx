@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { fetchGroupJoinRequests, reviewGroupJoinRequest } from "@/app/actions/group-access";
 import { JoinRequestsManager } from "@/components/join-requests-manager";
-import type { JoinRequest, User } from "@/lib/types";
+import type { JoinQuestion, JoinRequest, User } from "@/lib/types";
 import { useToast } from "@/components/ui/use-toast";
 
 type GroupJoinRequestsCardProps = {
@@ -19,6 +19,7 @@ type RequestRecord = JoinRequest & {
 export function GroupJoinRequestsCard({ groupId }: GroupJoinRequestsCardProps) {
   const { toast } = useToast();
   const [requests, setRequests] = useState<RequestRecord[]>([]);
+  const [questions, setQuestions] = useState<JoinQuestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [, startTransition] = useTransition();
 
@@ -35,6 +36,7 @@ export function GroupJoinRequestsCard({ groupId }: GroupJoinRequestsCardProps) {
       return;
     }
     setRequests(result.requests ?? []);
+    setQuestions(result.questions ?? []);
     setIsLoading(false);
   };
 
@@ -84,6 +86,7 @@ export function GroupJoinRequestsCard({ groupId }: GroupJoinRequestsCardProps) {
     <JoinRequestsManager
       groupId={groupId}
       requests={requests}
+      questions={questions}
       getUser={(userId) => usersById.get(userId)}
       onApprove={(requestId, notes) => onReview(requestId, "approved", notes)}
       onReject={(requestId, notes) => onReview(requestId, "rejected", notes)}

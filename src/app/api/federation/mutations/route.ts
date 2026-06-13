@@ -22,6 +22,8 @@ import type {
 } from "@/lib/federation/cross-instance-types";
 import type { RoutingProvenance } from "@/lib/federation/write-router";
 import { toggleFollowAgent, toggleJoinGroup } from "@/app/actions/interactions/social";
+import { applyMembershipRequestForActor } from "@/app/actions/group-access";
+import { isGroupMember } from "@/lib/permissions";
 import { createEventResource } from "@/app/actions/resource-creation/events";
 import { createOfferingResource } from "@/app/actions/resource-creation/offerings";
 import { createPostResource } from "@/app/actions/resource-creation/posts";
@@ -355,6 +357,35 @@ async function handleConnectAction(
   }
 }
 
+/**
+ * Extracts the approval-relevant join options (answers / password / invite
+ * token) from a federated membership_request payload, mirroring the shape the
+ * front-end `requestGroupMembership` action accepts.
+ */
+function parseMembershipRequestOptions(
+  payload?: Record<string, unknown>,
+): { answers?: { questionId: string; answer: string }[]; password?: string; inviteToken?: string } {
+  const rawAnswers = Array.isArray(payload?.answers) ? (payload!.answers as unknown[]) : [];
+  const answers = rawAnswers
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const record = entry as Record<string, unknown>;
+      const questionId = typeof record.questionId === "string" ? record.questionId : null;
+      if (!questionId) return null;
+      return {
+        questionId,
+        answer: typeof record.answer === "string" ? record.answer : "",
+      };
+    })
+    .filter((entry): entry is { questionId: string; answer: string } => entry !== null);
+
+  return {
+    answers: answers.length > 0 ? answers : undefined,
+    password: typeof payload?.password === "string" ? payload.password : undefined,
+    inviteToken: typeof payload?.inviteToken === "string" ? payload.inviteToken : undefined,
+  };
+}
+
 async function handleMembershipRequestAction(
   actorId: string,
   targetAgentId: string,
@@ -363,17 +394,47 @@ async function handleMembershipRequestAction(
   try {
     const interactionType =
       typeof payload?.type === "string" && payload.type === "ring" ? "ring" : "group";
-    const result = await toggleJoinGroup(targetAgentId, interactionType);
+
+    // Rings have no joinSettings/approval queue; preserve the direct toggle.
+    if (interactionType === "ring") {
+      const result = await toggleJoinGroup(targetAgentId, "ring");
+      return {
+        success: result.success,
+        action: "membership_request",
+        data: {
+          message: result.message,
+          active: result.active ?? false,
+          interactionType,
+        },
+        federationEventEmitted: Boolean(result.success),
+      };
+    }
+
+    // Groups honor joinSettings: approval-required groups get a pending request
+    // (no membership granted) instead of an instant join. This closes the
+    // federation back-door where toggleJoinGroup bypassed the approval queue.
+    const options = parseMembershipRequestOptions(payload);
+    const result = await applyMembershipRequestForActor(actorId, targetAgentId, options);
+    const joined = result.success && result.status === "joined";
 
     return {
       success: result.success,
       action: "membership_request",
       data: {
-        message: result.message,
-        active: result.active ?? false,
+        message: result.success
+          ? result.status === "requested"
+            ? "Membership request submitted for approval."
+            : "Joined group."
+          : result.error,
+        status: result.status,
+        active: joined,
+        requestId: result.requestId,
+        membershipId: result.membershipId,
         interactionType,
       },
-      federationEventEmitted: Boolean(result.success),
+      // Only an actual membership change is a federation-visible event; a pending
+      // request projects nothing to the home instance.
+      federationEventEmitted: joined,
     };
   } catch (error) {
     return {
@@ -556,6 +617,43 @@ async function handleLegacyMutation(
       payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).type === "string"
         ? ((payload as Record<string, unknown>).type as "group" | "ring")
         : "group";
+
+    // Groups: route a NON-member's join attempt through the approval-aware path
+    // so approval-required groups create a pending request instead of an instant
+    // membership. Existing members (leave toggle) and rings keep the direct
+    // toggle. This closes the legacy back-door alongside the membership_request
+    // interaction handler.
+    if (interactionType === "group") {
+      const membership = await isGroupMember(authorizedActorId, targetAgentId);
+      if (!membership.isMember) {
+        const options = parseMembershipRequestOptions(payload as Record<string, unknown> | undefined);
+        const requestResult = await applyMembershipRequestForActor(authorizedActorId, targetAgentId, options);
+        const joined = requestResult.success && requestResult.status === "joined";
+        if (joined) {
+          await mirrorMembershipProjectionToHomeInstance(authorizedActorId, targetAgentId, true).catch((error) => {
+            console.error("[federation/mutations] Failed to mirror membership projection:", error);
+          });
+        }
+        return NextResponse.json({
+          success: requestResult.success,
+          data: {
+            success: requestResult.success,
+            active: joined,
+            status: requestResult.status,
+            requestId: requestResult.requestId,
+            membershipId: requestResult.membershipId,
+            message: requestResult.success
+              ? requestResult.status === "requested"
+                ? "Membership request submitted for approval."
+                : "Joined group."
+              : requestResult.error,
+          },
+          knownType: true,
+          instanceId: config.instanceId,
+        });
+      }
+    }
+
     const result = await runWithFederationExecutionContext(authorizedActorId, () =>
       toggleJoinGroup(targetAgentId, interactionType),
     );

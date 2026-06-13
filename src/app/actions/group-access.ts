@@ -70,6 +70,8 @@ type JoinRequestListResult = {
   success: boolean;
   error?: string;
   requests?: JoinRequestRecord[];
+  /** The group's configured join questions, so the admin UI can label answers. */
+  questions?: GroupJoinSettings["questions"];
 };
 
 async function requireActorId(): Promise<string | null> {
@@ -526,7 +528,54 @@ export async function requestGroupMembership(
       targetAgentId: groupId,
       payload: { options },
     },
-    async () => {
+    async () => applyMembershipRequestForActor(actorId, groupId, options)
+  );
+
+  if (facadeResult.success && facadeResult.data) {
+    const data = facadeResult.data as GroupAccessResult;
+    if (data.success && data.status === "joined") {
+      await emitDomainEvent({
+        eventType: EVENT_TYPES.GROUP_MEMBER_JOINED,
+        entityType: "agent",
+        entityId: groupId,
+        actorId,
+        payload: { grantType: "membership_request" },
+      }).catch(() => {});
+    }
+    return data;
+  }
+
+  return { success: false, error: facadeResult.error ?? "Failed to request membership." };
+}
+
+/**
+ * Approval-aware membership-request core, decoupled from session auth so it can
+ * be invoked by both the session-based `requestGroupMembership` action above and
+ * the federation mutations route (which resolves its actor from a signed peer
+ * assertion, not a NextAuth session, and therefore cannot use `requireActorId`).
+ * Honors the group's joinSettings: when approval is required it inserts an
+ * inactive pending request row (invisible to every membership predicate);
+ * otherwise it inserts an active membership grant. Invite/password are
+ * re-validated here regardless of caller, closing the federation back-door that
+ * previously let remote joins bypass the approval queue via toggleJoinGroup.
+ */
+export async function applyMembershipRequestForActor(
+  actorId: string,
+  groupId: string,
+  options?: {
+    answers?: { questionId: string; answer: string }[];
+    password?: string;
+    inviteToken?: string;
+  }
+): Promise<GroupAccessResult> {
+  if (!actorId) {
+    return { success: false, error: "Authentication required." };
+  }
+
+  if (!groupId || !UUID_RE.test(groupId)) {
+    return { success: false, error: "Invalid group identifier." };
+  }
+
   const [group] = await db
     .select({
       id: agents.id,
@@ -667,24 +716,6 @@ export async function requestGroupMembership(
     .returning({ id: ledger.id });
 
   return { success: true, status: "requested" as const, requestId: request.id } as GroupAccessResult;
-    }
-  );
-
-  if (facadeResult.success && facadeResult.data) {
-    const data = facadeResult.data as GroupAccessResult;
-    if (data.success && data.status === "joined") {
-      await emitDomainEvent({
-        eventType: EVENT_TYPES.GROUP_MEMBER_JOINED,
-        entityType: "agent",
-        entityId: groupId,
-        actorId,
-        payload: { grantType: "membership_request" },
-      }).catch(() => {});
-    }
-    return data;
-  }
-
-  return { success: false, error: facadeResult.error ?? "Failed to request membership." };
 }
 
 export async function fetchGroupJoinRequests(
@@ -703,6 +734,20 @@ export async function fetchGroupJoinRequests(
   if (!isAdmin) {
     return { success: false, error: "Only group admins can view join requests." };
   }
+
+  const [group] = await db
+    .select({ metadata: agents.metadata })
+    .from(agents)
+    .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
+    .limit(1);
+  const groupMeta =
+    group?.metadata && typeof group.metadata === "object"
+      ? (group.metadata as Record<string, unknown>)
+      : {};
+  const rawJoinSettings = groupMeta.joinSettings as Partial<GroupJoinSettings> | undefined;
+  const questions: GroupJoinSettings["questions"] = Array.isArray(rawJoinSettings?.questions)
+    ? (rawJoinSettings!.questions as GroupJoinSettings["questions"])
+    : [];
 
   const rows = await db
     .select({
@@ -751,7 +796,7 @@ export async function fetchGroupJoinRequests(
     };
   });
 
-  return { success: true, requests };
+  return { success: true, requests, questions };
 }
 
 export async function reviewGroupJoinRequest(
