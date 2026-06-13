@@ -27,6 +27,7 @@ import {
  * Checks the ledger for 'earn'/'assign' verbs targeting the user with badge resources.
  */
 export async function fetchUserBadges(userId: string): Promise<SerializedResource[]> {
+  if (!userId) return [];
   const result = await db.execute(sql`
     SELECT r.*
     FROM resources r
@@ -76,6 +77,7 @@ export async function fetchVouchersForGroup(groupId: string): Promise<Serialized
  * Returns ledger entries representing claims against a specific voucher resource.
  */
 export async function fetchVoucherClaims(voucherId: string) {
+  if (!voucherId) return [];
   const result = await db.execute(sql`
     SELECT l.*, a.name as claimer_name, a.image as claimer_image
     FROM ledger l
