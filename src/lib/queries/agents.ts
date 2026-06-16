@@ -386,6 +386,61 @@ export async function getGroupMembers(groupId: string): Promise<Agent[]> {
 }
 
 /**
+ * Batch member-count resolver for list/card surfaces.
+ *
+ * Returns a Map of groupId → live member count for the given group ids using a
+ * single pass per source, so group/ring/family cards can show an accurate
+ * count without an N+1 of `getGroupMembers` calls and without relying on the
+ * unmaintained `metadata.memberCount` denormalization.
+ *
+ * Counting mirrors `getGroupMembers` (hierarchical children UNION active
+ * belong/join ledger edges, excluding pending membership requests).
+ */
+export async function getGroupMemberCounts(
+  groupIds: string[]
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  const ids = Array.from(new Set(groupIds.filter((id) => typeof id === "string" && id.length > 0)));
+  if (ids.length === 0) return counts;
+
+  const [childRows, ledgerRows] = await Promise.all([
+    db
+      .select({ groupId: agents.parentId, memberId: agents.id })
+      .from(agents)
+      .where(and(inArray(agents.parentId, ids), eq(agents.type, "person"), isNull(agents.deletedAt))),
+    db
+      .select({ groupId: ledger.objectId, memberId: ledger.subjectId })
+      .from(ledger)
+      .where(
+        and(
+          inArray(ledger.objectId, ids),
+          inArray(ledger.objectType, ["agent", "group", "ring"]),
+          or(eq(ledger.verb, "belong"), eq(ledger.verb, "join")),
+          eq(ledger.isActive, true),
+          sql`COALESCE(${ledger.metadata}->>'interactionType', '') <> 'membership_request'`
+        )
+      ),
+  ]);
+
+  // De-duplicate member ids per group across both sources before counting.
+  const membersByGroup = new Map<string, Set<string>>();
+  const add = (groupId: string | null, memberId: string | null) => {
+    if (!groupId || !memberId) return;
+    let set = membersByGroup.get(groupId);
+    if (!set) {
+      set = new Set<string>();
+      membersByGroup.set(groupId, set);
+    }
+    set.add(memberId);
+  };
+  for (const row of childRows) add(row.groupId, row.memberId);
+  for (const row of ledgerRows) add(row.groupId, row.memberId);
+
+  for (const id of ids) counts.set(id, membersByGroup.get(id)?.size ?? 0);
+  return counts;
+}
+
+/**
  * Returns agents visible within a hierarchical scope.
  *
  * Scope matching is satisfied when an agent:

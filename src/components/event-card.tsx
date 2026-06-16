@@ -9,7 +9,24 @@ import { Calendar, Globe, Edit } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { format } from "date-fns"
+
+/**
+ * Event start/end ISO timestamps are composed server-side from the organizer's
+ * entered wall-clock (see lib/calendar/event-window.ts), so they must be rendered
+ * back in UTC to recover that wall-clock identically for every viewer. Formatting
+ * in the viewer's local timezone (as date-fns `format` does) shifted the displayed
+ * day/time away from the event-detail page and produced spurious "6:00 PM" times
+ * for date-only events. Pinning to UTC keeps the card, calendar, and detail views
+ * in agreement and is deterministic across SSR/hydration.
+ */
+const EVENT_DATE_TZ = "UTC"
+const formatEventDayShort = (date: Date) =>
+  date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: EVENT_DATE_TZ })
+const formatEventDateTime = (date: Date) => {
+  const day = date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: EVENT_DATE_TZ })
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: EVENT_DATE_TZ })
+  return `${day} · ${time}`
+}
 
 /**
  * Event summary card used in event listing surfaces (for example feed/grid views).
@@ -120,7 +137,7 @@ export function EventCard({
 
         <div className="absolute top-2 left-2 bg-card/90 backdrop-blur-sm rounded-md px-2 py-1 flex items-center">
           <Calendar className="h-3 w-3 mr-1 text-primary" />
-          <span className="text-xs font-medium">{format(eventDate, "MMM d")}</span>
+          <span className="text-xs font-medium">{formatEventDayShort(eventDate)}</span>
         </div>
 
         {isAdmin && (
@@ -143,7 +160,7 @@ export function EventCard({
 
         <div className="flex items-center text-sm text-muted-foreground mt-1 mb-2">
           <Calendar className="h-3.5 w-3.5 mr-1" />
-          <span>{format(eventDate, "EEE, MMM d · h:mm a")}</span>
+          <span>{formatEventDateTime(eventDate)}</span>
         </div>
 
         <div className="flex items-center text-sm text-muted-foreground mb-3">

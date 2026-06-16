@@ -262,7 +262,7 @@ export function GroupFeed({
               </div>
             </CardHeader>
             <CardContent className="p-4 pt-0">
-              <p className="text-muted-foreground mb-4">{group.description}</p>
+              <p className="text-muted-foreground mb-4 line-clamp-3">{group.description}</p>
               <div className="space-y-2">
                 <div className="flex items-center text-sm">
                   <MapPin className="h-4 w-4 mr-2 text-group" />
@@ -300,7 +300,9 @@ export function GroupFeed({
               </div>
               {requiresJoinFlowPage(group) ? (
                 <Button asChild variant="secondary">
-                  <Link href={`/groups/${group.id}`}>View Group</Link>
+                  {/* aria-label disambiguates this from the card title link,
+                      which points to the same group with the bare group name. */}
+                  <Link href={`/groups/${group.id}`} aria-label={`View ${group.name}`}>View Group</Link>
                 </Button>
               ) : (
                 <Button

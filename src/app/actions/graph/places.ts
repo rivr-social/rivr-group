@@ -5,6 +5,7 @@ import {
   serializeAgent,
 } from "@/lib/graph-serializers";
 import type { SerializedAgent } from "@/lib/graph-serializers";
+import { annotateMemberCounts } from "@/lib/group-member-counts";
 import {
   getAgentsInScope,
   getAgentsByType,
@@ -126,7 +127,7 @@ export async function fetchGroupsByLocaleIds(localeIds: string[], limit = 100): 
       return typeof metadata.placeType !== "string";
     });
 
-    return agents.slice(0, limit).map(serializeAgent);
+    return await annotateMemberCounts(agents.slice(0, limit).map(serializeAgent));
   } catch (error) {
     console.error("[fetchGroupsByLocaleIds] failed:", error);
     return [];

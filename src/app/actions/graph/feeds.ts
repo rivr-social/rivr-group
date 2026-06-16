@@ -8,6 +8,7 @@ import {
   serializeResource,
 } from "@/lib/graph-serializers";
 import type { SerializedAgent } from "@/lib/graph-serializers";
+import { annotateMemberCounts } from "@/lib/group-member-counts";
 import { q } from "@/lib/graph-query";
 import {
   getAgent,
@@ -227,7 +228,7 @@ export async function fetchHomeFeed(limit = 20) {
 
   return {
     people: visiblePeople.map(serializeAgent),
-    groups: [...visibleGroups.map(serializeAgent), ...resourceGroupAgents],
+    groups: await annotateMemberCounts([...visibleGroups.map(serializeAgent), ...resourceGroupAgents]),
     events: resourceEventAgents,
     places: visiblePlaces.map(serializeAgent),
     projects: [...visibleProjects.map(serializeAgent), ...resourceProjectAgents],
@@ -355,7 +356,7 @@ export async function fetchScopedHomeFeed(scopeId: string, limit = 20) {
 
   return {
     people: visiblePeople.map(serializeAgent),
-    groups: filteredGroups.map(serializeAgent),
+    groups: await annotateMemberCounts(filteredGroups.map(serializeAgent)),
     events: visibleEvents.map(serializeAgent),
     places: visiblePlaces.map(serializeAgent),
     projects: visibleProjects.map(serializeAgent),

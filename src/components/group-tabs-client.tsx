@@ -78,8 +78,24 @@ export interface GroupTabsClientProps {
   currentUserId: string | null
   membershipPlans: MembershipPlan[]
   members: Array<{ id: string; name: string; username?: string; image?: string | null }>
+  /**
+   * Owner agents for posts/events/listings whose authors are NOT in the
+   * member roster (marketplace-offer owners, federated authors, former or
+   * not-yet-rostered members). Resolving against this in addition to
+   * `members` prevents the "Unknown User" / /profile/unknown fallback. Optional:
+   * when omitted the component degrades to member-only author resolution.
+   */
+  authors?: Array<{ id: string; name: string; username?: string; image?: string | null }>
   groupPostResources: SerializedResource[]
   eventResources: SerializedResource[]
+  /**
+   * Server-resolved event start/end ISO timestamps keyed by event id. Computed
+   * via the canonical event-window contract (lib/calendar/event-window) on the
+   * server so the card/calendar window matches the event-detail page exactly.
+   * Composition is runtime-local wall-clock (server = UTC); display surfaces
+   * render these back in UTC. Falls back to raw metadata when an id is absent.
+   */
+  eventWindows?: Record<string, { start: string; end: string }>
   domainGroups: Array<{ id: string; name: string; description: string | null }>
   affiliatedGroups: unknown[]
   projectJobTrees: ProjectJobTree[]
@@ -114,8 +130,10 @@ export function GroupTabsClient({
   currentUserId,
   membershipPlans,
   members,
+  authors = [],
   groupPostResources,
   eventResources,
+  eventWindows = {},
   domainGroups,
   affiliatedGroups,
   projectJobTrees,
@@ -196,6 +214,9 @@ export function GroupTabsClient({
     () =>
       eventResources.map((r) => {
         const meta = r.metadata ?? {}
+        // Prefer the server-resolved canonical window (matches the event-detail
+        // page); fall back to raw metadata only when no window was provided.
+        const win = eventWindows[r.id]
         return {
           id: r.id,
           name: r.name,
@@ -205,8 +226,8 @@ export function GroupTabsClient({
             address: String(meta.location ?? ""),
           },
           timeframe: {
-            start: String(meta.date ?? meta.startDate ?? r.createdAt),
-            end: String(meta.endDate ?? meta.date ?? r.createdAt),
+            start: win?.start ?? String(meta.date ?? meta.startDate ?? r.createdAt),
+            end: win?.end ?? String(meta.endDate ?? meta.date ?? r.createdAt),
           },
           image: String(meta.image ?? "/placeholder.svg"),
           price: typeof meta.price === "number" ? meta.price : 0,
@@ -215,7 +236,7 @@ export function GroupTabsClient({
           creator: r.ownerId,
         }
       }),
-    [eventResources]
+    [eventResources, eventWindows]
   )
 
   const peopleUsers: User[] = useMemo(
@@ -345,7 +366,16 @@ export function GroupTabsClient({
     [members]
   )
 
-  const membersById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
+  // Resolve display identities against members first, then the hydrated
+  // author agents (post/event/listing owners who aren't in the roster).
+  // This is the lookup that keeps non-member authors from rendering as
+  // "Unknown User" while still preferring roster data when both exist.
+  const membersById = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; username?: string; image?: string | null }>()
+    for (const a of authors) map.set(a.id, a)
+    for (const m of members) map.set(m.id, m)
+    return map
+  }, [members, authors])
 
   const getUser = (userId: string): User => {
     const m = membersById.get(userId)
@@ -359,7 +389,17 @@ export function GroupTabsClient({
         following: 0,
       }
     }
-    return { id: userId, name: "Unknown User", username: "unknown", avatar: "/placeholder-user.jpg", followers: 0, following: 0 }
+    // Last resort only when the owner id could not be hydrated to an agent.
+    // Keep the real id as the username so the profile link still resolves to a
+    // real record instead of the dead /profile/unknown route.
+    return {
+      id: userId,
+      name: "Unknown User",
+      username: userId || "unknown",
+      avatar: "/placeholder-user.jpg",
+      followers: 0,
+      following: 0,
+    }
   }
 
   const handleSharePost = async (postId: string) => {
@@ -413,6 +453,7 @@ export function GroupTabsClient({
           projectResources={projectResources}
           jobResources={jobResources}
           groupName={groupName}
+          eventWindows={eventWindows}
         />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="lg:col-span-2">

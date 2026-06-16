@@ -3,7 +3,8 @@ import Image from "next/image"
 import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import { Calendar, MapPin, Users, Video, Ticket } from "lucide-react"
-import { fetchEventDetail, fetchAgent } from "@/app/actions/graph"
+import { fetchEventDetail, fetchAgent, fetchAgentsByIds } from "@/app/actions/graph"
+import { isUuid } from "@/app/actions/graph/types"
 import { fetchEventRsvpCount, fetchEventAttendees } from "@/app/actions/interactions"
 import { agentToEvent } from "@/lib/graph-adapters"
 import { buildResourcePageMetadata } from "@/lib/object-metadata"
@@ -172,6 +173,31 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
 
   // When creator and organizer are the same person, reuse the organizer fetch.
   const resolvedCreator = creatorId === organizerId ? organizer : creator
+
+  // "Going" counters must reflect only the going-status attendees so the number
+  // tracks the going-only avatar stack and drops when a viewer switches
+  // Going→Interested. `rsvpCount` is the total RSVP count (going + interested)
+  // and stays reserved for the explicit "people have RSVP'd" total statement.
+  const goingCount = attendees.filter((a) => a.status === "going").length
+
+  // Resolve raw place-agent UUIDs in the event's chapter tags to human names so
+  // the "Chapters" sidebar shows "Boulder" instead of an opaque id. Tags that
+  // are UUIDs with no resolved name are dropped rather than leaked.
+  const eventChapterTags = (event.chapterTags ?? []) as string[]
+  const chapterTagUuids = eventChapterTags.filter((tag) => isUuid(tag))
+  const chapterTagAgents = chapterTagUuids.length > 0
+    ? await fetchAgentsByIds(chapterTagUuids).catch(() => [])
+    : []
+  const chapterTagLabels: Record<string, string> = {}
+  for (const agentRow of chapterTagAgents) {
+    if (agentRow?.id && agentRow.name) chapterTagLabels[agentRow.id] = agentRow.name
+  }
+  const displayChapterTags = eventChapterTags.flatMap((tag) => {
+    const label = chapterTagLabels[tag]
+    if (label && label.trim().length > 0) return [{ tag, label: label.trim() }]
+    if (isUuid(tag)) return []
+    return [{ tag, label: tag }]
+  })
   const structuredData = buildEventStructuredData(event, {
     visibility: agent.visibility ?? null,
     organizerName: organizer?.name ?? undefined,
@@ -257,7 +283,7 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
           <div className="bg-background rounded-lg border p-4">
             <p className="font-medium mb-2">
               <Users className="inline h-4 w-4 mr-1" />
-              {rsvpCount} Going
+              {goingCount} Going
             </p>
             {rsvpCount === 0 ? (
               <p className="text-sm text-muted-foreground">No RSVPs yet. Be the first!</p>
@@ -293,13 +319,13 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
           ) : null}
 
           {/* Chapter tags */}
-          {event.chapterTags && event.chapterTags.length > 0 ? (
+          {displayChapterTags.length > 0 ? (
             <div className="bg-background rounded-lg border p-4">
               <p className="text-sm text-muted-foreground mb-2">Chapters</p>
               <div className="flex flex-wrap gap-2">
-                {event.chapterTags.map((tag) => (
+                {displayChapterTags.map(({ tag, label }) => (
                   <Badge key={tag} variant="outline" className="bg-blue-50 text-blue-700">
-                    {tag}
+                    {label}
                   </Badge>
                 ))}
               </div>
@@ -388,7 +414,7 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
           <EventDetailTabs
             eventId={event.id}
             description={event.description}
-            rsvpCount={rsvpCount}
+            goingCount={goingCount}
             attendees={attendees}
             ownerId={ownerId}
           />

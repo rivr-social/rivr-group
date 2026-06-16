@@ -17,6 +17,9 @@ import { useToast } from "@/components/ui/use-toast"
 import { updateGroupImageAction } from "@/app/actions/settings"
 import { GroupEditModal } from "@/components/group-edit-modal"
 
+/** UUID pattern used to keep opaque place-agent ids out of the rendered chips. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 interface GroupProfileHeaderProps {
   groupId: string
   name: string
@@ -25,7 +28,19 @@ interface GroupProfileHeaderProps {
   coverImage: string
   location: string
   memberCount: number
+  /**
+   * Raw chapter/locale association tags. These are persisted verbatim (often
+   * place-agent UUIDs) and are passed unchanged to the edit modal so saves
+   * round-trip the real ids. For *display*, see `tagLabels` and the UUID guard
+   * in the badge list — raw UUIDs are never shown to the user.
+   */
   tags: string[]
+  /**
+   * Optional map of raw tag id → human-readable label (e.g. a resolved locale
+   * /chapter name). When a tag is a raw UUID with no entry here it is omitted
+   * from the rendered badges rather than leaked as an opaque identifier.
+   */
+  tagLabels?: Record<string, string>
   isAdmin: boolean
   children?: React.ReactNode
   /** Group type string for conditional edit modal fields. */
@@ -43,6 +58,7 @@ export function GroupProfileHeader({
   location,
   memberCount,
   tags,
+  tagLabels,
   isAdmin,
   children,
   groupType,
@@ -55,6 +71,15 @@ export function GroupProfileHeader({
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
+
+  // Resolve each raw tag to a human label, dropping any opaque UUID that has no
+  // resolved name so place-agent identifiers never leak into the chip row.
+  const displayTags = tags.flatMap((tag) => {
+    const label = tagLabels?.[tag]
+    if (label && label.trim().length > 0) return [{ tag, label: label.trim() }]
+    if (UUID_RE.test(tag)) return []
+    return [{ tag, label: tag }]
+  })
 
   const handleImageUpload = useCallback(async (field: "avatar" | "coverImage", file: File) => {
     const setLoading = field === "avatar" ? setUploadingAvatar : setUploadingCover
@@ -189,10 +214,10 @@ export function GroupProfileHeader({
             )}
           </div>
 
-          {tags.length > 0 && (
+          {displayTags.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {tags.map((tag) => (
-                <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+              {displayTags.map(({ tag, label }) => (
+                <Badge key={tag} variant="secondary" className="text-xs">{label}</Badge>
               ))}
             </div>
           )}

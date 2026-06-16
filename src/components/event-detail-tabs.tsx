@@ -24,8 +24,8 @@ interface EventDetailTabsProps {
   eventId: string
   /** Pre-rendered event description HTML or text for the About tab. */
   description: string
-  /** RSVP count displayed in the Attendees tab header. */
-  rsvpCount: number
+  /** Going-status attendee count displayed in the Attendees tab "Going" header. */
+  goingCount: number
   /** List of attendees who have RSVP'd to the event. */
   attendees: EventAttendee[]
   /** Owner/creator id for admin-gated features (e.g. Announcements tab). */
@@ -42,7 +42,7 @@ interface EventDetailTabsProps {
  * @param props - Tab configuration with event context data.
  * @returns Four-panel tab interface for the event detail page.
  */
-export function EventDetailTabs({ eventId, description, rsvpCount, attendees, ownerId }: EventDetailTabsProps) {
+export function EventDetailTabs({ eventId, description, goingCount, attendees, ownerId }: EventDetailTabsProps) {
   const [activeTab, setActiveTab] = useState("about")
   const [eventAnnouncements, setEventAnnouncements] = useState<unknown[]>([])
   const { data: session } = useSession()
@@ -92,7 +92,7 @@ export function EventDetailTabs({ eventId, description, rsvpCount, attendees, ow
           </TabsContent>
 
           <TabsContent value="attendees" className="mt-0">
-            <h2 className="text-xl font-semibold mb-4">{rsvpCount} Going</h2>
+            <h2 className="text-xl font-semibold mb-4">{goingCount} Going</h2>
             {attendees.length > 0 ? (
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
                 {attendees.map((attendee) => (

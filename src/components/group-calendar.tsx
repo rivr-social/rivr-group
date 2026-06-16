@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -52,6 +52,30 @@ interface GroupCalendarProps {
   projectResources: SerializedResource[]
   jobResources: SerializedResource[]
   groupName: string
+  /**
+   * Server-resolved event start/end ISO timestamps (canonical event-window
+   * contract) keyed by event id. Used in preference to raw metadata so calendar
+   * placement and times match the event-detail page. Falls back to metadata
+   * extraction when an id is absent.
+   */
+  eventWindows?: Record<string, { start: string; end: string }>
+}
+
+/**
+ * Re-expresses a UTC ISO instant as a no-`Z` local wall-clock string
+ * (`YYYY-MM-DDTHH:MM:00`). The event-window contract composes times as
+ * server-local (UTC) wall-clock; the calendar's grid math reads local
+ * date/time getters. Extracting the instant's UTC components (identical on
+ * every machine) and rebuilding them as a local string makes `new Date(...)`
+ * + local getters/`toLocaleTimeString` recover the organizer's entered
+ * wall-clock identically on server and client — TZ-invariant, so there is no
+ * hydration drift and no off-by-a-day, and it matches the detail page.
+ */
+const utcInstantToLocalWallClock = (iso: string): string | null => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`
 }
 
 // ── Helpers ──
@@ -99,10 +123,19 @@ export function GroupCalendar({
   projectResources,
   jobResources,
   groupName,
+  eventWindows = {},
 }: GroupCalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [viewMode, setViewMode] = useState<"month" | "week">("month")
+  // "Today" is derived from the client clock/timezone. Computing it during the
+  // initial render (server in UTC vs client local) made the today-cell's
+  // className diverge between SSR and hydration, throwing React #418. We hold it
+  // null until mount so both renders agree (no highlight), then set it client-side.
+  const [today, setToday] = useState<Date | null>(null)
+  useEffect(() => {
+    setToday(new Date())
+  }, [])
 
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth()
@@ -111,23 +144,31 @@ export function GroupCalendar({
   const allCalendarItems = useMemo(() => {
     const items: CalendarItem[] = []
 
+    // All calendar dates are normalized to a TZ-invariant local wall-clock so
+    // placement and times are identical on server and client (no #418) and never
+    // shift a day across timezones, regardless of whether the source is a Z-ISO
+    // instant, a server-resolved event window, or a date-only metadata string.
     for (const r of eventResources) {
-      const dateStr = extractDate(r, "date", "startDate", "start")
+      // Prefer the server-resolved window (matches the detail page).
+      const raw = eventWindows[r.id]?.start ?? extractDate(r, "date", "startDate", "start")
+      const dateStr = raw ? utcInstantToLocalWallClock(raw) ?? raw : null
       if (dateStr) items.push(toCalendarItem(r, "event", dateStr, "events"))
     }
 
     for (const r of projectResources) {
-      const dateStr = extractDate(r, "startDate", "deadline", "date") ?? r.createdAt
+      const raw = extractDate(r, "startDate", "deadline", "date") ?? r.createdAt
+      const dateStr = utcInstantToLocalWallClock(raw) ?? raw
       if (dateStr) items.push(toCalendarItem(r, "project", dateStr, "projects"))
     }
 
     for (const r of jobResources) {
-      const dateStr = extractDate(r, "deadline", "startDate", "date") ?? r.createdAt
+      const raw = extractDate(r, "deadline", "startDate", "date") ?? r.createdAt
+      const dateStr = utcInstantToLocalWallClock(raw) ?? raw
       if (dateStr) items.push(toCalendarItem(r, "job", dateStr, "jobs"))
     }
 
     return items
-  }, [eventResources, projectResources, jobResources])
+  }, [eventResources, projectResources, jobResources, eventWindows])
 
   // Calendar grid calculation
   const firstDayOfMonth = new Date(year, month, 1)
@@ -264,7 +305,7 @@ export function GroupCalendar({
                 </div>
                 <div className="grid grid-cols-7 gap-1">
                   {calendarDays.map((dayData, index) => {
-                    const isToday = dayData?.date.toDateString() === new Date().toDateString()
+                    const isToday = !!today && dayData?.date.toDateString() === today.toDateString()
                     const isSelected = selectedDate && dayData?.date.toDateString() === selectedDate.toDateString()
                     return (
                       <div
@@ -316,7 +357,7 @@ export function GroupCalendar({
               <div className="grid grid-cols-7 gap-2">
                 {weekDays.map((day, index) => {
                   const dayItems = weekItems.filter((item) => item.date.toDateString() === day.toDateString())
-                  const isToday = day.toDateString() === new Date().toDateString()
+                  const isToday = !!today && day.toDateString() === today.toDateString()
                   const isSelected = selectedDate?.toDateString() === day.toDateString()
                   return (
                     <div key={index} className="border rounded-lg">

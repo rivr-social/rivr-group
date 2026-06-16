@@ -9,8 +9,10 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import { MessageSquare, Settings } from "lucide-react"
-import { fetchAgentFeed, fetchGroupDetail } from "@/app/actions/graph"
+import { fetchAgentFeed, fetchGroupDetail, fetchAgentsByIds } from "@/app/actions/graph"
 import { agentToGroup, agentToUser } from "@/lib/graph-adapters"
+import { isUuid } from "@/app/actions/graph/types"
+import { resolveEventWindow } from "@/lib/calendar/event-window"
 import { readGroupMembershipPlans } from "@/lib/group-memberships"
 import { buildGroupPageMetadata } from "@/lib/object-metadata"
 import { AgentPageShell } from "@/components/agent-page-shell"
@@ -72,6 +74,20 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     return r.type === "event" || meta.resourceKind === "event"
   })
+  // Resolve each event's canonical start/end window server-side (the helper is
+  // runtime-local and only correct on the server/UTC), so the card + calendar
+  // render the same schedule as the event-detail page instead of re-deriving
+  // from raw metadata and dropping the time / shifting the day in the browser.
+  const eventWindows: Record<string, { start: string; end: string }> = {}
+  for (const r of eventResources) {
+    const win = resolveEventWindow((r.metadata ?? {}) as Record<string, unknown>)
+    if (win.start) {
+      eventWindows[r.id] = {
+        start: win.start.toISOString(),
+        end: (win.end ?? win.start).toISOString(),
+      }
+    }
+  }
   const groupPostResources = detail.resources.filter((r) => {
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     return r.type === "post" || r.type === "note" || String(meta.entityType ?? "") === "post"
@@ -87,6 +103,41 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
       && (typeof meta.listingType === "string" || String(meta.listingKind ?? "").toLowerCase() === "marketplace-listing")
     )
   })
+  // Hydrate owner agents for posts/events/listings whose authors are NOT in
+  // the member roster (marketplace-offer owners, federated authors, members
+  // missing from the roster). Without this the feed resolves authors only
+  // against members and falls back to "Unknown User" / /profile/unknown.
+  const memberIdSet = new Set(members.map((m) => m.id))
+  const authorIds = Array.from(
+    new Set(
+      [...groupPostResources, ...eventResources, ...listingResources]
+        .map((r) => r.ownerId)
+        .filter((ownerId): ownerId is string =>
+          typeof ownerId === "string" && ownerId.length > 0 && !memberIdSet.has(ownerId)
+        )
+    )
+  )
+  const authorAgents = authorIds.length > 0 ? await fetchAgentsByIds(authorIds).catch(() => []) : []
+  const authors = authorAgents.map(agentToUser).map((u) => ({
+    id: u.id,
+    name: u.name,
+    username: u.username,
+    image: u.avatar,
+  }))
+
+  // Resolve raw place-agent UUIDs in chapterTags to human names so the header
+  // renders "Boulder" instead of an opaque id. Unresolved UUIDs are dropped at
+  // render time by GroupProfileHeader's UUID guard.
+  const chapterTags = (group.chapterTags ?? []) as string[]
+  const chapterTagUuids = chapterTags.filter((tag) => isUuid(tag))
+  const chapterTagAgents = chapterTagUuids.length > 0
+    ? await fetchAgentsByIds(chapterTagUuids).catch(() => [])
+    : []
+  const tagLabels: Record<string, string> = {}
+  for (const agentRow of chapterTagAgents) {
+    if (agentRow?.id && agentRow.name) tagLabels[agentRow.id] = agentRow.name
+  }
+
   const governanceItems = [
     ...(((groupMeta.proposals as unknown[]) ?? []) as unknown[]),
     ...(((groupMeta.polls as unknown[]) ?? []) as unknown[]),
@@ -217,6 +268,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
       location={groupLocationText}
       memberCount={members.length || group.memberCount || 0}
       tags={group.chapterTags ?? []}
+      tagLabels={tagLabels}
       isAdmin={isGroupAdmin}
       groupType={canonicalGroupType}
       commissionBps={typeof groupMeta.commissionBps === "number" ? groupMeta.commissionBps as number : undefined}
@@ -275,8 +327,10 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         currentUserId={currentUserId}
         membershipPlans={membershipPlans}
         members={members.map((m) => ({ id: m.id, name: m.name, username: m.username, image: m.avatar }))}
+        authors={authors}
         groupPostResources={groupPostResources}
         eventResources={eventResources}
+        eventWindows={eventWindows}
         domainGroups={domainGroups.map((d) => ({ id: d.id, name: d.name, description: d.description }))}
         affiliatedGroups={affiliatedGroupsRaw}
         projectJobTrees={projectJobTrees}

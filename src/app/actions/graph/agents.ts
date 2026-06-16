@@ -3,6 +3,7 @@
 import type { Agent, AgentType } from "@/db/schema";
 import { q } from "@/lib/graph-query";
 import type { SerializedAgent } from "@/lib/graph-serializers";
+import { annotateMemberCounts } from "@/lib/group-member-counts";
 
 /**
  * Fetches a single agent by id if the current actor is authenticated and authorized to view it.
@@ -77,12 +78,13 @@ export async function fetchPeople(limit = 50): Promise<SerializedAgent[]> {
  */
 export async function fetchGroups(limit = 50): Promise<SerializedAgent[]> {
   try {
-    return await q("optional", { table: "agents", fn: "getAgentsByType", type: "organization", limit }, {
+    const groups: SerializedAgent[] = await q("optional", { table: "agents", fn: "getAgentsByType", type: "organization", limit }, {
       postFilter: (items) => (items as Agent[]).filter((agent) => {
         const metadata = (agent.metadata ?? {}) as Record<string, unknown>;
         return typeof metadata.placeType !== "string";
       }),
     });
+    return await annotateMemberCounts(groups);
   } catch (error) {
     console.error("[fetchGroups] permission filter failed:", error);
     return [];

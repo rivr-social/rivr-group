@@ -115,6 +115,12 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
   const [isGlobalPost, setIsGlobalPost] = useState(true)
   const [shouldFederate, setShouldFederate] = useState(false)
   const [federationState, setFederationState] = useState<FederationState>({ status: "idle" })
+  // Synchronous mirror of federationState.status. The federation-probe effect
+  // reads this instead of depending on federationState.status directly — see
+  // the comment on that effect for why listing the status as a dep self-cancels
+  // the in-flight fetch and freezes the toggle on "Checking your federation node…".
+  const federationStatusRef = useRef<FederationState["status"]>("idle")
+  federationStatusRef.current = federationState.status
   // Link-preview state: embeds currently attached to the draft post, keyed by URL.
   // `pendingUrls` tracks URLs we've started fetching so we don't double-request.
   // `dismissedUrls` remembers URLs the user explicitly removed so we don't
@@ -151,8 +157,14 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
     onLocaleChange(primaryLocale)
   }, [onLocaleChange, selectedLocale, visibilityScope.localeIds])
 
+  // Probe the federation node once per expansion. We intentionally depend ONLY
+  // on isExpanded and read the current status from a ref: if federationState.status
+  // were a dependency, the setFederationState({ status: "loading" }) below would
+  // re-run this effect, whose cleanup flips `cancelled = true` and aborts the
+  // in-flight fetch before it can resolve — leaving the UI stuck on "Checking
+  // your federation node…" forever.
   useEffect(() => {
-    if (!isExpanded || federationState.status !== "idle") return
+    if (!isExpanded || federationStatusRef.current !== "idle") return
 
     let cancelled = false
     setFederationState({ status: "loading" })
@@ -195,7 +207,7 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
     return () => {
       cancelled = true
     }
-  }, [federationState.status, isExpanded])
+  }, [isExpanded])
 
   useEffect(() => {
     if (!isExpanded || postType !== PostType.Gratitude) return
