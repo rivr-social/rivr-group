@@ -34,8 +34,11 @@
  */
 
 import { cookies } from "next/headers";
+import { eq } from "drizzle-orm";
 
 import { auth } from "@/auth";
+import { db } from "@/db";
+import { agents } from "@/db/schema";
 import {
   REMOTE_VIEWER_COOKIE_NAME,
   decodeRemoteViewerSession,
@@ -100,12 +103,38 @@ async function readFederatedSession(): Promise<UnifiedSession | null> {
   const payload = decodeRemoteViewerSession(raw, secret);
   if (!payload) return null;
 
+  // Enrich the federated session from the local projected agent row. The
+  // remote-viewer cookie deliberately carries only identity/authority claims
+  // (actorId, homeBaseUrl, versions) and no display fields, but the actor
+  // exists locally as a projection/mirror of their home identity whose name and
+  // avatar are synced from the home instance. Without this, a federated login
+  // ("Have a home instance?" SSO) would always fall back to an initials /
+  // "Federated agent (...)" placeholder badge in the UI even though the user's
+  // avatar is known. Best-effort: a missing/partial projection just yields null.
+  let name: string | null = null;
+  let image: string | null = null;
+  let email: string | null = null;
+  try {
+    const [agent] = await db
+      .select({ name: agents.name, image: agents.image, email: agents.email })
+      .from(agents)
+      .where(eq(agents.id, payload.actorId))
+      .limit(1);
+    if (agent) {
+      name = agent.name ?? null;
+      image = agent.image ?? null;
+      email = agent.email ?? null;
+    }
+  } catch {
+    /* best-effort: never fail session resolution on a projection lookup */
+  }
+
   return {
     user: {
       id: payload.actorId,
-      email: null,
-      name: null,
-      image: null,
+      email,
+      name,
+      image,
       homeBaseUrl: payload.homeBaseUrl,
       authMethod: "federated",
     },
