@@ -6,6 +6,7 @@ import type { Metadata } from "next"
 import { buildPostStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import type { MarketplaceListing, Post } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
+import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
 
 async function getPostPageData(id: string) {
   const detail = await fetchPostDetail(id)
@@ -53,6 +54,12 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
   if (!data) {
     notFound()
   }
+
+  // Universal Manifest v0.4: bounce federated mirrors of sovereign-homed
+  // resources to their canonical origin so the authoritative copy renders.
+  await redirectIfSovereignResource(id, {
+    metadata: (data.detail.resource.metadata ?? null) as Record<string, unknown> | null,
+  })
 
   const structuredData = buildPostStructuredData(data.post, {
     visibility: data.detail.resource.visibility ?? (data.detail.resource.isPublic ? "public" : "private"),

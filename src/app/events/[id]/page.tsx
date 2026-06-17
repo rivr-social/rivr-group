@@ -17,6 +17,8 @@ import { EventToolbar } from "@/components/event-toolbar"
 import { EventDetailTabs } from "@/components/event-detail-tabs"
 import { buildEventStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { isTranscriptionConfigured } from "@/lib/transcription"
+import { getResource } from "@/lib/queries/resources"
+import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
 
 /**
  * Event detail page with a two-column layout matching the demo design.
@@ -132,12 +134,27 @@ function getInitials(name: string): string {
 export default async function EventDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
 
+  // UM source-routing: if this id is a federated MIRROR of a sovereign-homed
+  // resource, bounce to the canonical origin before doing any local work.
+  const preflightResource = await getResource(id).catch(() => null)
+  if (preflightResource) {
+    await redirectIfSovereignResource(id, {
+      metadata: preflightResource.metadata as Record<string, unknown> | null,
+    })
+  }
+
   // Fetch event data on the server before rendering the page.
   const agent = await fetchEventDetail(id)
 
   if (!agent) {
     notFound()
   }
+
+  // Re-check against the resolved event's own metadata in case the resource
+  // preflight missed the externalEntityId carried on the event agent.
+  await redirectIfSovereignResource(id, {
+    metadata: (agent.metadata ?? {}) as Record<string, unknown>,
+  })
 
   // Normalize graph data into the UI event shape.
   const event = agentToEvent(agent)

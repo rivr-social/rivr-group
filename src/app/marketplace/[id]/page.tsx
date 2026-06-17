@@ -6,6 +6,7 @@ import { resourceToMarketplaceListing } from "@/lib/graph-adapters"
 import { buildObjectMetadata } from "@/lib/object-metadata"
 import { buildOfferStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { getPrimaryListingImage } from "@/lib/listing-images"
+import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
 
 async function getMarketplacePageData(id: string) {
   const detail = await fetchMarketplaceListingById(id)
@@ -40,6 +41,13 @@ export default async function MarketplaceItemPage({ params }: { params: Promise<
   if (!data) {
     notFound()
   }
+
+  // Universal Manifest v0.4: if this listing is a federated mirror of a
+  // sovereign-homed resource, bounce to the canonical origin so the
+  // authoritative price, inventory, fee config, and settlement run there.
+  await redirectIfSovereignResource(id, {
+    metadata: (data.detail.resource.metadata ?? null) as Record<string, unknown> | null,
+  })
 
   const structuredData = buildOfferStructuredData(data.listing, {
     visibility: data.detail.resource.visibility ?? (data.detail.resource.isPublic ? "public" : "private"),

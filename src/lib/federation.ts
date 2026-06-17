@@ -23,6 +23,11 @@ import {
 import { generatePeerSecret } from "@/lib/federation-auth";
 import { logFederationAudit } from "@/lib/federation-audit";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
+import {
+  buildResourceManifestReferenceInput,
+  tombstoneManifestReference,
+  upsertManifestReference,
+} from "@/lib/federation/manifest-references";
 import { isGroupMember } from "@/app/actions/group-admin";
 
 /**
@@ -1179,6 +1184,49 @@ export async function importFederationEvents(params: {
 
         // Bind the imported event to the local owner agent for audit.
         importRecord.actorId = localOwnerId;
+
+        // Universal Manifest v0.4: record a reference-mode pointer beside the
+        // mirror row so this instance participates in reference-mode discovery
+        // and resource detail/checkout pages can redirect to the sovereign
+        // origin. Best-effort — a failure here never blocks the mirror import.
+        const remoteOwnerName =
+          (typeof payload.authorName === "string" && payload.authorName.trim()) ||
+          (typeof payload.ownerName === "string" && payload.ownerName.trim()) ||
+          null;
+        const referenceResult = await upsertManifestReference(
+          buildResourceManifestReferenceInput({
+            originNodeId: peerNode.id,
+            originBaseUrl: peerNode.baseUrl,
+            originNodeSlug: peerNode.slug,
+            externalEntityId: externalId,
+            localEntityId: localId,
+            // The federation_events row is bulk-inserted after this loop, so it
+            // does not exist yet — leave the FK null rather than reference an
+            // unsaved row.
+            sourceFederationEventId: null,
+            manifestVersion: event.eventVersion ?? null,
+            payload: payload as Record<string, unknown>,
+            resourceType: type,
+            visibility: event.visibility,
+            title: name,
+            description: typeof payload.description === "string" ? payload.description : null,
+            tags: Array.isArray(payload.tags) ? (payload.tags as string[]) : [],
+            ownerId: externalOwnerId,
+            ownerName: remoteOwnerName,
+          }),
+        ).catch((error) => {
+          console.warn(
+            `[federation] manifest_reference upsert failed for resource=${externalId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return undefined;
+        });
+        if (referenceResult?.status === "stale") {
+          console.warn(
+            `[federation] skipped stale manifest_reference upsert for resource=${externalId}: ${referenceResult.reason}`,
+          );
+        }
       }
     }
 
@@ -1213,6 +1261,29 @@ export async function importFederationEvents(params: {
         // No-op when no mapping exists: the local mirror was never
         // created, so there is nothing to soft-delete. The federation
         // event itself is still persisted above for audit.
+
+        // Universal Manifest v0.4: tombstone the reference-mode pointer so
+        // discovery surfaces and origin-redirects stop resolving the removed
+        // resource, independent of whether a local mirror existed.
+        const tombstoneResult = await tombstoneManifestReference({
+          originNodeId: peerNode.id,
+          externalEntityId: externalId,
+          entityType: "resource",
+          manifestVersion: event.eventVersion ?? null,
+          sourceFederationEventId: null,
+        }).catch((error) => {
+          console.warn(
+            `[federation] manifest_reference tombstone failed for resource=${externalId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return undefined;
+        });
+        if (tombstoneResult?.status === "stale") {
+          console.warn(
+            `[federation] skipped stale manifest_reference tombstone for resource=${externalId}: ${tombstoneResult.reason}`,
+          );
+        }
       }
     }
   }

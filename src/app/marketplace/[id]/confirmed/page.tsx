@@ -8,10 +8,18 @@ import { fetchMarketplaceListingById } from "@/app/actions/graph"
 import { resourceToMarketplaceListing } from "@/lib/graph-adapters"
 import { getPrimaryListingImage } from "@/lib/listing-images"
 import { formatMarketplaceListingTypeLabel } from "@/lib/listing-types"
+import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
 
 export default async function MarketplaceItemConfirmedPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = await params
   const detail = await fetchMarketplaceListingById(resolvedParams.id)
+
+  // UM source-routing: a mirror's confirmation page must run on the source
+  // instance so the authoritative receipt/settlement render where it owns.
+  await redirectIfSovereignResource(resolvedParams.id, {
+    metadata: detail?.resource.metadata as Record<string, unknown> | null,
+    subPath: "/confirmed",
+  })
 
   if (!detail?.owner) {
     notFound()

@@ -730,6 +730,73 @@ export const federationEvents = pgTable(
 );
 
 /**
+ * Manifest references - lightweight pointers to canonical remote objects.
+ *
+ * This is the additive Universal Manifest v0.4 index used to avoid relying on
+ * full object copies for federated discovery. The federation materializer can
+ * continue to write compatibility shadow rows into `resources` while this table
+ * records the canonical origin, manifest/status pointers, trust tiers, and
+ * disclosed card/search metadata.
+ */
+export const manifestReferences = pgTable(
+  'manifest_references',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    originNodeId: uuid('origin_node_id').notNull().references(() => nodes.id),
+    externalEntityId: text('external_entity_id').notNull(),
+    localEntityId: uuid('local_entity_id'),
+    entityType: text('entity_type').notNull(),
+    manifestUrl: text('manifest_url'),
+    manifestId: text('manifest_id'),
+    manifestVersion: integer('manifest_version'),
+    manifestHash: text('manifest_hash'),
+    contentHash: text('content_hash'),
+    canonicalUrl: text('canonical_url'),
+    statusRef: text('status_ref'),
+    requiredTrustTier: integer('required_trust_tier').default(0).notNull(),
+    trustTier: integer('trust_tier').default(0).notNull(),
+    status: text('status', {
+      enum: ['active', 'tombstoned', 'revoked', 'expired'],
+    }).notNull().default('active'),
+    facetSummary: jsonb('facet_summary').$type<Record<string, unknown>>().default({}).notNull(),
+    encryptedFacetSummary: jsonb('encrypted_facet_summary').$type<Record<string, unknown>>().default({}).notNull(),
+    sourceFederationEventId: uuid('source_federation_event_id').references(() => federationEvents.id),
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('manifest_references_origin_external_type_idx').on(
+      table.originNodeId,
+      table.externalEntityId,
+      table.entityType
+    ),
+    index('manifest_references_origin_node_idx').on(table.originNodeId),
+    index('manifest_references_local_entity_idx').on(table.localEntityId),
+    index('manifest_references_entity_type_idx').on(table.entityType),
+    index('manifest_references_status_idx').on(table.status),
+    index('manifest_references_last_seen_idx').on(table.lastSeenAt),
+  ]
+);
+
+export const manifestReferencesRelations = relations(manifestReferences, ({ one }) => ({
+  originNode: one(nodes, {
+    fields: [manifestReferences.originNodeId],
+    references: [nodes.id],
+  }),
+  sourceFederationEvent: one(federationEvents, {
+    fields: [manifestReferences.sourceFederationEventId],
+    references: [federationEvents.id],
+  }),
+}));
+
+export type ManifestReferenceRecord = typeof manifestReferences.$inferSelect;
+export type NewManifestReferenceRecord = typeof manifestReferences.$inferInsert;
+
+/**
  * Relations
  */
 
