@@ -94,7 +94,6 @@ export async function POST(request: NextRequest) {
     listingId?: string;
     quantity?: number;
     hours?: number;
-    buyerAgentId?: string | null;
     dealPostId?: string | null;
     bookingDate?: string | null;
     bookingSlot?: string | null;
@@ -109,7 +108,11 @@ export async function POST(request: NextRequest) {
   }
 
   const { listingId, quantity = 1, hours = 1 } = body;
-  const buyerAgentId = body.buyerAgentId ?? sessionUserId;
+  // Buyer identity is always derived server-side. Authenticated users get their
+  // session agent ID; guest checkouts get no buyer identity. Never trust a
+  // client-supplied buyer ID (it would let a caller attribute a purchase to
+  // another agent). Mirrors the global hub fix for issue #101.
+  const buyerAgentId = sessionUserId;
   const dealPostId = body.dealPostId ?? null;
   const bookingSelection =
     body.bookingDate && body.bookingSlot

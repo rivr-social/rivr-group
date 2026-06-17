@@ -50,7 +50,7 @@ vi.mock("@/lib/murmurations", () => ({
 }));
 
 vi.mock("@/lib/federation", () => ({
-  getHostedNodeForOwner: vi.fn().mockResolvedValue(null),
+  ensureLocalNode: vi.fn().mockResolvedValue({ id: "local-node-id" }),
   queueEntityExportEvents: vi.fn().mockResolvedValue(undefined),
 }));
 

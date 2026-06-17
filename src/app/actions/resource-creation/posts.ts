@@ -17,7 +17,7 @@ import { getActiveSubscription, hasEntitlement } from "@/lib/billing";
 import { embedResource, scheduleEmbedding } from "@/lib/ai";
 import { getAgent } from "@/lib/queries/agents";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
-import { getHostedNodeForOwner, queueEntityExportEvents } from "@/lib/federation";
+import { ensureLocalNode, queueEntityExportEvents } from "@/lib/federation";
 import { federatedWrite, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
 
 import {
@@ -662,18 +662,11 @@ export async function createPostCommerceResource(input: {
     typeof input.dealDurationHours === "number" && input.dealDurationHours > 0
       ? input.dealDurationHours
       : 24;
-  const federationNode =
-    input.federate === true ? await getHostedNodeForOwner(userId) : null;
-  if (input.federate === true && !federationNode) {
-    return {
-      success: false,
-      message: "Federation is not enabled for this account.",
-      error: {
-        code: "FORBIDDEN",
-        details: "Only hosted-node owners can federate content from this deployment.",
-      },
-    };
-  }
+  // Anchor commerce-post federation on this instance's own self-node so every
+  // public/locale/members post + inline offering circulates to global without
+  // requiring an explicit `federate` flag (normal creates never set it).
+  // queueEntityExportEvents' visibility filter keeps private content local.
+  const federationNode = await ensureLocalNode();
 
   // Paid inline offerings require "seller" tier (or higher).
   if (input.createOffering) {
