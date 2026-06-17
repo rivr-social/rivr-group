@@ -91,9 +91,9 @@ export function UserMenu({ open, onClose }: UserMenuProps) {
     onClose()
   }
 
-  const displayName = session?.user?.name || (remoteViewer ? "Federated user" : "User")
-  const displayEmail = session?.user?.email || (remoteViewer ? new URL(remoteViewer.homeBaseUrl).host : "")
-  const displayImage = session?.user?.image || "/placeholder.svg?height=64&width=64"
+  const displayName = session?.user?.name || remoteViewer?.displayName || (remoteViewer ? "Federated user" : "User")
+  const displayEmail = session?.user?.email || ""
+  const displayImage = session?.user?.image || remoteViewer?.image || "/placeholder.svg?height=64&width=64"
 
   return (
     <Sheet open={open} onOpenChange={onClose}>

@@ -68,7 +68,7 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
   // Session hook provides auth state; status is checked to avoid flashing the
   // Login button while the session is still being resolved on the client.
   const { data: session, status } = useSession()
-  const { remoteViewer, isAuthenticated: remoteAuthenticated } = useRemoteViewer()
+  const { isAuthenticated: remoteAuthenticated } = useRemoteViewer()
 
   // Active persona tracking for avatar overlay indicator
   const [activePersona, setActivePersona] = useState<SerializedAgent | null>(null)
@@ -89,7 +89,6 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
   const displayName = activePersona?.name || session?.user?.name || currentUser?.name
   const displayImage = activePersona?.image || session?.user?.image || currentUser?.avatar
   const authenticated = Boolean(session || remoteAuthenticated)
-  const remoteHomeHost = remoteViewer ? new URL(remoteViewer.homeBaseUrl).host : null
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 w-full border-b bg-background">
@@ -196,9 +195,6 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
                 )}
               </Button>
               <UserMenu open={userMenuOpen} onClose={() => setUserMenuOpen(false)} />
-              {!session && remoteHomeHost ? (
-                <span className="hidden md:inline text-xs text-muted-foreground">{remoteHomeHost}</span>
-              ) : null}
             </>
           ) : status !== "loading" ? (
             <Link href="/auth/login">

@@ -44,9 +44,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
     !sessionUser && remoteViewer
       ? {
           id: remoteViewer.actorId,
-          name: "Federated user",
+          name: remoteViewer.displayName || "Federated user",
           username: remoteViewer.actorId.slice(0, 12).toLowerCase(),
-          avatar: "/placeholder-user.jpg",
+          avatar: remoteViewer.image || "/placeholder-user.jpg",
           followers: 0,
           following: 0,
           role: "federated_viewer",

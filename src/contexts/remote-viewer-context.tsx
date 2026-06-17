@@ -8,6 +8,8 @@ export type RemoteViewerSession = {
   homeBaseUrl: string;
   sessionToken: string;
   viewerState: "remotely_authenticated";
+  displayName: string | null;
+  image: string | null;
 };
 
 type RemoteViewerContextValue = {
@@ -52,7 +54,11 @@ export function RemoteViewerProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const json = (await response.json()) as Partial<RemoteViewerSession> & { success?: boolean };
+      const json = (await response.json()) as Partial<RemoteViewerSession> & {
+        success?: boolean;
+        displayName?: string | null;
+        image?: string | null;
+      };
       if (
         json.success &&
         json.viewerState === "remotely_authenticated" &&
@@ -65,6 +71,8 @@ export function RemoteViewerProvider({ children }: { children: ReactNode }) {
           homeBaseUrl: json.homeBaseUrl,
           sessionToken: json.sessionToken,
           viewerState: "remotely_authenticated",
+          displayName: typeof json.displayName === "string" ? json.displayName : null,
+          image: typeof json.image === "string" ? json.image : null,
         });
       } else {
         setRemoteViewer(null);
