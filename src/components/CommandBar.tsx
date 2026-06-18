@@ -171,12 +171,12 @@ const COMMANDS: CommandDefinition[] = [
   },
   {
     id: "settings",
-    label: "Settings",
-    description: "Open group settings and configuration.",
+    label: "Account Settings",
+    description: "Open account settings and preferences.",
     path: "/settings",
     group: "Navigate",
     icon: Settings,
-    aliases: ["settings", "preferences", "config", "/settings"],
+    aliases: ["settings", "account settings", "preferences", "config", "/settings"],
   },
   {
     id: "badges",
@@ -542,32 +542,17 @@ export function CommandBar({
       );
     }
 
-    if (/^\/docs\/[^/]+$/.test(pathname)) {
-      commands.push(
-        {
-          id: "doc-edit",
-          label: "Edit This Document",
-          description: "Open the editor for the current document.",
-          path: `${pathname}/edit`,
-          group: "Current Page",
-          icon: FileText,
-          aliases: ["edit doc", "edit document"],
-        },
-      );
-    }
-
-    if (/^\/governance\/[^/]+$/.test(pathname)) {
-      commands.push(
-        {
-          id: "proposal-vote",
-          label: "Vote on Proposal",
-          description: "Cast your vote on the current proposal.",
-          path: `${pathname}/vote`,
-          group: "Current Page",
-          icon: Scale,
-          aliases: ["vote", "cast vote"],
-        },
-      );
+    const groupMatch = pathname.match(/^\/groups\/([^/]+)(?:\/settings)?$/);
+    if (groupMatch && !pathname.endsWith("/settings")) {
+      commands.push({
+        id: "group-settings",
+        label: "Group Settings",
+        description: "Open settings for this group.",
+        path: `${pathname}/settings`,
+        group: "Current Page",
+        icon: Settings,
+        aliases: ["group settings", "edit group", "manage group"],
+      });
     }
 
     if (pathname === "/profile") {

@@ -23,6 +23,7 @@ import { GroupTabsClient } from "@/components/group-tabs-client"
 import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
+import { calculateTotalStakes, getMemberStakesForGroup } from "@/lib/queries/stakes"
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -254,6 +255,9 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     groupType: String(groupMeta.groupType ?? "organization"),
     memberCount: members.length || group.memberCount || 0,
   })
+  const serverMemberStakes = await getMemberStakesForGroup(id).catch(() => [])
+  const serverTotalStakes = serverMemberStakes.length > 0 ? calculateTotalStakes(serverMemberStakes) : 0
+
   const header = (
     <GroupProfileHeader
       groupId={group.id}
@@ -340,6 +344,8 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         governanceItems={governanceItems}
         badgeResources={badgeResources}
         stakeActivity={stakeActivity}
+        serverMemberStakes={serverMemberStakes}
+        serverTotalStakes={serverTotalStakes}
         pressResources={pressResources}
         documentResources={documentResources.map((r) => {
           const meta = (r.metadata ?? {}) as Record<string, unknown>

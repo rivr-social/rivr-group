@@ -105,6 +105,8 @@ export interface GroupTabsClientProps {
   governanceItems: unknown[]
   badgeResources: SerializedResource[]
   stakeActivity: ActivityEntry[]
+  serverMemberStakes?: MemberStake[]
+  serverTotalStakes?: number
   pressResources: SerializedResource[]
   documentResources: Document[]
   projectResources: SerializedResource[]
@@ -143,6 +145,8 @@ export function GroupTabsClient({
   governanceItems,
   badgeResources,
   stakeActivity,
+  serverMemberStakes,
+  serverTotalStakes,
   pressResources,
   documentResources,
   projectResources,
@@ -253,8 +257,12 @@ export function GroupTabsClient({
   )
 
   const memberStakes: MemberStake[] = useMemo(
-    () =>
-      members.map((m) => ({
+    () => {
+      if (serverMemberStakes && serverMemberStakes.length > 0) {
+        return serverMemberStakes
+      }
+
+      return members.map((m) => ({
         user: {
           id: m.id,
           name: m.name,
@@ -274,8 +282,9 @@ export function GroupTabsClient({
         },
         joinedAt: new Date().toISOString(),
         groupId,
-      })),
-    [members, groupId]
+      }))
+    },
+    [members, groupId, serverMemberStakes]
   )
 
   const governanceProposals = useMemo(() => {
@@ -749,7 +758,7 @@ export function GroupTabsClient({
         <StakeTab
           groupId={groupId}
           memberStakes={memberStakes}
-          totalStakes={100}
+          totalStakes={serverTotalStakes && serverTotalStakes > 0 ? serverTotalStakes : 100}
         />
       </TabsContent>
 
