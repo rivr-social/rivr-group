@@ -78,13 +78,19 @@ export async function decodeRemoteViewerSessionEdge(
 
   let valid: boolean;
   try {
+    // Pass the `Uint8Array` views directly. The Next.js edge-runtime
+    // SubtleCrypto rejects a bare `ArrayBuffer` for the data/signature
+    // arguments and throws a `TypeError` ("Failed to execute 'verify' on
+    // 'SubtleCrypto'"), which would silently invalidate every otherwise-valid
+    // federated cookie. An `ArrayBufferView` is accepted in both the edge and
+    // Node Web Crypto implementations. `fromBase64Url` already returns a
+    // freshly-allocated, exactly-sized `Uint8Array`, so there is no
+    // SharedArrayBuffer / offset hazard to guard against.
     valid = await subtle.verify(
       "HMAC",
       key,
-      // Copy into a fresh ArrayBuffer so the view's backing buffer is
-      // exactly sized (avoids SharedArrayBuffer / offset edge cases).
-      toArrayBuffer(sigBytes),
-      toArrayBuffer(jsonBytes),
+      sigBytes as BufferSource,
+      jsonBytes as BufferSource,
     );
   } catch {
     return null;
@@ -119,12 +125,6 @@ function fromBase64Url(input: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
-}
-
-function toArrayBuffer(view: Uint8Array): ArrayBuffer {
-  const buf = new ArrayBuffer(view.byteLength);
-  new Uint8Array(buf).set(view);
-  return buf;
 }
 
 function isRemoteViewerPayload(v: unknown): v is RemoteViewerSessionPayload {
