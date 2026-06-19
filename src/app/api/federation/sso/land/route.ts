@@ -42,6 +42,11 @@ import {
   RemoteViewerSessionError,
 } from "@/lib/federation/remote-viewer-session";
 import { STATUS_INTERNAL_ERROR } from "@/lib/http-status";
+import {
+  resolveVisitorScope,
+  VISITOR_CAPABILITIES,
+} from "@/lib/federation/visitor-scope";
+import { recordFederatedVisit } from "@/lib/federation/visit-log";
 
 /** Default post-landing destination when no (valid) `next` is supplied. */
 const DEFAULT_NEXT = "/";
@@ -161,6 +166,25 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
   }
 
+  // ── Visitor-scope resolution ──────────────────────────────────────────────
+  const isOwner =
+    !!config.primaryAgentId && claims.actorId === config.primaryAgentId;
+
+  const scope = await resolveVisitorScope();
+
+  // If the owner has disabled visitor auto-sign-in AND this is not the owner,
+  // fall through to the destination unauthenticated — same as a bad assertion.
+  if (!isOwner && !scope.enabled) {
+    return NextResponse.redirect(new URL(next, localRedirectBase), {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  // Owners keep the existing default lifetime; visitors get the configured TTL.
+  const effectiveLifetimeSec = isOwner
+    ? VIEWER_SESSION_LIFETIME_SEC
+    : scope.ttlMinutes * 60;
+
   let cookieValue: string;
   try {
     cookieValue = encodeRemoteViewerSession(
@@ -173,7 +197,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         instanceClass: claims.instanceClass,
         parentAgentId: claims.parentAgentId,
         authMethod: "federated-sso",
-        lifetimeSec: VIEWER_SESSION_LIFETIME_SEC,
+        lifetimeSec: effectiveLifetimeSec,
       },
       secret,
     );
@@ -195,7 +219,22 @@ export async function GET(request: Request): Promise<NextResponse> {
     secure: deriveIsHttps(request),
     sameSite: "lax",
     path: "/",
-    maxAge: VIEWER_SESSION_LIFETIME_SEC,
+    maxAge: effectiveLifetimeSec,
   });
+
+  // ── Best-effort visit logging ─────────────────────────────────────────────
+  if (scope.recordVisits) {
+    await recordFederatedVisit({
+      visitorActorId: claims.actorId,
+      isOwner,
+      homeBaseUrl: claims.homeBaseUrl,
+      globalIssuerBaseUrl: claims.globalIssuerBaseUrl,
+      landingPath: next,
+      visitorName: claims.name,
+      grantedScope: isOwner ? [...VISITOR_CAPABILITIES] : scope.capabilities,
+      request,
+    });
+  }
+
   return response;
 }

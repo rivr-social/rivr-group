@@ -33,16 +33,28 @@ import { isUuid } from "./types";
 /**
  * Fetches profile data (agent + owned resources + recent activity) for a visible agent.
  *
+ * Visibility is resolved relative to the viewer. By default the viewer is
+ * taken from the request session via {@link tryActorId}; non-request callers
+ * (autobot prompt builder, MCP tools) where `auth()` does not resolve must pass
+ * `viewerIdOverride` explicitly (e.g. the owner's own id) so they are not
+ * mistaken for an anonymous viewer and shown only public content. Pass `null`
+ * to force an anonymous (public-only) view.
+ *
  * @param agentId Profile owner agent id.
+ * @param viewerIdOverride Explicit viewer id, `null` for anonymous, or omit to
+ *   resolve from the request session.
  * @returns Profile bundle, or `null` when inaccessible/missing.
- * @throws {Error} Throws `"Unauthorized"` when no authenticated user is present.
  * @example
  * ```ts
  * const profile = await fetchProfileData(agentId);
  * ```
  */
-export async function fetchProfileData(agentId: string) {
-  const actorId = await tryActorId();
+export async function fetchProfileData(
+  agentId: string,
+  viewerIdOverride?: string | null
+) {
+  const actorId =
+    viewerIdOverride !== undefined ? viewerIdOverride : await tryActorId();
   if (actorId && !(await canViewAgent(actorId, agentId))) return null;
 
   const [agent, resources, feed] = await Promise.all([
@@ -76,7 +88,7 @@ export async function fetchProfileData(agentId: string) {
 
   const visibleResources = actorId
     ? await filterViewableResources(actorId, resources)
-    : resources;
+    : await filterPubliclyCrawlableResources(resources);
 
   const visibleObjectAgents = actorId
     ? await filterViewableAgents(actorId, objectAgentsRaw)
@@ -144,13 +156,22 @@ export async function fetchProfileData(agentId: string) {
  * resources with owner agent data embedded so `resourceToPost` can produce
  * complete Post objects.
  *
+ * Visibility is enforced relative to `viewerId`: an authenticated viewer sees
+ * posts they are permitted to view (the owner sees all of their own), while an
+ * anonymous viewer (`viewerId` null/undefined) sees only publicly-crawlable
+ * (public/locale) posts. The viewer is passed explicitly rather than resolved
+ * from `auth()` so non-request callers (autobot prompt builder, MCP tools)
+ * can pass the owner's own id and still see private posts.
+ *
  * @param userId Agent UUID of the user whose posts to fetch.
  * @param limit Max posts to return. Defaults to `30`.
+ * @param viewerId Agent UUID of the viewer, or `null` for an anonymous viewer.
  * @returns Serialized post resources with owner data.
  */
 export async function fetchUserPosts(
   userId: string,
-  limit = 30
+  limit = 30,
+  viewerId: string | null = null
 ): Promise<{ posts: SerializedResource[]; owner: SerializedAgent | null }> {
   if (!isUuid(userId)) return { posts: [], owner: null };
 
@@ -160,12 +181,18 @@ export async function fetchUserPosts(
     getAgent(userId),
   ]);
 
-  const combined = [...postResources, ...noteResources]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, limit);
+  const combined = [...postResources, ...noteResources].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  // Filter by visibility BEFORE slicing so a viewer still receives up to
+  // `limit` posts they are actually permitted to see.
+  const visible = viewerId
+    ? await filterViewableResources(viewerId, combined)
+    : await filterPubliclyCrawlableResources(combined);
 
   return {
-    posts: combined.map(serializeResource),
+    posts: visible.slice(0, limit).map(serializeResource),
     owner: ownerAgent ? serializeAgent(ownerAgent) : null,
   };
 }

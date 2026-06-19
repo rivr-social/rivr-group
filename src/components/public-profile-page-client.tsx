@@ -144,7 +144,7 @@ export function PublicProfilePageClient() {
           // Fetch targeted profile data in parallel — only this user's posts/events/groups
           const [profile, postsResult, eventAgents, groupAgents] = await Promise.all([
             fetchProfileData(record.id).catch(() => null),
-            fetchUserPosts(record.id, 30).catch(() => ({ posts: [] as SerializedResource[], owner: null })),
+            fetchUserPosts(record.id, 30, session?.user?.id ?? null).catch(() => ({ posts: [] as SerializedResource[], owner: null })),
             fetchUserEvents(record.id, 30).catch(() => [] as SerializedAgent[]),
             fetchUserGroups(record.id, 30).catch(() => [] as SerializedAgent[]),
           ]);

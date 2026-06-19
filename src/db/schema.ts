@@ -1913,4 +1913,56 @@ export const cronStateGoogleCalendar = pgTable(
 );
 
 export type CronStateGoogleCalendarRecord = typeof cronStateGoogleCalendar.$inferSelect;
+
+// ─── Federated Visitor Access ────────────────────────────────────────────────
+
+/**
+ * Owner-configurable policy for cross-instance SSO visitors.
+ *
+ * One row per instance (enforced by the unique index on instance_id). When no
+ * row exists the lander falls back to the safe default (visitors enabled,
+ * read-only scope, 30-min TTL). The owner configures this via
+ * /settings/visitor-access and /api/admin/visitor-access.
+ */
+export const federatedVisitorSettings = pgTable('federated_visitor_settings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  instanceId: uuid('instance_id').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  allowedCapabilities: jsonb('allowed_capabilities').$type<string[]>().notNull().default([]),
+  sessionTtlMinutes: integer('session_ttl_minutes').notNull().default(30),
+  recordVisits: boolean('record_visits').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [ uniqueIndex('federated_visitor_settings_instance_id_idx').on(table.instanceId) ]);
+export type FederatedVisitorSettingsRecord = typeof federatedVisitorSettings.$inferSelect;
+export type NewFederatedVisitorSettingsRecord = typeof federatedVisitorSettings.$inferInsert;
+
+/**
+ * Append-only record of cross-instance SSO landings.
+ *
+ * When a visitor lands via /api/federation/sso/land and the owner has
+ * `recordVisits: true`, one row is appended here with the referral path, home
+ * instance, granted scope, and low-sensitivity request signals.
+ */
+export const federatedVisitLog = pgTable('federated_visit_log', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  instanceId: uuid('instance_id').notNull(),
+  visitorActorId: uuid('visitor_actor_id').notNull(),
+  isOwner: boolean('is_owner').notNull().default(false),
+  homeBaseUrl: text('home_base_url'),
+  globalIssuerBaseUrl: text('global_issuer_base_url'),
+  landingPath: text('landing_path'),
+  referrer: text('referrer'),
+  visitorName: text('visitor_name'),
+  userAgent: text('user_agent'),
+  grantedScope: jsonb('granted_scope').$type<string[]>().notNull().default([]),
+  authMethod: text('auth_method').notNull().default('federated-sso'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('federated_visit_log_instance_id_idx').on(table.instanceId),
+  index('federated_visit_log_visitor_actor_id_idx').on(table.visitorActorId),
+  index('federated_visit_log_created_at_idx').on(table.createdAt),
+]);
+export type FederatedVisitLogRecord = typeof federatedVisitLog.$inferSelect;
+export type NewFederatedVisitLogRecord = typeof federatedVisitLog.$inferInsert;
 export type NewCronStateGoogleCalendarRecord = typeof cronStateGoogleCalendar.$inferInsert;

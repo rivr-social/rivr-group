@@ -32,6 +32,11 @@ import {
   AUTHORITY_GUARD_REASONS,
   checkAuthorityForSession,
 } from "@/lib/federation/authority-guard";
+import {
+  resolveVisitorScope,
+  requiredVisitorCapability,
+  visitorCan,
+} from "@/lib/federation/visitor-scope";
 
 const KNOWN_MUTATION_TYPES = [
   "createGroupResource",
@@ -133,6 +138,40 @@ export async function POST(request: Request) {
             ...(authorityCheck.newHomeBaseUrl
               ? { newHomeBaseUrl: authorityCheck.newHomeBaseUrl }
               : {}),
+          },
+          { status: 403 },
+        );
+      }
+    }
+
+    // ── Visitor capability gate ────────────────────────────────────────────
+    // Cookie-visitors are non-owner actors who hold only a rivr_remote_viewer
+    // cookie (no peer-auth header). Owner and peer-authenticated requests
+    // bypass this gate entirely.
+    const isCookieVisitor =
+      !!remoteViewerSession &&
+      (!config.primaryAgentId ||
+        remoteViewerSession.actorId !== config.primaryAgentId);
+    if (isCookieVisitor) {
+      // We need to peek at the action/type before full body parse — read and
+      // re-attach by cloning. For the gate we only need action/type keys.
+      let peekBody: MutationRequestBody = {};
+      try {
+        peekBody = (await request.clone().json()) as MutationRequestBody;
+      } catch {
+        // Malformed body — let the later parse surface the error.
+      }
+      const required = requiredVisitorCapability(
+        peekBody.action ?? peekBody.type,
+      );
+      const visitorScope = await resolveVisitorScope();
+      if (required === null || !visitorCan(visitorScope, required)) {
+        return NextResponse.json(
+          {
+            success: false,
+            accepted: false,
+            error: `Visitor scope does not grant '${required ?? peekBody.action ?? peekBody.type}' on this instance.`,
+            errorCode: "VISITOR_CAPABILITY_DENIED",
           },
           { status: 403 },
         );

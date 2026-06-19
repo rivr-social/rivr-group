@@ -176,6 +176,13 @@
       "when": 1781913600000,
       "tag": "0038_manifest_references",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1782086400000,
+      "tag": "0039_federated_visitor_access",
+      "breakpoints": true
     }
   ]
 }

@@ -718,7 +718,7 @@ export default function ProfilePage() {
         getMyTicketPurchasesAction().catch(() => ({ success: false as const })),
         getAllSubscriptionStatusesAction().catch(() => []),
         fetchMyReceipts().catch(() => ({ receipts: [] })),
-        fetchUserPosts(session.user.id, 30).catch(() => ({ posts: [] as SerializedResource[], owner: null })),
+        fetchUserPosts(session.user.id, 30, session.user.id).catch(() => ({ posts: [] as SerializedResource[], owner: null })),
         fetchUserEvents(session.user.id, 30).catch(() => [] as SerializedAgent[]),
         fetchUserGroups(session.user.id, 30).catch(() => [] as SerializedAgent[]),
         fetchMarketplaceListings(50).catch(() => [] as Array<SerializedResource & { ownerName: string; ownerImage: string }>),
