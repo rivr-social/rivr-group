@@ -176,6 +176,20 @@
       "when": 1781913600000,
       "tag": "0038_manifest_references",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1782000000000,
+      "tag": "0039_project_wallets",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1782086400000,
+      "tag": "0040_project_expense_txn",
+      "breakpoints": true
     }
   ]
 }

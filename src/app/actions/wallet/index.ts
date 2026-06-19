@@ -40,3 +40,7 @@ export {
   requestFamilyWithdrawalAction,
   getFamilyContributionsAction,
 } from './family-treasury';
+
+export {
+  recordProjectExpenseAction,
+} from './expenses';

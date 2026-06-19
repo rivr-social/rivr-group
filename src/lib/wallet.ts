@@ -425,6 +425,77 @@ export async function getOrCreateWallet(
 }
 
 // ---------------------------------------------------------------------------
+// 1b. Project treasury wallets
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the treasury wallet bound to a project resource, or `null` when the
+ * project has no wallet yet. Project wallets are keyed on `resourceId`, not on
+ * `(ownerId, type)`, so an owning org can hold a group wallet AND any number of
+ * distinct project wallets.
+ *
+ * @param projectResourceId The `resources.id` of the `project` resource.
+ * @returns The bound wallet row, or `null` if none exists.
+ */
+export async function getProjectWalletForResource(
+  projectResourceId: string,
+): Promise<WalletRecord | null> {
+  const [existing] = await db
+    .select()
+    .from(wallets)
+    .where(eq(wallets.resourceId, projectResourceId))
+    .limit(1);
+
+  return existing ?? null;
+}
+
+/**
+ * Returns the treasury wallet for a project resource, creating it if absent.
+ *
+ * `ownerAgentId` is the project's owning group/org agent — it carries payout
+ * authority and anchors the settlement-cascade lineage. The wallet's `type` is
+ * `'project'` and its `resourceId` binds it 1:1 to the project resource (the
+ * partial unique index `wallets_resource_id_unique_idx` enforces uniqueness).
+ *
+ * @param projectResourceId The `resources.id` of the `project` resource.
+ * @param ownerAgentId The owning group/org agent id.
+ * @returns Existing or newly created project treasury wallet row.
+ */
+export async function getOrCreateProjectWallet(
+  projectResourceId: string,
+  ownerAgentId: string,
+): Promise<WalletRecord> {
+  const existing = await getProjectWalletForResource(projectResourceId);
+  if (existing) {
+    return existing;
+  }
+
+  // DO NOTHING on any conflict (the partial unique index on resource_id), then
+  // re-select so concurrent creators converge on the same row.
+  const inserted = await db
+    .insert(wallets)
+    .values({
+      ownerId: ownerAgentId,
+      type: 'project',
+      resourceId: projectResourceId,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (inserted.length > 0) {
+    return inserted[0];
+  }
+
+  const raced = await getProjectWalletForResource(projectResourceId);
+  if (!raced) {
+    throw new Error(
+      `Failed to create project wallet for resource ${projectResourceId}`,
+    );
+  }
+  return raced;
+}
+
+// ---------------------------------------------------------------------------
 // 2. getWalletBalance
 // ---------------------------------------------------------------------------
 
@@ -899,6 +970,151 @@ export async function transferP2P(
         toWalletId,
       },
     });
+
+    return transaction;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 7b. recordProjectExpense
+// ---------------------------------------------------------------------------
+
+/**
+ * Details describing an external project expense (a debit out of the project
+ * treasury to a payee outside the RIVR ledger).
+ */
+export interface ProjectExpenseInput {
+  /** Human-readable purpose of the expense (required). */
+  description: string;
+  /** Optional spend category for ledger filtering/reporting (e.g. 'materials'). */
+  category?: string;
+  /** Optional free-text payee (vendor/contractor) name. */
+  payee?: string;
+}
+
+/**
+ * Records a first-class project expense: a pure debit out of a project treasury
+ * wallet to an external payee. Unlike {@link transferP2P}, there is no receiving
+ * internal wallet — the funds leave the RIVR ledger entirely — so the
+ * `walletTransactions` row has a null `toWalletId` and uses the dedicated
+ * `'project_expense'` type (migration `0040_project_expense_txn`).
+ *
+ * The consumed capital lots are NOT restored to any wallet (the money is spent),
+ * mirroring the spec's "first-class expenses" treatment as a true outflow.
+ *
+ * @param projectWalletId The project treasury wallet to debit.
+ * @param amountCents Expense amount in cents.
+ * @param input Expense description plus optional category/payee.
+ * @returns The recorded debit transaction.
+ * @throws {Error} When the amount is out of bounds, the wallet is missing/frozen,
+ *   is not a project wallet, or has insufficient balance.
+ */
+export async function recordProjectExpense(
+  projectWalletId: string,
+  amountCents: number,
+  input: ProjectExpenseInput,
+): Promise<WalletTransactionRecord> {
+  if (amountCents < MIN_TRANSFER_CENTS || amountCents > MAX_TRANSFER_CENTS) {
+    throw new Error(
+      `Expense amount must be between ${MIN_TRANSFER_CENTS} and ${MAX_TRANSFER_CENTS} cents`,
+    );
+  }
+
+  const description = input.description?.trim();
+  if (!description) {
+    throw new Error('Expense description is required');
+  }
+
+  return await db.transaction(async (tx) => {
+    // Lock the project wallet row before reading balance/frozen state.
+    await tx.execute(
+      sql`SELECT id FROM wallets WHERE id = ${projectWalletId} FOR UPDATE`,
+    );
+
+    const [projectWallet] = await tx
+      .select()
+      .from(wallets)
+      .where(eq(wallets.id, projectWalletId))
+      .limit(1);
+
+    if (!projectWallet) {
+      throw new Error(`Project wallet not found: ${projectWalletId}`);
+    }
+
+    if (projectWallet.type !== 'project') {
+      throw new Error(
+        `Wallet ${projectWalletId} is not a project treasury wallet`,
+      );
+    }
+
+    if (projectWallet.isFrozen) {
+      throw new Error('Cannot record an expense from a frozen wallet');
+    }
+
+    if (projectWallet.balanceCents < amountCents) {
+      throw new Error(
+        `Insufficient treasury balance: have ${projectWallet.balanceCents} cents, need ${amountCents} cents`,
+      );
+    }
+
+    // Consume capital lots to keep payout-eligibility accounting consistent.
+    // These lots are intentionally NOT restored — the funds leave the ledger.
+    await consumeWalletCapital(
+      tx,
+      projectWalletId,
+      projectWallet.balanceCents,
+      amountCents,
+    );
+
+    // Debit the treasury.
+    await tx
+      .update(wallets)
+      .set({
+        balanceCents: sql`${wallets.balanceCents} - ${amountCents}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(wallets.id, projectWalletId));
+
+    // Ledger entry — outflow from the project wallet to an external payee.
+    const [ledgerEntry] = await tx
+      .insert(ledger)
+      .values({
+        verb: 'transact',
+        subjectId: projectWallet.ownerId,
+        objectId: projectWalletId,
+        objectType: 'wallet',
+        metadata: {
+          amountCents,
+          fromWalletId: projectWalletId,
+          projectResourceId: projectWallet.resourceId,
+          expense: true,
+          description,
+          category: input.category,
+          payee: input.payee,
+        },
+      })
+      .returning();
+
+    // Transaction record — null toWalletId marks an external debit.
+    const [transaction] = await tx
+      .insert(walletTransactions)
+      .values({
+        type: 'project_expense',
+        fromWalletId: projectWalletId,
+        toWalletId: null,
+        amountCents,
+        currency: projectWallet.currency,
+        description,
+        status: WALLET_TX_STATUS.COMPLETED,
+        ledgerEntryId: ledgerEntry.id,
+        referenceType: projectWallet.resourceId ? 'project' : undefined,
+        referenceId: projectWallet.resourceId ?? undefined,
+        metadata: {
+          category: input.category,
+          payee: input.payee,
+        },
+      })
+      .returning();
 
     return transaction;
   });

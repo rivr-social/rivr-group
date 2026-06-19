@@ -33,7 +33,7 @@ import {
   uuid,
   customType,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 /**
  * Custom tsvector type for full-text search columns.
@@ -1141,7 +1141,7 @@ export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
 /**
  * Wallet enums
  */
-export const walletTypeEnum = pgEnum('wallet_type', ['personal', 'group']);
+export const walletTypeEnum = pgEnum('wallet_type', ['personal', 'group', 'project']);
 
 export const walletTransactionTypeEnum = pgEnum('wallet_transaction_type', [
   'stripe_deposit',
@@ -1157,6 +1157,7 @@ export const walletTransactionTypeEnum = pgEnum('wallet_transaction_type', [
   'thanks',
   'eth_record',
   'connect_payout',
+  'project_expense',
 ]);
 
 export const capitalEntrySettlementStatusEnum = pgEnum('capital_entry_settlement_status', [
@@ -1175,6 +1176,10 @@ export const wallets = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     ownerId: uuid('owner_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
     type: walletTypeEnum('type').notNull().default('personal'),
+    // Treasury wallets bound to a `project` resource. NULL for owner-scoped
+    // (personal/group) wallets. `ownerId` still points at the owning group/org
+    // agent so payout authority and the settlement-cascade lineage resolve.
+    resourceId: uuid('resource_id').references(() => resources.id, { onDelete: 'cascade' }),
     balanceCents: integer('balance_cents').notNull().default(0),
     currency: text('currency').notNull().default('usd'),
     ethAddress: text('eth_address'),
@@ -1186,7 +1191,17 @@ export const wallets = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex('wallets_owner_id_type_idx').on(table.ownerId, table.type),
+    // Owner-scoped wallets (personal/group) stay unique per (owner, type); the
+    // partial predicate excludes resource-bound project wallets so they do not
+    // collide with the owner's group wallet.
+    uniqueIndex('wallets_owner_id_type_idx')
+      .on(table.ownerId, table.type)
+      .where(sql`${table.resourceId} IS NULL`),
+    // Exactly one treasury wallet per project resource.
+    uniqueIndex('wallets_resource_id_unique_idx')
+      .on(table.resourceId)
+      .where(sql`${table.resourceId} IS NOT NULL`),
+    index('wallets_resource_id_idx').on(table.resourceId),
     index('wallets_owner_id_idx').on(table.ownerId),
     index('wallets_eth_address_idx').on(table.ethAddress),
     index('wallets_stripe_customer_id_idx').on(table.stripeCustomerId),
@@ -1197,6 +1212,10 @@ export const walletsRelations = relations(wallets, ({ one, many }) => ({
   owner: one(agents, {
     fields: [wallets.ownerId],
     references: [agents.id],
+  }),
+  project: one(resources, {
+    fields: [wallets.resourceId],
+    references: [resources.id],
   }),
   outgoingTransactions: many(walletTransactions, { relationName: 'fromWallet' }),
   incomingTransactions: many(walletTransactions, { relationName: 'toWallet' }),

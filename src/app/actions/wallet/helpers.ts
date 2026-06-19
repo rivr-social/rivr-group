@@ -53,7 +53,7 @@ export async function canManageWalletOwner(currentUserId: string, ownerId: strin
 export async function resolveManagedWalletTarget(currentUserId: string, ownerId?: string): Promise<{
   ownerId: string;
   walletId: string;
-  walletType: 'personal' | 'group';
+  walletType: 'personal' | 'group' | 'project';
   email: string | null;
   name: string;
 }> {
