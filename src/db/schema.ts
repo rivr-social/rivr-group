@@ -1139,6 +1139,77 @@ export const subscriptionsRelations = relations(subscriptions, ({ one }) => ({
 }));
 
 /**
+ * Settlement rail for a group membership subscription.
+ * - `connect`: destination charge to the group's onboarded Stripe Connect
+ *   account; RIVR keeps a per-member platform fee. The group is paid directly.
+ * - `platform_capital`: fallback when the group has not completed Connect
+ *   onboarding; RIVR collects the full charge and owes the group, settled
+ *   internally via `capital_entries`.
+ */
+export const groupSubscriptionSettlementRailEnum = pgEnum(
+  'group_subscription_settlement_rail',
+  ['connect', 'platform_capital'],
+);
+
+/**
+ * Group membership subscriptions - recurring member subscriptions to a
+ * sovereign group's own membership plan (distinct from the cooperative RIVR
+ * membership tiers tracked in `subscriptions`).
+ */
+export const groupMembershipSubscriptions = pgTable(
+  'group_membership_subscriptions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    /** The subscribing member. */
+    agentId: uuid('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+    /** The group agent being subscribed to. */
+    groupId: uuid('group_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+    /** GroupMembershipPlan.id from the group's metadata.membershipPlans. */
+    planId: text('plan_id').notNull(),
+    stripeCustomerId: text('stripe_customer_id').notNull(),
+    stripeSubscriptionId: text('stripe_subscription_id').notNull(),
+    stripePriceId: text('stripe_price_id').notNull(),
+    status: subscriptionStatusEnum('status').notNull(),
+    settlementRail: groupSubscriptionSettlementRailEnum('settlement_rail')
+      .default('platform_capital')
+      .notNull(),
+    stripeConnectAccountId: text('stripe_connect_account_id'),
+    /** RIVR per-member platform fee retained from each charge, in cents. */
+    applicationFeeCents: integer('application_fee_cents').default(0).notNull(),
+    currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }).notNull(),
+    cancelAtPeriodEnd: boolean('cancel_at_period_end').default(false).notNull(),
+    metadata: jsonb('metadata').default({}).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('group_membership_subscriptions_stripe_subscription_id_idx').on(table.stripeSubscriptionId),
+    index('group_membership_subscriptions_agent_id_idx').on(table.agentId),
+    index('group_membership_subscriptions_group_id_idx').on(table.groupId),
+    index('group_membership_subscriptions_agent_group_idx').on(table.agentId, table.groupId),
+    index('group_membership_subscriptions_status_idx').on(table.status),
+    index('group_membership_subscriptions_current_period_end_idx').on(table.currentPeriodEnd),
+  ]
+);
+
+export const groupMembershipSubscriptionsRelations = relations(
+  groupMembershipSubscriptions,
+  ({ one }) => ({
+    member: one(agents, {
+      fields: [groupMembershipSubscriptions.agentId],
+      references: [agents.id],
+      relationName: 'group_membership_subscription_member',
+    }),
+    group: one(agents, {
+      fields: [groupMembershipSubscriptions.groupId],
+      references: [agents.id],
+      relationName: 'group_membership_subscription_group',
+    }),
+  }),
+);
+
+/**
  * Wallet enums
  */
 export const walletTypeEnum = pgEnum('wallet_type', ['personal', 'group']);
@@ -1498,6 +1569,11 @@ export type Subscription = typeof subscriptions.$inferSelect;
 export type NewSubscription = typeof subscriptions.$inferInsert;
 export type SubscriptionStatus = typeof subscriptionStatusEnum.enumValues[number];
 export type MembershipTier = typeof membershipTierEnum.enumValues[number];
+
+export type GroupMembershipSubscription = typeof groupMembershipSubscriptions.$inferSelect;
+export type NewGroupMembershipSubscription = typeof groupMembershipSubscriptions.$inferInsert;
+export type GroupSubscriptionSettlementRail =
+  typeof groupSubscriptionSettlementRailEnum.enumValues[number];
 
 export type FederationAuditLogRecord = typeof federationAuditLog.$inferSelect;
 export type NewFederationAuditLogRecord = typeof federationAuditLog.$inferInsert;

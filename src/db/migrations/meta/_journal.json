@@ -183,6 +183,13 @@
       "when": 1782086400000,
       "tag": "0039_federated_visitor_access",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1782172800000,
+      "tag": "0040_group_membership_subscriptions",
+      "breakpoints": true
     }
   ]
 }

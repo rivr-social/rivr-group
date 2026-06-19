@@ -28,9 +28,10 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import Stripe from 'stripe';
 import { db } from '@/db';
-import { agents, capitalEntries, ledger, resources, subscriptions, wallets, walletTransactions, type NewLedgerEntry } from '@/db/schema';
+import { agents, capitalEntries, groupMembershipSubscriptions, ledger, resources, subscriptions, wallets, walletTransactions, type NewLedgerEntry } from '@/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
 import { getStripe, tierForPriceId } from '@/lib/billing';
+import { grantGroupMembership, revokeGroupMembership } from '@/lib/group-subscriptions';
 import {
   confirmDeposit,
   failDeposit,
@@ -960,6 +961,13 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
  * Upserts a subscription record from a Stripe subscription object.
  */
 async function handleSubscriptionUpsert(stripeSub: Stripe.Subscription) {
+  // Group membership subscriptions are settled on a separate rail and tracked
+  // in `group_membership_subscriptions`, not the cooperative `subscriptions`.
+  if (stripeSub.metadata?.groupSubscription === 'true') {
+    await handleGroupSubscriptionUpsert(stripeSub);
+    return;
+  }
+
   const agentId = stripeSub.metadata?.agentId;
   if (!agentId) {
     // Metadata contract violation: without agent ownership we cannot safely map this subscription.
@@ -1110,6 +1118,11 @@ async function mintSubscriptionThanksGrant(
  * Marks a subscription as canceled when Stripe deletes it.
  */
 async function handleSubscriptionDeleted(stripeSub: Stripe.Subscription) {
+  if (stripeSub.metadata?.groupSubscription === 'true') {
+    await handleGroupSubscriptionDeleted(stripeSub);
+    return;
+  }
+
   await db
     .update(subscriptions)
     .set({
@@ -1118,6 +1131,235 @@ async function handleSubscriptionDeleted(stripeSub: Stripe.Subscription) {
       updatedAt: new Date(),
     })
     .where(eq(subscriptions.stripeSubscriptionId, stripeSub.id));
+}
+
+/**
+ * Upserts a group membership subscription row and grants/revokes the member's
+ * group-membership ledger edge based on the Stripe subscription status. On the
+ * platform-capital fallback rail, also settles the charge internally.
+ */
+async function handleGroupSubscriptionUpsert(stripeSub: Stripe.Subscription) {
+  const memberAgentId = stripeSub.metadata?.memberAgentId;
+  const groupId = stripeSub.metadata?.groupId;
+  const planId = stripeSub.metadata?.planId;
+  if (!memberAgentId || !groupId || !planId) {
+    console.warn('Group subscription missing metadata, skipping:', stripeSub.id);
+    return;
+  }
+
+  const customerId =
+    typeof stripeSub.customer === 'string' ? stripeSub.customer : stripeSub.customer.id;
+  const priceId = stripeSub.items.data[0]?.price?.id;
+  if (!priceId) {
+    console.warn('Group subscription has no price, skipping:', stripeSub.id);
+    return;
+  }
+
+  const settlementRail =
+    stripeSub.metadata?.settlementRail === 'connect' ? 'connect' : 'platform_capital';
+  const applicationFeeCents =
+    Number.parseInt(stripeSub.metadata?.applicationFeeCents ?? '0', 10) || 0;
+  const connectAccountId = stripeSub.metadata?.stripeConnectAccountId ?? null;
+
+  const periodStartUnix = stripeSub.items.data[0].current_period_start;
+  const periodEndUnix = stripeSub.items.data[0].current_period_end;
+  const currentPeriodStart = new Date(periodStartUnix * 1000);
+  const currentPeriodEnd = new Date(periodEndUnix * 1000);
+  const now = new Date();
+
+  const values = {
+    agentId: memberAgentId,
+    groupId,
+    planId,
+    stripeCustomerId: customerId,
+    stripeSubscriptionId: stripeSub.id,
+    stripePriceId: priceId,
+    status: stripeSub.status as typeof groupMembershipSubscriptions.$inferInsert.status,
+    settlementRail:
+      settlementRail as typeof groupMembershipSubscriptions.$inferInsert.settlementRail,
+    stripeConnectAccountId: connectAccountId,
+    applicationFeeCents,
+    currentPeriodStart,
+    currentPeriodEnd,
+    cancelAtPeriodEnd: stripeSub.cancel_at_period_end,
+    updatedAt: now,
+  };
+
+  const [existing] = await db
+    .select({ id: groupMembershipSubscriptions.id })
+    .from(groupMembershipSubscriptions)
+    .where(eq(groupMembershipSubscriptions.stripeSubscriptionId, stripeSub.id))
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(groupMembershipSubscriptions)
+      .set(values)
+      .where(eq(groupMembershipSubscriptions.id, existing.id));
+  } else {
+    await db.insert(groupMembershipSubscriptions).values({ ...values, createdAt: now });
+  }
+
+  const isActive = stripeSub.status === 'active' || stripeSub.status === 'trialing';
+  if (isActive) {
+    await grantGroupMembership({
+      memberAgentId,
+      groupId,
+      planId,
+      source: 'subscription',
+      expiresAt: currentPeriodEnd,
+      stripeSubscriptionId: stripeSub.id,
+    });
+
+    if (settlementRail === 'platform_capital') {
+      await settleGroupSubscriptionCapital({
+        stripeSub,
+        groupId,
+        applicationFeeCents,
+        periodStartUnix,
+      });
+    }
+  } else {
+    await revokeGroupMembership({ memberAgentId, groupId });
+  }
+}
+
+/**
+ * Internal settlement for the platform-capital fallback rail. Credits the
+ * group's settlement wallet with the net (gross minus platform fee) and the
+ * platform wallet with the fee, mirroring the marketplace capital pattern.
+ * Idempotent per billing period via a cycle key on the capital entries.
+ */
+async function settleGroupSubscriptionCapital(params: {
+  stripeSub: Stripe.Subscription;
+  groupId: string;
+  applicationFeeCents: number;
+  periodStartUnix: number;
+}): Promise<void> {
+  const { stripeSub, groupId, applicationFeeCents, periodStartUnix } = params;
+
+  const grossCents = stripeSub.items.data[0]?.price?.unit_amount ?? 0;
+  if (grossCents <= 0) return;
+  const groupNetCents = Math.max(0, grossCents - applicationFeeCents);
+
+  const cycleKey = `${stripeSub.id}:${periodStartUnix}`;
+
+  // Idempotency: skip if this period was already settled.
+  const [existingEntry] = await db
+    .select({ id: capitalEntries.id })
+    .from(capitalEntries)
+    .where(sql`${capitalEntries.metadata}->>'groupSubscriptionCycleKey' = ${cycleKey}`)
+    .limit(1);
+  if (existingEntry) return;
+
+  const groupWallet = await getSettlementWalletForAgent(groupId);
+  const platformWallet = await getPlatformWallet();
+  const currency = stripeSub.currency ?? 'usd';
+
+  await db.transaction(async (tx) => {
+    if (groupNetCents > 0) {
+      await tx
+        .update(wallets)
+        .set({
+          balanceCents: sql`${wallets.balanceCents} + ${groupNetCents}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(wallets.id, groupWallet.id));
+
+      const [groupTx] = await tx
+        .insert(walletTransactions)
+        .values({
+          type: 'group_deposit',
+          toWalletId: groupWallet.id,
+          amountCents: groupNetCents,
+          feeCents: applicationFeeCents,
+          currency,
+          description: `Group membership subscription ${stripeSub.id}`,
+          referenceType: 'agent',
+          referenceId: groupId,
+          status: 'completed',
+          metadata: {
+            source: 'group_membership_subscription',
+            groupSubscriptionCycleKey: cycleKey,
+            stripeSubscriptionId: stripeSub.id,
+            groupId,
+          },
+        })
+        .returning({ id: walletTransactions.id });
+
+      await creditWalletCapital(tx, groupWallet.id, groupNetCents, {
+        settlementStatus: 'pending',
+        sourceType: 'group_membership_subscription',
+        sourceTransactionId: groupTx.id,
+        metadata: {
+          groupSubscriptionCycleKey: cycleKey,
+          stripeSubscriptionId: stripeSub.id,
+          groupId,
+          side: 'group_net',
+        },
+      });
+    }
+
+    if (applicationFeeCents > 0) {
+      await tx
+        .update(wallets)
+        .set({
+          balanceCents: sql`${wallets.balanceCents} + ${applicationFeeCents}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(wallets.id, platformWallet.id));
+
+      const [feeTx] = await tx
+        .insert(walletTransactions)
+        .values({
+          type: 'service_fee',
+          toWalletId: platformWallet.id,
+          amountCents: applicationFeeCents,
+          feeCents: 0,
+          currency,
+          description: `Platform fee for group membership subscription ${stripeSub.id}`,
+          referenceType: 'agent',
+          referenceId: groupId,
+          status: 'completed',
+          metadata: {
+            source: 'group_membership_subscription_platform_fee',
+            groupSubscriptionCycleKey: cycleKey,
+            stripeSubscriptionId: stripeSub.id,
+            groupId,
+          },
+        })
+        .returning({ id: walletTransactions.id });
+
+      await creditWalletCapital(tx, platformWallet.id, applicationFeeCents, {
+        settlementStatus: 'pending',
+        sourceType: 'group_membership_subscription_platform_fee',
+        sourceTransactionId: feeTx.id,
+        metadata: {
+          groupSubscriptionCycleKey: cycleKey,
+          stripeSubscriptionId: stripeSub.id,
+          groupId,
+          side: 'platform_fee',
+        },
+      });
+    }
+  });
+}
+
+/**
+ * Marks a group membership subscription canceled and revokes the member's
+ * group-membership ledger edge.
+ */
+async function handleGroupSubscriptionDeleted(stripeSub: Stripe.Subscription) {
+  await db
+    .update(groupMembershipSubscriptions)
+    .set({ status: 'canceled', cancelAtPeriodEnd: true, updatedAt: new Date() })
+    .where(eq(groupMembershipSubscriptions.stripeSubscriptionId, stripeSub.id));
+
+  const memberAgentId = stripeSub.metadata?.memberAgentId;
+  const groupId = stripeSub.metadata?.groupId;
+  if (memberAgentId && groupId) {
+    await revokeGroupMembership({ memberAgentId, groupId });
+  }
 }
 
 /**
