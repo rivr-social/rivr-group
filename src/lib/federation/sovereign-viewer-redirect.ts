@@ -1,28 +1,34 @@
 /**
- * Universal Manifest source-routing guard for the viewer's own identity pages.
+ * Universal Manifest "one home per user" guard for self-identity pages.
  *
- * The sibling {@link ./sovereign-resource-redirect.redirectIfSovereignResource}
- * keeps a federated *resource* on its source instance. This guard does the same
- * for a federated *viewer*: a person whose canonical identity is homed on
- * another instance must view and edit their OWN profile on their home, never on
- * a local mirror of their identity.
+ * INVARIANT: every identity has exactly ONE canonical home instance. No other
+ * instance may render that identity's profile page — it must redirect to the
+ * home. A peer keeps at most a thin projected `agents` row (name + avatar +
+ * `metadata.homeBaseUrl`) for display inside aggregated content; that row must
+ * NEVER masquerade as the home profile.
  *
- * Without this, a cross-instance SSO visitor landing on a sovereign peer's
- * `/profile` (a self-view route) hits a client component that only reads the
- * local NextAuth session. A federated viewer authenticates via the signed
- * `rivr_remote_viewer` cookie instead, so that client never sees their identity
- * and renders the empty "Your Profile / @user" placeholder. The correct UM
- * behavior is to bounce them to their home instance, where their real profile
- * (name, avatar, content) is authoritative.
+ * This guard runs at the top of the self `/profile` route on every instance and
+ * bounces a viewer to their home whenever this instance is NOT their home,
+ * regardless of how they are authenticated:
  *
- * Local NextAuth users — including this instance's owner — are never federated
- * viewers, so this is a no-op for them and is safe to call unconditionally at
- * the top of any self-identity page.
+ *  - **Federated cookie viewer** (`rivr_remote_viewer`): home is carried on the
+ *    signed session (`session.user.homeBaseUrl`).
+ *  - **Local NextAuth session on a projected mirror row**: a peer may hold a
+ *    full `agents` row for a remote identity (even with a local password), so a
+ *    local login looks "native". The projected row's `metadata.homeBaseUrl`
+ *    (or `metadata.canonicalUrl`) names the real home; if it points elsewhere,
+ *    redirect.
+ *
+ * The instance OWNER (`PRIMARY_AGENT_ID`) is home by definition and is never
+ * redirected. A locally-homed identity (no remote `homeBaseUrl`, or one whose
+ * host equals this instance) is also a no-op, so this is safe to call
+ * unconditionally at the top of any self-identity page.
  */
 import { redirect } from "next/navigation";
 
 import { getSession } from "@/lib/auth/get-session";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
+import { getAgent } from "@/lib/queries/agents";
 
 function hostOf(rawUrl: string | null | undefined): string | null {
   if (!rawUrl) return null;
@@ -33,9 +39,32 @@ function hostOf(rawUrl: string | null | undefined): string | null {
   }
 }
 
+function metadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 /**
- * Redirects a federated viewer (homed on another instance) to the same path on
- * their home instance. No-op for local NextAuth sessions and anonymous viewers.
+ * Resolve the canonical home base URL for a locally-authenticated viewer from
+ * their projected `agents` row. Returns null for a locally-homed identity.
+ */
+async function localViewerHome(agentId: string): Promise<string | null> {
+  const agent = await getAgent(agentId);
+  if (!agent) return null;
+  const metadata = agent.metadata as Record<string, unknown> | null;
+  return (
+    metadataString(metadata, "homeBaseUrl") ??
+    metadataString(metadata, "canonicalUrl")
+  );
+}
+
+/**
+ * Redirects a viewer whose canonical home is a different instance to the same
+ * path on that home. No-op for the instance owner, locally-homed identities,
+ * and anonymous viewers.
  *
  * @param subPath - Path to open on the home instance, e.g. `"/profile"`. Joined
  *   with exactly one slash. Defaults to `"/profile"`.
@@ -44,16 +73,24 @@ export async function redirectFederatedViewerHome(
   subPath = "/profile",
 ): Promise<void> {
   const session = await getSession();
-  if (!session || session.user.authMethod !== "federated") return;
+  if (!session) return;
 
-  const homeBaseUrl = session.user.homeBaseUrl;
+  const config = getInstanceConfig();
+  const localHost = hostOf(config.baseUrl);
+
+  // The instance owner is home by definition — never bounce them.
+  if (config.primaryAgentId && session.user.id === config.primaryAgentId) {
+    return;
+  }
+
+  const homeBaseUrl =
+    session.user.authMethod === "federated"
+      ? session.user.homeBaseUrl
+      : await localViewerHome(session.user.id);
+
   const homeHost = hostOf(homeBaseUrl);
-  if (!homeHost) return;
-
-  // Defensive: if the cookie's home somehow points back at this instance, do
-  // not redirect (would loop).
-  const localHost = hostOf(getInstanceConfig().baseUrl);
-  if (homeHost === localHost) return;
+  // No remote home, unparseable home, or home == this instance → stay put.
+  if (!homeHost || homeHost === localHost) return;
 
   const target = `${homeBaseUrl!.replace(/\/+$/, "")}/${subPath.replace(/^\/+/, "")}`;
   redirect(target);
