@@ -77,12 +77,19 @@ export async function fetchGroupDetail(groupId: string) {
       : {};
   const hiddenJoinGroup = joinMeta.visibility === "hidden";
   const hasActorView = actorId ? await canViewAgent(actorId, groupId) : false;
+  // An authenticated viewer must never see LESS than an anonymous one. A
+  // public/locale-visibility group page is anonymously viewable, but the
+  // actor-scoped permission check treats `locale` visibility as locale-scoped
+  // (requires shared-locale overlap), so a logged-in user — even a member —
+  // who lacks that overlap would otherwise get a 404 on a page anonymous users
+  // can see. Fall back to the anonymous-visibility gate in that case.
+  const anonVisible = isAnonymousGroupPageVisible(groupMeta, group.visibility);
 
   if (actorId) {
-    if (!hasActorView && !hiddenJoinGroup) return null;
+    if (!hasActorView && !anonVisible && !hiddenJoinGroup) return null;
   }
 
-  if (!actorId && !isAnonymousGroupPageVisible(groupMeta, group.visibility) && !hiddenJoinGroup) return null;
+  if (!actorId && !anonVisible && !hiddenJoinGroup) return null;
 
   const permissionActorId = hasActorView ? actorId : null;
 
