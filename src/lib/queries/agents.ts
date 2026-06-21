@@ -23,6 +23,7 @@ import { agents, ledger } from "@/db/schema";
 import { eq, and, or, ilike, isNull, sql, desc, inArray } from "drizzle-orm";
 import type { Agent, AgentType } from "@/db/schema";
 import { toContainsLikePattern } from "@/lib/sql-like";
+import { GROUP_AGENT_TYPES } from "@/lib/agent-types";
 
 /**
  * Maps a raw SQL row (`snake_case` columns) into the typed `Agent` shape.
@@ -655,6 +656,10 @@ export async function getPlacesByPlaceType(
  * ```
  */
 export async function getGroupsForUser(userId: string, limit = 50): Promise<Agent[]> {
+  const groupTypeList = sql.join(
+    GROUP_AGENT_TYPES.map((t) => sql`${t}`),
+    sql`, `,
+  );
   const result = await db.execute(sql`
     SELECT DISTINCT ON (a.id) a.*
     FROM agents a
@@ -665,7 +670,7 @@ export async function getGroupsForUser(userId: string, limit = 50): Promise<Agen
       AND l.verb IN ('join', 'belong')
       AND l.is_active = true
     WHERE a.deleted_at IS NULL
-      AND a.type = 'organization'
+      AND lower(a.type::text) IN (${groupTypeList})
       AND (
         a.metadata->'memberIds' @> ${JSON.stringify([userId])}::jsonb
         OR a.metadata->>'creatorId' = ${userId}

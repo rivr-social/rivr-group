@@ -5,16 +5,19 @@ import {
   agents,
   federationEntityMap,
   federationEvents,
+  ledger,
   nodePeers,
   nodes,
   resources,
   type ResourceEmbed,
   type NewFederationEventRecord,
+  type NewLedgerEntry,
   type NewNodePeerRecord,
   type NewNodeRecord,
   type NodeRole,
   type VisibilityLevel,
 } from "@/db/schema";
+import { isGroupAgentType } from "@/lib/agent-types";
 import {
   generateNodeKeyPair,
   signPayload,
@@ -618,6 +621,7 @@ async function queuePreparedExportEvents(params: {
     }
   }
 
+  const localHomeBaseUrl = normalizeBaseUrl(getInstanceConfig().baseUrl);
   const rows: NewFederationEventRecord[] = [
     ...params.candidateAgents.map((agent): NewFederationEventRecord => {
       const visibility = agent.visibility ?? "private";
@@ -628,7 +632,7 @@ async function queuePreparedExportEvents(params: {
         type: agent.type,
         description: agent.description,
         image: agent.image,
-        metadata: agent.metadata,
+        metadata: stampExportedGroupHome(agent.type, agent.metadata, localHomeBaseUrl),
         visibility,
         parentId: agent.parentId,
         pathIds: agent.pathIds,
@@ -841,6 +845,168 @@ async function ensureProjectedAgent(params: {
     .onConflictDoNothing({ target: agents.id });
 }
 
+/** Strips a trailing slash from a base URL for stable comparison/storage. */
+function normalizeBaseUrl(rawUrl: string): string {
+  return rawUrl.replace(/\/+$/, "");
+}
+
+/**
+ * Stamps this instance's base URL as the `homeBaseUrl` on a locally-owned group
+ * agent's exported metadata, so the canonical home travels with the card and
+ * survives a relay hop through the global hub (peers can't reliably infer it
+ * from the sending node otherwise). No-op for non-group agents, agents already
+ * carrying a home, and foreign (federated) rows we don't own.
+ */
+function stampExportedGroupHome(
+  agentType: string,
+  metadata: Record<string, unknown> | null | undefined,
+  localHomeBaseUrl: string,
+): Record<string, unknown> | null | undefined {
+  if (!isGroupAgentType(agentType)) return metadata;
+  const meta = (metadata ?? {}) as Record<string, unknown>;
+  if (typeof meta.sourceNodeId === "string" && meta.sourceNodeId) return metadata;
+  const existing =
+    (typeof meta.homeBaseUrl === "string" && meta.homeBaseUrl) ||
+    (typeof meta.canonicalUrl === "string" && meta.canonicalUrl);
+  if (existing) return metadata;
+  return { ...meta, homeBaseUrl: localHomeBaseUrl };
+}
+
+/**
+ * Ensures a federated group agent carries a canonical `homeBaseUrl` so the
+ * no-mirror self-view redirect and membership links resolve to the sovereign
+ * group instance rather than the relaying hub.
+ *
+ * Precedence:
+ *  1. A home stamped by the origin (`homeBaseUrl`/`canonicalUrl` in the payload)
+ *     — relay-safe, survives a hop through the global hub.
+ *  2. The direct peer's base URL, but ONLY when that peer is the home itself
+ *     (never the `global` relay, whose URL would mislabel the home).
+ */
+function ensureGroupHomeBaseUrl(
+  metadata: Record<string, unknown>,
+  peerNode: { baseUrl: string; role: NodeRole },
+): Record<string, unknown> {
+  const stamped =
+    (typeof metadata.homeBaseUrl === "string" && metadata.homeBaseUrl) ||
+    (typeof metadata.canonicalUrl === "string" && metadata.canonicalUrl) ||
+    null;
+  if (stamped) return metadata;
+  if (peerNode.role !== "global" && peerNode.baseUrl) {
+    return { ...metadata, homeBaseUrl: normalizeBaseUrl(peerNode.baseUrl) };
+  }
+  return metadata;
+}
+
+/** Extracts the admin/member roster from a group agent's metadata. */
+function extractGroupRoster(metadata: Record<string, unknown>): {
+  adminIds: string[];
+  memberIds: string[];
+} {
+  const asStringArray = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((id): id is string => typeof id === "string")
+      : [];
+  return {
+    adminIds: asStringArray(metadata.adminIds),
+    memberIds: asStringArray(metadata.memberIds),
+  };
+}
+
+/**
+ * Read-only resolution of roster agent IDs to their canonical LOCAL ids via
+ * existing `federation_entity_map` aliases.
+ *
+ * A federated group card carries its roster in the SENDING instance's id space
+ * (e.g. the group's home knows this instance's owner under a different local
+ * person id). When the same human already has a `local_alias` mapping here —
+ * the de-dupe link between a remote projection and the canonical local agent —
+ * we collapse the roster onto the local id so membership predicates, role
+ * display, and owner recognition all resolve to one identity instead of a
+ * duplicate. IDs without an existing alias pass through unchanged; this never
+ * mints new mappings or placeholder agents.
+ */
+async function normalizeRosterToLocalIds(ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return ids;
+  const unique = [...new Set(ids)];
+  const rows = await db.query.federationEntityMap.findMany({
+    where: and(
+      inArray(federationEntityMap.externalEntityId, unique),
+      eq(federationEntityMap.entityType, "agent"),
+    ),
+  });
+  if (rows.length === 0) return ids;
+  const aliasToLocal = new Map(
+    rows.map((r) => [r.externalEntityId, r.localEntityId]),
+  );
+  return ids.map((id) => aliasToLocal.get(id) ?? id);
+}
+
+/**
+ * Projects this instance owner's membership in a federated group as a local
+ * `belong` ledger edge so every membership predicate (group lists, member
+ * counts, group-wallet access) resolves it — not just the metadata roster.
+ *
+ * Additive only: presence in the roster grants/refreshes the edge. Absence is
+ * NOT treated as removal here, because a federated card's roster may be partial
+ * or membership may be carried as ledger edges on the group's home; deactivation
+ * must be driven by an explicit membership-removal event, not roster absence.
+ */
+async function reconcileImportedGroupMembership(params: {
+  groupId: string;
+  roster: { adminIds: string[]; memberIds: string[] };
+  primaryAgentId: string | null;
+  sourceNodeId: string;
+  sourceNodeSlug: string;
+}): Promise<void> {
+  const { groupId, roster, primaryAgentId, sourceNodeId, sourceNodeSlug } =
+    params;
+  if (!primaryAgentId) return;
+
+  const isAdmin = roster.adminIds.includes(primaryAgentId);
+  const isMember = isAdmin || roster.memberIds.includes(primaryAgentId);
+  if (!isMember) return;
+
+  const role = isAdmin ? "admin" : "member";
+
+  const existing = await db.query.ledger.findFirst({
+    where: and(
+      eq(ledger.subjectId, primaryAgentId),
+      eq(ledger.objectId, groupId),
+      eq(ledger.objectType, "agent"),
+      inArray(ledger.verb, ["join", "belong"]),
+    ),
+  });
+
+  if (existing) {
+    if (existing.isActive !== true || existing.role !== role) {
+      await db
+        .update(ledger)
+        .set({ isActive: true, role })
+        .where(eq(ledger.id, existing.id));
+    }
+    return;
+  }
+
+  await db.insert(ledger).values({
+    verb: "belong",
+    subjectId: primaryAgentId,
+    objectId: groupId,
+    objectType: "agent",
+    role,
+    isActive: true,
+    metadata: {
+      grantType: "federated_membership",
+      sourceNodeId,
+      sourceNodeSlug,
+      interactionType: "membership",
+      targetId: groupId,
+      targetType: "group",
+      grantedAt: new Date().toISOString(),
+    },
+  } as NewLedgerEntry);
+}
+
 /**
  * Import inbound federation events from a trusted peer, enforcing signature,
  * replay, version, and age checks before persistence.
@@ -1040,20 +1206,46 @@ export async function importFederationEvents(params: {
         const localId = await resolveLocalEntityId(peerNode.id, externalId, "agent");
 
         const sourceMetadata = (payload.metadata as Record<string, unknown> | undefined) ?? {};
-        const metadataWithAttribution = {
+        const baseMetadata = {
           ...sourceMetadata,
           sourceNodeId: peerNode.id,
           sourceNodeSlug: peerNode.slug,
           externalEntityId: externalId,
         };
+        // Group agents must travel with a canonical home so no-mirror redirects
+        // and membership links resolve to the sovereign group instance.
+        const isGroup = isGroupAgentType(type);
+        let metadataWithAttribution = isGroup
+          ? ensureGroupHomeBaseUrl(baseMetadata, peerNode)
+          : baseMetadata;
+        // De-dupe identities: express the federated roster in this instance's
+        // canonical local id space so the owner (and any aliased member) is
+        // recognized as one agent rather than a separate remote projection.
+        if (isGroup) {
+          const rawRoster = extractGroupRoster(metadataWithAttribution);
+          const [adminIds, memberIds] = await Promise.all([
+            normalizeRosterToLocalIds(rawRoster.adminIds),
+            normalizeRosterToLocalIds(rawRoster.memberIds),
+          ]);
+          metadataWithAttribution = {
+            ...metadataWithAttribution,
+            adminIds,
+            memberIds,
+          };
+        }
 
         const existingAgent = await db.query.agents.findFirst({
           where: eq(agents.id, localId),
           columns: { id: true, metadata: true },
         });
-        const isPlaceholder =
-          existingAgent != null &&
-          (existingAgent.metadata as Record<string, unknown> | null)?.federatedPlaceholder === true;
+        const existingMeta =
+          (existingAgent?.metadata as Record<string, unknown> | null) ?? null;
+        const isPlaceholder = existingMeta?.federatedPlaceholder === true;
+        // A row this same peer previously projected is safe to refresh in place
+        // (e.g. an updated group roster or profile); locally-owned/merged agents
+        // — which carry no matching source attribution — are never overwritten.
+        const isFederatedFromPeer =
+          existingMeta != null && existingMeta.sourceNodeId === peerNode.id;
 
         if (!existingAgent) {
           await db
@@ -1070,11 +1262,11 @@ export async function importFederationEvents(params: {
               pathIds: Array.isArray(payload.pathIds) ? (payload.pathIds as string[]) : null,
             })
             .onConflictDoNothing({ target: agents.id });
-        } else if (isPlaceholder) {
-          // Upgrade auto-projected placeholder agents (created by
-          // ensureProjectedAgent when a resource arrived before its owner)
-          // with the real remote profile. Locally merged/owned agents are
-          // never overwritten by inbound federation events.
+        } else if (isPlaceholder || isFederatedFromPeer) {
+          // Upgrade auto-projected placeholder agents and refresh rows
+          // previously projected from this same peer (the real remote profile
+          // or an updated group roster). Locally merged/owned agents are never
+          // overwritten by inbound federation events.
           await db
             .update(agents)
             .set({
@@ -1089,6 +1281,18 @@ export async function importFederationEvents(params: {
               updatedAt: new Date(),
             })
             .where(eq(agents.id, localId));
+        }
+
+        // Project the instance owner's membership in a federated group as a
+        // local `belong` edge so every membership predicate resolves it.
+        if (isGroup) {
+          await reconcileImportedGroupMembership({
+            groupId: localId,
+            roster: extractGroupRoster(metadataWithAttribution),
+            primaryAgentId: getInstanceConfig().primaryAgentId ?? null,
+            sourceNodeId: peerNode.id,
+            sourceNodeSlug: peerNode.slug,
+          });
         }
 
         // Bind the imported event to the materialized local agent for audit.

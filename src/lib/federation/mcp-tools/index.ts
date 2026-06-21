@@ -250,7 +250,7 @@ export const MCP_TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: "rivr.posts.create",
     description:
-      "Create a post as the active actor. Pass groupId (typically this instance's primary group) to post into a group the actor has write access to; group posting requires membership/admin write access.",
+      "Create a post as the active actor. Pass groupId (typically this instance's primary group) to post into a group the actor has write access to; group posting requires membership/admin write access. Pass ownerId to post AS a group the actor administers — the post is then owned by and homes on that group.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -260,6 +260,10 @@ export const MCP_TOOL_DEFINITIONS: McpToolDefinition[] = [
         content: { type: "string" },
         postType: { type: "string" },
         groupId: { type: "string", description: "Group to post into. Defaults to a personal post when omitted." },
+        ownerId: {
+          type: "string",
+          description: "Post AS this group (the actor must have write access). The post is owned by and homes on the group.",
+        },
         localeId: { type: "string" },
         imageUrl: { type: "string" },
         isGlobal: { type: "boolean", description: "Whether the post is federation-projectable. Default: true" },
@@ -285,6 +289,7 @@ export const MCP_TOOL_DEFINITIONS: McpToolDefinition[] = [
         content,
         postType: getString(args.postType) ?? "social",
         groupId: getString(args.groupId) ?? undefined,
+        ownerId: getString(args.ownerId) ?? undefined,
         localeId: getString(args.localeId) ?? undefined,
         imageUrl: getString(args.imageUrl),
         isGlobal: getBoolean(args.isGlobal, true),

@@ -41,23 +41,8 @@ import {
   WALLET_TX_STATUS,
 } from '@/lib/wallet-constants';
 import { isValidEthAddress } from '@/lib/eth-utils';
+import { GROUP_AGENT_TYPES } from '@/lib/agent-types';
 import type { WalletBalance, WalletTransactionView } from '@/types';
-
-/**
- * Agent types considered "group-like" for group-wallet visibility.
- *
- * Business rule:
- * Agents can access group wallets only when they have an active `join` or
- * `belong` edge to an agent in this allowlist.
- */
-const GROUP_AGENT_TYPES = [
-  'organization',
-  'org',
-  'ring',
-  'family',
-  'guild',
-  'community',
-] as const;
 
 const DEFAULT_PLATFORM_ORG_NAME = 'RIVR';
 

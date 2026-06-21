@@ -235,7 +235,7 @@ export async function createResourceWithLedger(input: CreateResourceInput): Prom
       const [owner] = await db
         .select({ id: agents.id })
         .from(agents)
-        .where(and(eq(agents.id, ownerId), eq(agents.type, "organization")))
+        .where(and(eq(agents.id, ownerId), inArray(agents.type, [...GROUP_LIKE_OWNER_AGENT_TYPES])))
         .limit(1);
       if (!owner || !(await hasGroupWriteAccess(userId, ownerId))) {
         return {

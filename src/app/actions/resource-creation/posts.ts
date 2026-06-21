@@ -149,6 +149,7 @@ export async function createPostResource(input: {
   offeringType?: string;
   eventId?: string;
   groupId?: string;
+  ownerId?: string;
   imageUrl?: string | null;
   localeId?: string | null;
   gratitudeRecipientId?: string | null;
@@ -204,6 +205,23 @@ export async function createPostResource(input: {
     }
   }
 
+  // Posting AS a group (group-owned content) is allowed for admins/members with
+  // write access. The post is owned by the group and homes on the group's
+  // instance, mirroring group-owned offerings. When ownerId === userId this
+  // collapses back to the author-owned default. A cross-instance forward lands
+  // here with ownerId set to this instance's local group via withTargetOwner.
+  const ownerId = input.ownerId ?? userId;
+  if (ownerId !== userId) {
+    const allowedOwner = await hasGroupWriteAccess(userId, ownerId);
+    if (!allowedOwner) {
+      return {
+        success: false,
+        message: "You do not have permission to post as this group.",
+        error: { code: "FORBIDDEN" },
+      };
+    }
+  }
+
   const fallbackTitle = input.content.trim().slice(0, 80);
   const scopedLocaleIds = Array.from(
     new Set(
@@ -243,12 +261,15 @@ export async function createPostResource(input: {
     ? new Date(Date.now() + 60 * 60 * 1000).toISOString()
     : null;
 
-  // Embed author identity in metadata so post cards render correctly without a separate fetch.
-  const authorAgent = await getAgent(userId);
+  // Embed author identity in metadata so post cards render correctly without a
+  // separate fetch. When posting AS a group, the displayed author is the group.
+  const authorAgent = await getAgent(ownerId);
 
   // Scope tags encode chapter/group visibility hints used by feed and discovery queries.
   // federatedWrite resolves the home instance and forwards remotely if needed.
-  const targetAgentId = input.groupId || userId;
+  // A group-owned post homes on the group (ownerId); a post merely surfaced into
+  // a group homes on the group it targets (groupId); otherwise on the author.
+  const targetAgentId = input.ownerId || input.groupId || userId;
   const facadeResult = await federatedWrite(
     {
       type: "createPostResource",
@@ -262,6 +283,7 @@ export async function createPostResource(input: {
         type: "post",
         content: input.content,
         visibility,
+        ownerId,
         tags: scopeTags,
         embeds: input.embeds ?? [],
         ...(isLive && input.liveLocation ? { location: input.liveLocation } : {}),
@@ -275,6 +297,7 @@ export async function createPostResource(input: {
           offeringType: input.offeringType ?? null,
           eventId: input.eventId ?? null,
           groupId: input.groupId ?? null,
+          ownerId,
           gratitudeRecipientId: input.gratitudeRecipientId ?? null,
           gratitudeRecipientName: input.gratitudeRecipientName ?? null,
           imageUrl: input.imageUrl ?? null,
@@ -329,7 +352,7 @@ export async function createPostResource(input: {
       entityType: "resource",
       entityId: actionResult.resourceId,
       actorId: userId,
-      payload: { postType: input.postType ?? "social", groupId: input.groupId ?? null },
+      payload: { postType: input.postType ?? "social", groupId: input.groupId ?? null, ownerId },
     }).catch(() => {});
 
     if (linkedBundle) {
