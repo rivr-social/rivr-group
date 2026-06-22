@@ -94,6 +94,7 @@ export async function createOfferingResource(input: {
   targetAgentTypes: string[];
   ownerId?: string;
   scopedLocaleIds?: string[];
+  scopedRegionIds?: string[];
   scopedGroupIds?: string[];
   scopedUserIds?: string[];
   postToFeed?: boolean;
@@ -272,14 +273,22 @@ export async function createOfferingResource(input: {
       }
     }
 
-    // Determine visibility from scoping
+    // Determine visibility from scoping.
+    // Regions are place-typed agents (metadata.placeType region/basin) and scope
+    // the offering the same way locales do — folded into the place-scope
+    // (chapterTags) set and the place-scoped "locale" visibility level — but
+    // tracked distinctly in metadata.scopedRegionIds.
+    const scopedRegionIds = Array.from(
+      new Set((Array.isArray(input.scopedRegionIds) ? input.scopedRegionIds : []).filter((id) => id && id !== "all")),
+    );
     const hasScopedLocales =
       Array.isArray(input.scopedLocaleIds) && input.scopedLocaleIds.length > 0;
+    const hasScopedRegions = scopedRegionIds.length > 0;
     const hasScopedGroups =
       Array.isArray(input.scopedGroupIds) && input.scopedGroupIds.length > 0;
     const hasScopedUsers =
       Array.isArray(input.scopedUserIds) && input.scopedUserIds.length > 0;
-    const hasAnyScoping = hasScopedLocales || hasScopedGroups || hasScopedUsers;
+    const hasAnyScoping = hasScopedLocales || hasScopedRegions || hasScopedGroups || hasScopedUsers;
 
     let offeringVisibility: VisibilityLevel = "public";
     if (hasAnyScoping) {
@@ -293,6 +302,7 @@ export async function createOfferingResource(input: {
     const allScopeTags = Array.from(
       new Set([
         ...(input.scopedLocaleIds ?? []),
+        ...scopedRegionIds,
         ...(input.scopedGroupIds ?? []),
         ...(input.scopedUserIds ?? []),
         ...(input.tags ?? []),
@@ -335,8 +345,9 @@ export async function createOfferingResource(input: {
         targetAgentTypes: input.targetAgentTypes,
         groupId: firstGroupId,
         groupTags,
-        chapterTags: input.scopedLocaleIds ?? [],
+        chapterTags: Array.from(new Set([...(input.scopedLocaleIds ?? []), ...scopedRegionIds])),
         scopedLocaleIds: input.scopedLocaleIds ?? [],
+        scopedRegionIds,
         scopedGroupIds: input.scopedGroupIds ?? [],
         scopedUserIds: input.scopedUserIds ?? [],
         totalPriceCents,
@@ -444,7 +455,9 @@ export async function createOfferingResource(input: {
 
     if (input.postToFeed !== false) {
       try {
-        const chapterTags = (input.scopedLocaleIds ?? []).filter((id) => id !== "all");
+        const chapterTags = Array.from(
+          new Set([...(input.scopedLocaleIds ?? []), ...scopedRegionIds].filter((id) => id && id !== "all")),
+        );
         const scopeTags = Array.from(new Set([...chapterTags, ...groupTags]));
 
         const [authorAgent] = await db
@@ -490,6 +503,8 @@ export async function createOfferingResource(input: {
             images: [],
             chapterTags,
             groupTags,
+            scopedLocaleIds: input.scopedLocaleIds ?? [],
+            scopedRegionIds,
             authorName: authorAgent?.name ?? null,
             authorImage: authorAgent?.image ?? null,
           },

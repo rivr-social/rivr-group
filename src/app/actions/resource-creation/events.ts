@@ -31,6 +31,7 @@ export async function syncEventTicketOfferings(params: {
   visibility: VisibilityLevel;
   tags: string[];
   scopedLocaleIds?: string[];
+  scopedRegionIds?: string[];
   scopedGroupIds?: string[];
   scopedUserIds?: string[];
   ticketTypes: NormalizedEventTicket[];
@@ -91,6 +92,7 @@ export async function syncEventTicketOfferings(params: {
       items: [{ resourceId: params.eventId, term: ticket.term, priceCents: ticket.priceCents }],
       targetAgentTypes: ["person"],
       scopedLocaleIds: params.scopedLocaleIds ?? [],
+      scopedRegionIds: params.scopedRegionIds ?? [],
       scopedGroupIds: params.scopedGroupIds ?? [],
       scopedUserIds: params.scopedUserIds ?? [],
       status: "active",
@@ -169,7 +171,9 @@ export async function createEventResource(input: {
   venueStartTime?: string | null;
   venueEndTime?: string | null;
   localeId?: string | null;
+  regionId?: string | null;
   scopedLocaleIds?: string[];
+  scopedRegionIds?: string[];
   scopedGroupIds?: string[];
   scopedUserIds?: string[];
   isGlobal?: boolean;
@@ -250,22 +254,34 @@ export async function createEventResource(input: {
   }
 
   // Determine visibility from scoping selections.
+  // Regions are place-typed agents (metadata.placeType region/basin), scoped the
+  // same way locales are — folded into the place-scope (chapterTags) set and the
+  // place-scoped "locale" visibility level — but tracked distinctly in metadata.
   const hasScopedLocales = Array.isArray(input.scopedLocaleIds) && input.scopedLocaleIds.length > 0;
+  const hasScopedRegions = Array.isArray(input.scopedRegionIds) && input.scopedRegionIds.length > 0;
   const hasScopedGroups = Array.isArray(input.scopedGroupIds) && input.scopedGroupIds.length > 0;
   const hasScopedUsers = Array.isArray(input.scopedUserIds) && input.scopedUserIds.length > 0;
-  const hasAnyScoping = hasScopedLocales || hasScopedGroups || hasScopedUsers;
+  const hasAnyScoping = hasScopedLocales || hasScopedRegions || hasScopedGroups || hasScopedUsers;
 
   // isGlobal defaults to true — events are globally discoverable unless the user opts out.
   const isGlobal = input.isGlobal !== false;
   let eventVisibility: VisibilityLevel = "public";
   if (!isGlobal) {
     // User explicitly opted out of global visibility.
-    eventVisibility = hasScopedGroups || hasScopedUsers ? "private" : hasScopedLocales ? "locale" : "members";
+    eventVisibility = hasScopedGroups || hasScopedUsers ? "private" : hasScopedLocales || hasScopedRegions ? "locale" : "members";
   } else if (hasAnyScoping) {
     // Globally visible but also tagged for locale/group discovery.
     eventVisibility = "public";
   }
 
+  const scopedRegionIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(input.scopedRegionIds) ? input.scopedRegionIds : []),
+        ...(input.regionId && input.regionId !== "all" ? [input.regionId] : []),
+      ].filter((id) => id && id !== "all"),
+    ),
+  );
   const derivedLocaleId =
     (Array.isArray(input.scopedLocaleIds) && input.scopedLocaleIds.length > 0
       ? input.scopedLocaleIds[0]
@@ -276,6 +292,7 @@ export async function createEventResource(input: {
   const allScopeTags = Array.from(new Set([
     ...baseChapterTags,
     ...(input.scopedLocaleIds ?? []),
+    ...scopedRegionIds,
     ...(input.scopedGroupIds ?? []),
     ...(input.scopedUserIds ?? []),
   ]));
@@ -305,7 +322,7 @@ export async function createEventResource(input: {
           location: input.location,
           imageUrl: input.imageUrl ?? null,
           images: input.imageUrl ? [input.imageUrl] : [],
-          chapterTags: Array.from(new Set([...baseChapterTags, ...(input.scopedLocaleIds ?? [])])),
+          chapterTags: Array.from(new Set([...baseChapterTags, ...(input.scopedLocaleIds ?? []), ...scopedRegionIds])),
           eventType: input.eventType,
           price: normalizedTickets[0]?.priceCents ? normalizedTickets[0].priceCents / 100 : input.price ?? null,
           groupId: input.groupId ?? (ownerId !== resolvedUserId ? ownerId : null),
@@ -314,6 +331,7 @@ export async function createEventResource(input: {
           venueStartTime: input.venueStartTime ?? null,
           venueEndTime: input.venueEndTime ?? null,
           localeId: derivedLocaleId,
+          regionId: scopedRegionIds[0] ?? (input.regionId && input.regionId !== "all" ? input.regionId : null),
           ticketTypes: normalizedTickets.map((ticket) => ({
             id: ticket.id,
             name: ticket.name,
@@ -323,6 +341,7 @@ export async function createEventResource(input: {
           })),
           isGlobal,
           scopedLocaleIds: input.scopedLocaleIds ?? [],
+          scopedRegionIds,
           scopedGroupIds: input.scopedGroupIds ?? [],
           scopedUserIds: input.scopedUserIds ?? [],
           ...(input.eftValues ? { eftValues: input.eftValues } : {}),
@@ -342,6 +361,7 @@ export async function createEventResource(input: {
           visibility: eventVisibility,
           tags: allScopeTags,
           scopedLocaleIds: input.scopedLocaleIds,
+          scopedRegionIds,
           scopedGroupIds: input.scopedGroupIds,
           scopedUserIds: input.scopedUserIds,
           ticketTypes: normalizedTickets,
