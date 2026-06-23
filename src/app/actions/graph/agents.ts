@@ -196,3 +196,26 @@ export async function fetchAllAgents(options?: {
 export async function fetchAgentsByIds(ids: string[]): Promise<SerializedAgent[]> {
   return q("required", { table: "agents", fn: "getAgentsByIds", ids });
 }
+
+/**
+ * Fetches agents by id list using the optional/public visibility path.
+ *
+ * Use this to resolve display identities (name/avatar) of authors that are
+ * already surfaced as owners of publicly-visible content — e.g. group-owned or
+ * federated post authors on an anonymously-viewable group/profile page. Unlike
+ * {@link fetchAgentsByIds}, this does not throw for logged-out visitors: it
+ * resolves through the same optional-auth path as {@link fetchPublicAgentById},
+ * so anonymous viewers get public author records instead of an empty list (and
+ * a "Unknown User" fallback). Authenticated viewers still get viewer-scoped
+ * permission filtering.
+ *
+ * @param ids Agent ids to load.
+ * @returns Serialized agents visible to the caller (public set when anonymous).
+ * @example
+ * ```ts
+ * const authors = await fetchPublicAgentsByIds(["uuid-1", "uuid-2"]);
+ * ```
+ */
+export async function fetchPublicAgentsByIds(ids: string[]): Promise<SerializedAgent[]> {
+  return q("optional", { table: "agents", fn: "getAgentsByIds", ids });
+}

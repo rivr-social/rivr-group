@@ -1,0 +1,141 @@
+import { and, eq } from "drizzle-orm";
+import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { isGroupAdmin } from "@/app/actions/group-admin";
+import { db } from "@/db";
+import { agents, userConnectors } from "@/db/schema";
+import { isGroupAgentType } from "@/lib/agent-types";
+import { CONNECTOR_CATALOG, getConnectorDefinition } from "@/lib/connectors/catalog";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Resolve the agent whose connectors a request targets, enforcing authorization.
+ *
+ * When `requested` names a different agent than the session actor, that agent
+ * must be a group-like type AND the actor must be a group admin. Connectors
+ * store provider credentials, so this gate is intentionally admin-only
+ * (`isGroupAdmin`) rather than the broader member-level `hasGroupWriteAccess`.
+ */
+async function resolveSubject(request: Request, requested?: string) {
+  const session = await auth();
+  const actorId = session?.user?.id;
+  if (!actorId) return { error: "Unauthorized", status: 401 } as const;
+  const targetAgentId = requested?.trim() || actorId;
+  if (targetAgentId !== actorId) {
+    const [target] = await db.select({ type: agents.type }).from(agents).where(eq(agents.id, targetAgentId)).limit(1);
+    if (!target || !isGroupAgentType(target.type) || !(await isGroupAdmin(actorId, targetAgentId))) {
+      return { error: "You must be a group admin to manage these connectors.", status: 403 } as const;
+    }
+  }
+  return { actorId, targetAgentId } as const;
+}
+
+function targetFromUrl(request: Request) {
+  return new URL(request.url).searchParams.get("targetAgentId") ?? undefined;
+}
+
+function buildTestUrl(provider: string, template: string, token: string, account: string) {
+  if (provider === "signal") {
+    throw new Error("Signal bridge testing is unavailable until an instance allow-list is configured.");
+  }
+  if (provider === "substack") {
+    const publication = new URL(account);
+    if (publication.protocol !== "https:" || !(publication.hostname === "substack.com" || publication.hostname.endsWith(".substack.com"))) {
+      throw new Error("Substack publication must be an https://*.substack.com URL.");
+    }
+    return `${publication.origin}/feed`;
+  }
+  return template
+    .replace("{token}", encodeURIComponent(token))
+    .replace("{account}", encodeURIComponent(account.replace(/\/+$/, "")));
+}
+
+function testHeaders(provider: string, token: string): Record<string, string> {
+  if (!token || provider === "telegram" || provider === "substack" || provider === "signal") return {};
+  if (provider === "notion") return { Authorization: `Bearer ${token}`, "Notion-Version": "2022-06-28" };
+  return { Authorization: `Bearer ${token}` };
+}
+
+export async function GET(request: Request) {
+  const subject = await resolveSubject(request, targetFromUrl(request));
+  if ("error" in subject) return NextResponse.json({ error: subject.error }, { status: subject.status });
+  const rows = await db.select({
+    provider: userConnectors.provider,
+    accountEmail: userConnectors.accountEmail,
+    tokenExpiresAt: userConnectors.tokenExpiresAt,
+    metadata: userConnectors.metadata,
+    lastSyncedAt: userConnectors.lastSyncedAt,
+    lastSyncError: userConnectors.lastSyncError,
+    accessToken: userConnectors.accessToken,
+  }).from(userConnectors).where(eq(userConnectors.userAgentId, subject.targetAgentId));
+  return NextResponse.json({
+    targetAgentId: subject.targetAgentId,
+    definitions: CONNECTOR_CATALOG,
+    connections: rows.map(({ accessToken, ...row }) => ({ ...row, hasCredential: Boolean(accessToken) })),
+  });
+}
+
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null) as null | {
+    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; action?: "save" | "test";
+  };
+  if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  const subject = await resolveSubject(request, body.targetAgentId);
+  if ("error" in subject) return NextResponse.json({ error: subject.error }, { status: subject.status });
+  const definition = getConnectorDefinition(body.provider ?? "");
+  if (!definition) return NextResponse.json({ error: "Unknown connector provider" }, { status: 400 });
+  const accountLabel = body.accountLabel?.trim() ?? "";
+  const credential = body.credential?.trim() ?? "";
+  const refreshCredential = body.refreshCredential?.trim() ?? "";
+  if (!accountLabel) return NextResponse.json({ error: `${definition.accountLabel} is required.` }, { status: 400 });
+
+  const [existing] = await db.select().from(userConnectors).where(and(
+    eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+  )).limit(1);
+  const effectiveCredential = credential || existing?.accessToken || "";
+  if (definition.credentialLabel && !effectiveCredential) {
+    return NextResponse.json({ error: `${definition.credentialLabel} is required.` }, { status: 400 });
+  }
+
+  if (body.action === "test") {
+    let testUrl: string;
+    try {
+      testUrl = buildTestUrl(definition.id, definition.testUrl, effectiveCredential, accountLabel);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid connector configuration." }, { status: 400 });
+    }
+    const response = await fetch(testUrl, {
+      headers: testHeaders(definition.id, effectiveCredential), cache: "no-store", signal: AbortSignal.timeout(10_000),
+    }).catch(() => null);
+    if (!response?.ok) return NextResponse.json({ error: `Provider returned ${response?.status ?? "a connection error"}.` }, { status: 502 });
+    await db.update(userConnectors).set({ lastSyncedAt: new Date(), lastSyncError: null, updatedAt: new Date() }).where(and(
+      eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+    ));
+    return NextResponse.json({ success: true });
+  }
+
+  await db.insert(userConnectors).values({
+    userAgentId: subject.targetAgentId, provider: definition.id, accountEmail: accountLabel,
+    accessToken: effectiveCredential || null, metadata: { connectionType: "credential" }, updatedAt: new Date(),
+    refreshToken: refreshCredential || null,
+    tokenExpiresAt: definition.id.startsWith("google_") || definition.id === "gmail" ? new Date(Date.now() + 55 * 60 * 1000) : null,
+  }).onConflictDoUpdate({
+    target: [userConnectors.userAgentId, userConnectors.provider],
+    set: { accountEmail: accountLabel, ...(credential ? { accessToken: credential } : {}), ...(refreshCredential ? { refreshToken: refreshCredential } : {}), ...(credential && (definition.id.startsWith("google_") || definition.id === "gmail") ? { tokenExpiresAt: new Date(Date.now() + 55 * 60 * 1000) } : {}), updatedAt: new Date(), lastSyncError: null },
+  });
+  return NextResponse.json({ success: true });
+}
+
+export async function DELETE(request: Request) {
+  const body = await request.json().catch(() => null) as null | { targetAgentId?: string; provider?: string };
+  if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  const subject = await resolveSubject(request, body.targetAgentId);
+  if ("error" in subject) return NextResponse.json({ error: subject.error }, { status: subject.status });
+  const definition = getConnectorDefinition(body.provider ?? "");
+  if (!definition) return NextResponse.json({ error: "Unknown connector provider" }, { status: 400 });
+  await db.delete(userConnectors).where(and(
+    eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+  ));
+  return NextResponse.json({ success: true });
+}

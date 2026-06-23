@@ -52,6 +52,7 @@ import { GroupType as LegacyGroupType } from "@/lib/types";
 import type { Group as LegacyGroup } from "@/lib/types";
 import { ConnectionsForm, type GroupGoogleConnectionSummary } from "./connections/connections-form";
 import { fetchGroupGoogleConnectionAction } from "./connections/actions";
+import { ConnectorsSettingsPanel } from "@/components/connectors-settings-panel";
 
 /** Stable tab identifiers used in the `?tab=` query param. */
 const TAB_VALUES = {
@@ -530,7 +531,7 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
           </TabsTrigger>
           <TabsTrigger value={TAB_VALUES.CONNECTIONS} className="inline-flex items-center gap-2">
             <Plug className="h-4 w-4" />
-            Connections
+            Connectors
           </TabsTrigger>
           <TabsTrigger value={TAB_VALUES.MAP_MARKER} className="inline-flex items-center gap-2">
             <Globe className="h-4 w-4" />
@@ -893,13 +894,37 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
           <GroupBroadcastCard groupId={groupId} groupName={groupName} />
         </TabsContent>
 
-        {/* Connections tab — Google Workspace OAuth, calendar sync, group SMTP. */}
+        {/* Connectors tab.
+            Two layers:
+            1. Google Workspace OAuth card — the richer, OAuth-backed Google
+               integration (calendar sync, group SMTP) on `groupConnections`.
+            2. Generic connector panel — the full 13-provider catalog
+               (`@/lib/connectors/catalog`) backed by `userConnectors`, so a
+               group admin can also connect Notion, Substack, Luma, X and the
+               messenger-class providers. Sync backends differ by provider:
+               messenger providers (telegram/whatsapp/signal/slack/facebook/
+               instagram) sync via mautrix bridges on the shared Matrix/Synapse
+               infra; non-messenger providers use direct API/OAuth. This panel
+               only stores credentials + runs a one-shot connectivity test. */}
         <TabsContent value={TAB_VALUES.CONNECTIONS} className="space-y-4">
           <ConnectionsForm
             groupId={groupId}
             connection={connection}
             initialError={connectionsInitialError}
           />
+          <Card>
+            <CardHeader>
+              <CardTitle>All Connectors</CardTitle>
+              <CardDescription>
+                Connect this group to additional providers. Messenger providers
+                sync through RIVR&apos;s Matrix bridges; the rest use direct
+                API/OAuth.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ConnectorsSettingsPanel targetAgentId={groupId} />
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Admin Overview tab renders the GroupAdminView component with data mapped from settings state. */}

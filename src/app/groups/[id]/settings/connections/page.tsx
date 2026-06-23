@@ -1,5 +1,5 @@
 /**
- * Group settings — Connections tab (server component).
+ * Group settings — Connectors tab (server component).
  *
  * Resolves the current group, verifies admin access, and loads the linked
  * Google Workspace connection (if any) before handing control to the
@@ -148,7 +148,7 @@ export default async function GroupConnectionsSettingsPage(
             <ArrowLeft className="h-4 w-4" />
           </Link>
         </Button>
-        <h1 className="text-2xl font-bold">{group.name} — Connections</h1>
+        <h1 className="text-2xl font-bold">{group.name} — Connectors</h1>
       </div>
 
       <ConnectionsForm

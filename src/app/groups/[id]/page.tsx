@@ -9,7 +9,7 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import { MessageSquare, Settings } from "lucide-react"
-import { fetchAgentFeed, fetchGroupDetail, fetchAgentsByIds } from "@/app/actions/graph"
+import { fetchAgentFeed, fetchGroupDetail, fetchPublicAgentsByIds } from "@/app/actions/graph"
 import { agentToGroup, agentToUser } from "@/lib/graph-adapters"
 import { isUuid } from "@/app/actions/graph/types"
 import { resolveEventWindow } from "@/lib/calendar/event-window"
@@ -118,7 +118,12 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         )
     )
   )
-  const authorAgents = authorIds.length > 0 ? await fetchAgentsByIds(authorIds).catch(() => []) : []
+  // Resolve via the public/optional path so logged-out visitors on this
+  // anonymously-viewable group page still get author identities. The
+  // auth-required variant throws for anonymous viewers, and the `.catch`
+  // below would then silently degrade every non-member (group-owned or
+  // federated) post author to the "Unknown User" fallback.
+  const authorAgents = authorIds.length > 0 ? await fetchPublicAgentsByIds(authorIds).catch(() => []) : []
   const authors = authorAgents.map(agentToUser).map((u) => ({
     id: u.id,
     name: u.name,
@@ -132,7 +137,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const chapterTags = (group.chapterTags ?? []) as string[]
   const chapterTagUuids = chapterTags.filter((tag) => isUuid(tag))
   const chapterTagAgents = chapterTagUuids.length > 0
-    ? await fetchAgentsByIds(chapterTagUuids).catch(() => [])
+    ? await fetchPublicAgentsByIds(chapterTagUuids).catch(() => [])
     : []
   const tagLabels: Record<string, string> = {}
   for (const agentRow of chapterTagAgents) {

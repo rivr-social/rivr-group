@@ -13,6 +13,7 @@ export {
   fetchAgentsNearby,
   fetchAllAgents,
   fetchAgentsByIds,
+  fetchPublicAgentsByIds,
 } from "./agents";
 
 // feeds

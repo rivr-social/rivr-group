@@ -2042,3 +2042,42 @@ export const federatedVisitLog = pgTable('federated_visit_log', {
 export type FederatedVisitLogRecord = typeof federatedVisitLog.$inferSelect;
 export type NewFederatedVisitLogRecord = typeof federatedVisitLog.$inferInsert;
 export type NewCronStateGoogleCalendarRecord = typeof cronStateGoogleCalendar.$inferInsert;
+
+/**
+ * Generic connector credentials for an agent (person or group).
+ *
+ * Backs the unified Connectors settings surface, which lets an agent connect
+ * to the full provider catalog (`@/lib/connectors/catalog`) — Google Drive,
+ * Google Calendar, Gmail, Notion, Telegram, WhatsApp, Signal, Slack,
+ * Facebook, Instagram, Substack, Luma, and X — by storing per-provider
+ * credentials. For group targets, writes are authorized by group-admin checks
+ * in the `/api/connectors` route handler.
+ *
+ * One row per (agent, provider): the unique index enforces a single
+ * connection per provider so saves upsert in place rather than duplicating.
+ * Mirrors the global app's `user_connectors` table for cross-instance parity.
+ */
+export const userConnectors = pgTable(
+  'user_connectors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userAgentId: uuid('user_agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    accountEmail: text('account_email'),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+    scope: text('scope'),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    lastSyncError: text('last_sync_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('user_connectors_user_provider_idx').on(table.userAgentId, table.provider),
+  ],
+);
+
+export type UserConnector = typeof userConnectors.$inferSelect;
+export type NewUserConnector = typeof userConnectors.$inferInsert;

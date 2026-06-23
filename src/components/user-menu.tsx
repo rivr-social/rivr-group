@@ -16,7 +16,6 @@ import {
   User,
   Users,
   MessageSquare,
-  Pencil,
   Calendar,
   Drama,
   UserCheck,
@@ -126,22 +125,6 @@ export function UserMenu({ open, onClose }: UserMenuProps) {
               <span>My Profile</span>
             </Link>
             <Link
-              href="/settings"
-              onClick={() => handleNavigation("/settings")}
-              className="flex items-center gap-3 p-2 hover:bg-muted rounded-md transition-colors"
-            >
-              <Pencil className="h-5 w-5" />
-              <span>Edit Profile</span>
-            </Link>
-            <Link
-              href="/settings"
-              onClick={() => handleNavigation("/settings")}
-              className="flex items-center gap-3 p-2 hover:bg-muted rounded-md transition-colors"
-            >
-              <Settings className="h-5 w-5" />
-              <span>Profile Settings</span>
-            </Link>
-            <Link
               href="/"
               onClick={() => handleNavigation("/")}
               className="flex items-center gap-3 p-2 hover:bg-muted rounded-md transition-colors"
@@ -158,8 +141,8 @@ export function UserMenu({ open, onClose }: UserMenuProps) {
               <span>Messages</span>
             </Link>
             <Link
-              href="/calendar"
-              onClick={() => handleNavigation("/calendar")}
+              href="/profile?tab=calendar"
+              onClick={() => handleNavigation("/profile?tab=calendar")}
               className="flex items-center gap-3 p-2 hover:bg-muted rounded-md transition-colors"
             >
               <Calendar className="h-5 w-5" />

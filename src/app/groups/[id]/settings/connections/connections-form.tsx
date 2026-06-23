@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Client form for the per-group Connections settings page.
+ * Client form for the per-group Connectors settings page.
  *
  * Renders either:
  * - A "Connect Google Workspace" CTA when no connection exists, OR
