@@ -311,4 +311,73 @@ describe("resolveSettlementSplits", () => {
       ]);
       expect(splits.reduce((s, x) => s + x.bps, 0)).toBe(FULL_PIE_BPS);
     }));
+
+  it("cascades up the directed lineage graph when lineage mode is enabled (J6/J8)", () =>
+    withTestTransaction(async (db) => {
+      const grandparent = await createTestGroup(db);
+      const parentOrg = await createTestGroup(db, { parentId: grandparent.id });
+      const org = await createTestGroup(db, { parentId: parentOrg.id });
+      const seller = await createTestGroup(db);
+      const project = await createTestResource(db, org.id, {
+        type: "project",
+        metadata: {
+          lineage: { enabled: true, levelBps: [1500, 500] },
+        },
+      });
+
+      const splits = await resolveSettlementSplits({
+        sellerId: seller.id,
+        listingMeta: { projectId: project.id },
+      });
+
+      // keep = 10000 - (1500 + 500) = 8000; parentOrg 15%, grandparent 5%.
+      expect(splits).toEqual([
+        {
+          walletKind: "project",
+          ownerAgentId: org.id,
+          projectResourceId: project.id,
+          role: "project",
+          bps: 8000,
+        },
+        {
+          walletKind: "agent",
+          ownerAgentId: parentOrg.id,
+          role: "parent_org",
+          bps: 1500,
+        },
+        {
+          walletKind: "agent",
+          ownerAgentId: grandparent.id,
+          role: "parent_org",
+          bps: 500,
+        },
+      ]);
+      expect(splits.reduce((s, x) => s + x.bps, 0)).toBe(FULL_PIE_BPS);
+    }));
+
+  it("unions explicit distribution with lineage entries, explicit winning on dedupe", () =>
+    withTestTransaction(async (db) => {
+      const parentOrg = await createTestGroup(db);
+      const org = await createTestGroup(db, { parentId: parentOrg.id });
+      const seller = await createTestGroup(db);
+      const project = await createTestResource(db, org.id, {
+        type: "project",
+        metadata: {
+          // Explicit entry for the parent at 3000 must win over lineage's 1000.
+          distribution: [{ recipientId: parentOrg.id, bps: 3000, role: "parent_org" }],
+          lineage: { enabled: true, levelBps: [1000] },
+        },
+      });
+
+      const splits = await resolveSettlementSplits({
+        sellerId: seller.id,
+        listingMeta: { projectId: project.id },
+      });
+
+      const parentSplit = splits.find((s) => s.ownerAgentId === parentOrg.id);
+      expect(parentSplit?.bps).toBe(3000);
+      // Only one entry for the parent (deduped).
+      expect(splits.filter((s) => s.ownerAgentId === parentOrg.id)).toHaveLength(1);
+      expect(splits.reduce((s, x) => s + x.bps, 0)).toBe(FULL_PIE_BPS);
+    }));
 });

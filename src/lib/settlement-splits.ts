@@ -27,6 +27,10 @@ import { db } from '@/db';
 import { resources } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { BPS_DIVISOR } from '@/lib/wallet-constants';
+import {
+  parseLineageConfig,
+  resolveLineageDistribution,
+} from '@/lib/lineage-distribution';
 
 /** The full pie in basis points. A project may distribute at most all of it. */
 export const FULL_PIE_BPS = BPS_DIVISOR;
@@ -242,12 +246,27 @@ export async function resolveSettlementSplits(
     ),
   );
 
-  // Downstream recipients from config, deduped, self/buyer/seller dropped.
+  // Downstream recipients are the UNION of (1) the explicit per-recipient
+  // distribution config and (2) the directed referral-lineage graph (parent
+  // chain + opted-in coallied groups) when the project enables lineage mode.
+  // Explicit entries come first so they win on dedupe (a recipient configured
+  // both ways keeps its explicit bps). Self/buyer/seller are dropped from both.
+  const projectMeta = project.metadata as Record<string, unknown>;
+  const explicitEntries = parseProjectDistribution(projectMeta);
+
+  let lineageEntries: ProjectDistributionEntry[] = [];
+  const lineageConfig = parseLineageConfig(projectMeta);
+  if (lineageConfig.enabled) {
+    lineageEntries = await resolveLineageDistribution(
+      projectOwnerId,
+      lineageConfig,
+    );
+  }
+
+  // Deduped, self/buyer/seller dropped.
   const seen = new Set<string>();
   const downstream: ProjectDistributionEntry[] = [];
-  for (const entry of parseProjectDistribution(
-    project.metadata as Record<string, unknown>,
-  )) {
+  for (const entry of [...explicitEntries, ...lineageEntries]) {
     if (excluded.has(entry.recipientId)) continue;
     if (seen.has(entry.recipientId)) continue;
     seen.add(entry.recipientId);
