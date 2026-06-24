@@ -219,7 +219,7 @@ export function PostFeed({
 
   // Sort posts by timestamp, newest first
   const sortedPosts = useMemo(
-    () => [...posts].sort((a, b) => new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime()),
+    () => [...posts].sort((a, b) => new Date(b.createdAt ?? b.timestamp ?? 0).getTime() - new Date(a.createdAt ?? a.timestamp ?? 0).getTime()),
     [posts]
   )
   const listingById = useMemo(
@@ -284,7 +284,7 @@ export function PostFeed({
       items.push(...groupItems)
     }
 
-    return items.sort((a, b) => new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime())
+    return items.sort((a, b) => new Date(b.createdAt ?? b.timestamp ?? 0).getTime() - new Date(a.createdAt ?? a.timestamp ?? 0).getTime())
   }, [sortedPosts, includeAllTypes, events, groups])
 
   // Event handler: updates local RSVP state and notifies parent callback.
