@@ -44,3 +44,9 @@ export {
 export {
   recordProjectExpenseAction,
 } from './expenses';
+
+export {
+  saveNetAllocationAction,
+  getGroupMembersByClass,
+  resolveGroupNetAllocation,
+} from './net-allocation';

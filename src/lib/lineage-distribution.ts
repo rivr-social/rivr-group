@@ -220,6 +220,20 @@ export async function resolveLineageDistribution(
 }
 
 /**
+ * Agent types that represent a group/org and are therefore eligible to be a
+ * lineage settlement recipient. Mirrors the group-like members of the
+ * `agent_type` enum (there is no literal `'group'` value).
+ */
+export const GROUP_LIKE_AGENT_TYPES = [
+  'organization',
+  'org',
+  'ring',
+  'family',
+  'guild',
+  'community',
+] as const;
+
+/**
  * Confirms an agent is an organization/group-type agent eligible to be a
  * settlement recipient. Used defensively before crediting a lineage ancestor.
  */
@@ -229,5 +243,8 @@ export async function isGroupAgent(agentId: string): Promise<boolean> {
     .from(agents)
     .where(and(eq(agents.id, agentId), sql`${agents.deletedAt} IS NULL`))
     .limit(1);
-  return row?.type === 'organization' || row?.type === 'group';
+  return (
+    row?.type !== undefined &&
+    (GROUP_LIKE_AGENT_TYPES as readonly string[]).includes(row.type)
+  );
 }

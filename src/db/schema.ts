@@ -224,6 +224,7 @@ export const resourceTypeEnum = pgEnum('resource_type', [
   'job',
   'shift',
   'task',
+  'deliverable',
   'training',
   'place',
   'venue',
@@ -1822,6 +1823,63 @@ export const groupConnections = pgTable(
 
 export type GroupConnectionRecord = typeof groupConnections.$inferSelect;
 export type NewGroupConnectionRecord = typeof groupConnections.$inferInsert;
+
+/**
+ * Per-group OUTBOUND social/reshare connectors (EPIC J9).
+ *
+ * Distinct from {@link groupConnections} (which is Google-Workspace inbound
+ * OAuth for mail/calendar): this is a GENERIC outbound lane that lets a group
+ * reshare its content (offerings, posts, events) to external platforms it has
+ * connected — Discord, Slack, Twitter/X, etc. One row per (groupId, platform).
+ *
+ * Credentials are platform-specific (webhook URL, bot token, channel id, access
+ * token) and resolved only at dispatch time. `config.enabled` defaults to
+ * `false`; an admin must explicitly opt the connector in before anything is
+ * posted outbound.
+ */
+export const groupOutboundConnectors = pgTable(
+  'group_outbound_connectors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    platform: text('platform').notNull(),
+    connectedByUserId: uuid('connected_by_user_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'restrict' }),
+    displayName: text('display_name'),
+    credentials: jsonb('credentials')
+      .$type<{
+        webhookUrl?: string;
+        botToken?: string;
+        channelId?: string;
+        accessToken?: string;
+        [key: string]: unknown;
+      }>()
+      .notNull()
+      .default({}),
+    config: jsonb('config')
+      .$type<{ enabled: boolean; [key: string]: unknown }>()
+      .notNull()
+      .default({ enabled: false }),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('group_outbound_connectors_group_platform_idx').on(
+      table.groupId,
+      table.platform,
+    ),
+    index('group_outbound_connectors_group_id_idx').on(table.groupId),
+  ],
+);
+
+export type GroupOutboundConnectorRecord =
+  typeof groupOutboundConnectors.$inferSelect;
+export type NewGroupOutboundConnectorRecord =
+  typeof groupOutboundConnectors.$inferInsert;
 
 /**
  * Sidecar that pairs a Rivr resource (event) with its external counterpart on
