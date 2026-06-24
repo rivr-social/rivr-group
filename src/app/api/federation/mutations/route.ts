@@ -28,6 +28,8 @@ import { isGroupMember } from "@/lib/permissions";
 import { createEventResource } from "@/app/actions/resource-creation/events";
 import { createOfferingResource } from "@/app/actions/resource-creation/offerings";
 import { createPostResource } from "@/app/actions/resource-creation/posts";
+import { updateResource, deleteResource } from "@/app/actions/resource-creation/lifecycle";
+import type { UpdateResourceInput } from "@/app/actions/resource-creation/types";
 import * as kg from "@/lib/kg/autobot-kg-client";
 import {
   AUTHORITY_GUARD_REASONS,
@@ -43,6 +45,8 @@ const KNOWN_MUTATION_TYPES = [
   "createGroupResource",
   "updateGroupResource",
   "deleteGroupResource",
+  "updateResource",
+  "deleteResource",
   "createPostResource",
   "createEventResource",
   "toggleFollowAgent",
@@ -792,6 +796,70 @@ async function handleLegacyMutation(
           }
         : {}),
     });
+  }
+
+  // Cross-instance resource UPDATE. A peer admin (resolved to the local actor
+  // via entity_map) edits a resource homed on this instance. updateResource's
+  // own canModifyResource → hasGroupWriteAccess gate authorizes the resolved
+  // actor exactly as a local session would, so no extra check is needed here.
+  if (type === "updateResource") {
+    const input = withTargetOwner(payload, targetAgentId) as unknown as UpdateResourceInput;
+    const result = await runWithFederationExecutionContext(authorizedActorId, () => updateResource(input));
+    return NextResponse.json(
+      {
+        success: result.success,
+        data: result,
+        accepted: result.success,
+        knownType: true,
+        instanceId: config.instanceId,
+        ...(result.success ? {} : { error: result.message, errorCode: result.error?.code }),
+        ...(routedFrom
+          ? {
+              routedFrom: {
+                originInstanceSlug: routedFrom.originInstanceSlug,
+                originInstanceId: routedFrom.originInstanceId,
+              },
+            }
+          : {}),
+      },
+      { status: result.success ? 200 : 403 },
+    );
+  }
+
+  // Cross-instance resource DELETE (soft-delete + delete-ledger row +
+  // RESOURCE_DELETED domain event so the deletion federates back out and clears
+  // peer projections). Same authorization path as a local delete.
+  if (type === "deleteResource") {
+    const resourceId =
+      payload && typeof payload === "object"
+        ? ((payload as Record<string, unknown>).resourceId as string | undefined)
+        : undefined;
+    if (!resourceId) {
+      return NextResponse.json(
+        { success: false, accepted: false, knownType: true, instanceId: config.instanceId, error: "resourceId is required" },
+        { status: 400 },
+      );
+    }
+    const result = await runWithFederationExecutionContext(authorizedActorId, () => deleteResource(resourceId));
+    return NextResponse.json(
+      {
+        success: result.success,
+        data: result,
+        accepted: result.success,
+        knownType: true,
+        instanceId: config.instanceId,
+        ...(result.success ? {} : { error: result.message, errorCode: result.error?.code }),
+        ...(routedFrom
+          ? {
+              routedFrom: {
+                originInstanceSlug: routedFrom.originInstanceSlug,
+                originInstanceId: routedFrom.originInstanceId,
+              },
+            }
+          : {}),
+      },
+      { status: result.success ? 200 : 403 },
+    );
   }
 
   // Honesty contract (rivr-group#9): mutation types without a real dispatch
