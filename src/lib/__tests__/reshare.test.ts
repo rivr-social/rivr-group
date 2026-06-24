@@ -1,15 +1,20 @@
 /**
  * Tests for the pure cross-platform reshare logic (EPIC J9): platform/type
- * narrowing, stable idempotency keys, platform-clamped payload building, and the
- * credential gate that decides whether an adapter can actually deliver. DB-free.
+ * narrowing, delivery-mode classification, share-intent URL building, stable
+ * idempotency keys, payload building (which ALWAYS carries the canonical
+ * backlink and rejects a missing one), and the credential gate that only allows
+ * server push for API-mode platforms. DB-free.
  */
 import { describe, it, expect } from 'vitest';
 import {
   SUPPORTED_RESHARE_PLATFORMS,
+  PLATFORM_DELIVERY_MODE,
   normalizeResharePlatform,
   isReshareableResourceType,
+  reshareDeliveryMode,
   reshareIdempotencyKey,
   buildResharePayload,
+  buildShareIntentUrl,
   connectorCanDeliver,
   type ReshareSource,
 } from '@/lib/reshare';
@@ -58,6 +63,40 @@ describe('reshareIdempotencyKey', () => {
   });
 });
 
+describe('reshareDeliveryMode', () => {
+  it('classifies webhook/API platforms as api', () => {
+    expect(reshareDeliveryMode('discord')).toBe('api');
+    expect(reshareDeliveryMode('slack')).toBe('api');
+    expect(reshareDeliveryMode('webhook')).toBe('api');
+  });
+
+  it('classifies consumer platforms as user-completed share-intent', () => {
+    expect(reshareDeliveryMode('twitter')).toBe('share-intent');
+    expect(reshareDeliveryMode('mastodon')).toBe('share-intent');
+  });
+
+  it('declares a mode for every supported platform', () => {
+    for (const p of SUPPORTED_RESHARE_PLATFORMS) {
+      expect(PLATFORM_DELIVERY_MODE[p]).toBeDefined();
+    }
+  });
+});
+
+describe('buildShareIntentUrl', () => {
+  it('builds a twitter intent URL carrying the text and backlink', () => {
+    const url = buildShareIntentUrl('twitter', 'Hello', 'https://group.example/posts/r1');
+    expect(url.startsWith('https://twitter.com/intent/tweet?')).toBe(true);
+    expect(url).toContain('text=Hello');
+    expect(url).toContain(encodeURIComponent('https://group.example/posts/r1'));
+  });
+
+  it('builds a mastodon share URL combining text + backlink', () => {
+    const url = buildShareIntentUrl('mastodon', 'Hello', 'https://group.example/posts/r1');
+    expect(url.startsWith('https://mastodon.social/share?')).toBe(true);
+    expect(url).toContain(encodeURIComponent('https://group.example/posts/r1'));
+  });
+});
+
 describe('buildResharePayload', () => {
   const source: ReshareSource = {
     resourceId: 'r1',
@@ -67,26 +106,34 @@ describe('buildResharePayload', () => {
     url: 'https://group.example/marketplace/r1',
   };
 
-  it('combines title and description, carries url + idempotency key', () => {
+  it('combines title and description and ALWAYS ends with the backlink url', () => {
     const payload = buildResharePayload('g1', 'discord', source);
     expect(payload.platform).toBe('discord');
+    expect(payload.deliveryMode).toBe('api');
     expect(payload.title).toBe('Hand-carved spoons');
-    expect(payload.body).toBe(
-      'Hand-carved spoons — A set of three locally crafted spoons.',
-    );
+    expect(payload.body).toContain('Hand-carved spoons — A set of three locally crafted spoons.');
+    // The mandatory clickable backlink is embedded at the END of the body.
+    expect(payload.body.endsWith('https://group.example/marketplace/r1')).toBe(true);
     expect(payload.url).toBe('https://group.example/marketplace/r1');
     expect(payload.idempotencyKey).toBe('reshare:g1:discord:r1');
   });
 
-  it('falls back to title-only when there is no description', () => {
-    const payload = buildResharePayload('g1', 'slack', {
-      ...source,
-      description: null,
-    });
-    expect(payload.body).toBe('Hand-carved spoons');
+  it('always includes the backlink even with no description', () => {
+    const payload = buildResharePayload('g1', 'slack', { ...source, description: null });
+    expect(payload.body).toContain('Hand-carved spoons');
+    expect(payload.body.endsWith('https://group.example/marketplace/r1')).toBe(true);
   });
 
-  it('clamps the body to the platform character limit with an ellipsis', () => {
+  it('THROWS when there is no canonical backlink url', () => {
+    expect(() => buildResharePayload('g1', 'discord', { ...source, url: '' })).toThrow(
+      /backlink/,
+    );
+    expect(() => buildResharePayload('g1', 'discord', { ...source, url: '   ' })).toThrow(
+      /backlink/,
+    );
+  });
+
+  it('clamps to the platform limit while PRESERVING the whole backlink', () => {
     const longDescription = 'x'.repeat(500);
     const payload = buildResharePayload('g1', 'twitter', {
       ...source,
@@ -94,17 +141,24 @@ describe('buildResharePayload', () => {
     });
     // twitter limit is 240
     expect(payload.body.length).toBeLessThanOrEqual(240);
-    expect(payload.body.endsWith('…')).toBe(true);
+    // The backlink is never truncated away — it remains intact at the end.
+    expect(payload.body.endsWith('https://group.example/marketplace/r1')).toBe(true);
   });
 
-  it('does not truncate content within the platform limit', () => {
-    const payload = buildResharePayload('g1', 'webhook', source);
-    expect(payload.body.endsWith('…')).toBe(false);
+  it('returns a share-intent URL for share-intent platforms only', () => {
+    const tw = buildResharePayload('g1', 'twitter', source);
+    expect(tw.deliveryMode).toBe('share-intent');
+    expect(tw.shareIntentUrl).toBeDefined();
+    expect(tw.shareIntentUrl).toContain('twitter.com/intent/tweet');
+
+    const dc = buildResharePayload('g1', 'discord', source);
+    expect(dc.deliveryMode).toBe('api');
+    expect(dc.shareIntentUrl).toBeUndefined();
   });
 });
 
 describe('connectorCanDeliver', () => {
-  it('webhook-style platforms require a webhookUrl', () => {
+  it('webhook-style api platforms require a webhookUrl', () => {
     expect(connectorCanDeliver('discord', { webhookUrl: 'https://x' })).toBe(true);
     expect(connectorCanDeliver('slack', { webhookUrl: 'https://x' })).toBe(true);
     expect(connectorCanDeliver('webhook', { webhookUrl: 'https://x' })).toBe(true);
@@ -112,10 +166,9 @@ describe('connectorCanDeliver', () => {
     expect(connectorCanDeliver('slack', { webhookUrl: '' })).toBe(false);
   });
 
-  it('api platforms require an accessToken', () => {
-    expect(connectorCanDeliver('twitter', { accessToken: 'tok' })).toBe(true);
-    expect(connectorCanDeliver('mastodon', { accessToken: 'tok' })).toBe(true);
-    expect(connectorCanDeliver('twitter', {})).toBe(false);
-    expect(connectorCanDeliver('mastodon', { accessToken: '' })).toBe(false);
+  it('NEVER server-delivers share-intent platforms, even with credentials', () => {
+    // These are user-completed; the server must never silently push them.
+    expect(connectorCanDeliver('twitter', { accessToken: 'tok' })).toBe(false);
+    expect(connectorCanDeliver('mastodon', { accessToken: 'tok' })).toBe(false);
   });
 });

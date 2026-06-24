@@ -7,10 +7,12 @@ import { groupOutboundConnectors, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { hasGroupWriteAccess } from "@/app/actions/resource-creation/helpers";
+import { resolveActiveResourcePointerForResource } from "@/lib/federation/manifest-references";
 import {
   buildResharePayload,
   connectorCanDeliver,
   isReshareableResourceType,
+  reshareDeliveryMode,
   reshareIdempotencyKey,
   type ReshareDeliveryResult,
   type ReshareSource,
@@ -20,8 +22,12 @@ import { getCurrentUserId } from "./helpers";
 import type { ActionResult } from "./types";
 import { isUuid } from "./types";
 
-/** Builds the canonical public URL of a resource on this instance. */
-function resourceCanonicalUrl(resourceType: string, resourceId: string): string {
+/**
+ * Builds the LOCAL public URL of a resource on this instance. Used only as the
+ * backlink fallback for resources that are homed here; federated mirrors resolve
+ * their ORIGINAL canonical URL from the manifest instead (see the action).
+ */
+function localResourceUrl(resourceType: string, resourceId: string): string {
   const base = (process.env.BASE_URL ?? "").replace(/\/$/, "");
   const path =
     resourceType === "post"
@@ -33,41 +39,63 @@ function resourceCanonicalUrl(resourceType: string, resourceId: string): string 
 }
 
 /**
- * Delivers a reshare payload through a platform adapter when the connector
- * carries the credentials its platform needs. When it does not, the reshare is
- * recorded (attribution + idempotency) but reported as not delivered — the
- * outbound network adapters are credential-gated, so this is the documented
- * stub boundary rather than a silent failure.
+ * Prepares a reshare for one platform WITHOUT any silent network dispatch.
+ *
+ *  - `share-intent` / `copy-link` platforms are user-completed: we return the
+ *    pre-built composer URL (from the payload) and never push.
+ *  - `api` platforms are pushed only when the connector carries credentials.
+ *    The adapter network call is credential-gated; until platform OAuth/webhook
+ *    delivery is wired it reports `delivered: false` with an explicit reason
+ *    rather than claiming success. NOTHING auto-fires — the user invoked this.
  */
-async function dispatchReshare(
+async function prepareReshare(
   payload: ResharePayload,
   credentials: Record<string, unknown>,
 ): Promise<ReshareDeliveryResult> {
+  if (payload.deliveryMode !== "api") {
+    // User completes the share via the platform composer; no server dispatch.
+    return {
+      platform: payload.platform,
+      deliveryMode: payload.deliveryMode,
+      delivered: false,
+      reason: "user-completed share (open the share link to post)",
+      shareIntentUrl: payload.shareIntentUrl,
+    };
+  }
+
   if (!connectorCanDeliver(payload.platform, credentials)) {
     return {
       platform: payload.platform,
+      deliveryMode: payload.deliveryMode,
       delivered: false,
       reason: "adapter not configured (missing platform credentials)",
     };
   }
-  // Per-platform delivery adapters are credential-gated and live behind the
-  // connector lane. The dispatch boundary is intentionally a no-op stub until
-  // platform OAuth/webhook credentials are wired; the lane, payload, and
-  // attribution are complete and will route to the adapter here.
+  // Per-platform API/webhook delivery is credential-gated and lives behind the
+  // connector lane. The push boundary reports not-yet-delivered until platform
+  // webhook/OAuth delivery is wired; the lane, payload, backlink, and
+  // attribution are complete and route to the adapter here.
   return {
     platform: payload.platform,
+    deliveryMode: payload.deliveryMode,
     delivered: false,
     reason: "delivery adapter pending platform wiring",
   };
 }
 
 /**
- * Reshares a group's resource (offering/post/event) outbound to all of its
+ * USER-INITIATED reshare of a group's resource (offering/post/event) to its
  * active, enabled outbound connectors (EPIC J9).
  *
- * For each connector a platform-appropriate payload is built and dispatched; a
- * `share` ledger edge is recorded per platform carrying the stable idempotency
- * key, so a piece of content is never reshared twice to the same platform.
+ * This is NOT automatic: it runs only when a person explicitly invokes it (no
+ * cron, no create-hook auto-dispatch). For each connector a platform-appropriate
+ * payload is built that ALWAYS carries a clickable backlink to the ORIGINAL
+ * content's canonical RIVR URL (the source instance's URL for federated
+ * mirrors, the local URL for locally-homed content). API platforms are pushed
+ * only when credentials exist; consumer platforms return a user-completed
+ * share-intent URL and are never silently dispatched. A `share` ledger edge is
+ * recorded per platform with the stable idempotency key so the same content is
+ * never reshared twice to the same platform.
  *
  * Authorization: the caller must hold group-write access on the resource owner.
  *
@@ -95,6 +123,7 @@ export async function reshareToConnectedPlatformsAction(input: {
       name: resources.name,
       description: resources.description,
       ownerId: resources.ownerId,
+      metadata: resources.metadata,
     })
     .from(resources)
     .where(and(eq(resources.id, input.resourceId), sql`${resources.deletedAt} IS NULL`))
@@ -129,12 +158,22 @@ export async function reshareToConnectedPlatformsAction(input: {
     return { success: false, message: "No enabled outbound connectors for this group." };
   }
 
+  // The MANDATORY backlink: for a federated mirror, resolve the ORIGINAL
+  // content's canonical URL from the manifest; otherwise use the local URL.
+  const resourceMeta = (resource.metadata ?? {}) as Record<string, unknown>;
+  const sovereignPointer = await resolveActiveResourcePointerForResource(
+    resource.id,
+    resourceMeta,
+  ).catch(() => null);
+  const backlinkUrl =
+    sovereignPointer?.canonicalUrl ?? localResourceUrl(resource.type, resource.id);
+
   const source: ReshareSource = {
     resourceId: resource.id,
     resourceType: resource.type as ReshareSource["resourceType"],
     title: resource.name,
     description: resource.description,
-    url: resourceCanonicalUrl(resource.type, resource.id),
+    url: backlinkUrl,
   };
 
   const results: ReshareDeliveryResult[] = [];
@@ -151,12 +190,17 @@ export async function reshareToConnectedPlatformsAction(input: {
       LIMIT 1
     `)) as Array<Record<string, unknown>>;
     if (existing.length > 0) {
-      results.push({ platform, delivered: false, reason: "already reshared" });
+      results.push({
+        platform,
+        deliveryMode: reshareDeliveryMode(platform),
+        delivered: false,
+        reason: "already reshared",
+      });
       continue;
     }
 
     const payload = buildResharePayload(resource.ownerId, platform, source);
-    const delivery = await dispatchReshare(payload, connector.credentials ?? {});
+    const delivery = await prepareReshare(payload, connector.credentials ?? {});
     results.push(delivery);
 
     await db.insert(ledger).values({
@@ -169,11 +213,16 @@ export async function reshareToConnectedPlatformsAction(input: {
       metadata: {
         interactionType: "reshare",
         platform,
+        deliveryMode: delivery.deliveryMode,
         groupId: resource.ownerId,
         idempotencyKey: key,
+        // Persist the backlink so the recorded reshare always references the
+        // original content's canonical URL.
+        backlinkUrl,
         delivered: delivery.delivered,
         deliveryReason: delivery.reason ?? null,
         externalRef: delivery.externalRef ?? null,
+        shareIntentUrl: delivery.shareIntentUrl ?? null,
       },
     } as NewLedgerEntry);
   }
@@ -181,13 +230,15 @@ export async function reshareToConnectedPlatformsAction(input: {
   revalidatePath(`/groups/${resource.ownerId}`);
 
   const deliveredCount = results.filter((r) => r.delivered).length;
+  const userCompletedCount = results.filter(
+    (r) => r.deliveryMode !== "api" && r.reason !== "already reshared",
+  ).length;
   const recorded = results.length;
-  return {
-    success: true,
-    message:
-      deliveredCount > 0
-        ? `Reshared to ${deliveredCount} platform${deliveredCount === 1 ? "" : "s"}.`
-        : `Reshare recorded for ${recorded} connector${recorded === 1 ? "" : "s"} (delivery pending platform wiring).`,
-    results,
-  };
+  const message =
+    deliveredCount > 0
+      ? `Reshared to ${deliveredCount} platform${deliveredCount === 1 ? "" : "s"}.`
+      : userCompletedCount > 0
+        ? `Prepared ${userCompletedCount} share link${userCompletedCount === 1 ? "" : "s"} to complete, and recorded ${recorded} reshare${recorded === 1 ? "" : "s"}.`
+        : `Reshare recorded for ${recorded} connector${recorded === 1 ? "" : "s"} (delivery pending platform wiring).`;
+  return { success: true, message, results };
 }
