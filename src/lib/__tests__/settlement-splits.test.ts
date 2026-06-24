@@ -385,13 +385,13 @@ describe("resolveSettlementSplits", () => {
       expect(splits.reduce((s, x) => s + x.bps, 0)).toBe(FULL_PIE_BPS);
     }));
 
-  it("applies the DEFAULT lineage cascade when no config is authored (J6/J8 default ON)", () =>
+  it("does NOT cascade when no config is authored — project keeps 100% (explicit-only)", () =>
     withTestTransaction(async (db) => {
       const grandparent = await createTestGroup(db);
       const parentOrg = await createTestGroup(db, { parentId: grandparent.id });
       const org = await createTestGroup(db, { parentId: parentOrg.id });
       const seller = await createTestGroup(db);
-      // No distribution AND no lineage metadata authored anywhere → default applies.
+      // No distribution AND no lineage metadata authored anywhere → no cascade.
       const project = await createTestResource(db, org.id, {
         type: "project",
         metadata: {},
@@ -402,19 +402,21 @@ describe("resolveSettlementSplits", () => {
         listingMeta: { projectId: project.id },
       });
 
-      // Default = flat DEFAULT_LINEAGE_CASCADE_BPS per hop, up to MAX_HOPS=2:
-      // parentOrg (hop 0) + grandparent (hop 1).
-      const parentSplit = splits.find((s) => s.ownerAgentId === parentOrg.id);
-      const grandparentSplit = splits.find((s) => s.ownerAgentId === grandparent.id);
-      expect(parentSplit?.bps).toBe(DEFAULT_LINEAGE_CASCADE_BPS);
-      expect(parentSplit?.role).toBe("parent_org");
-      expect(grandparentSplit?.bps).toBe(DEFAULT_LINEAGE_CASCADE_BPS);
-
-      const keep = splits.find((s) => s.walletKind === "project");
-      expect(keep?.bps).toBe(
-        FULL_PIE_BPS - DEFAULT_LINEAGE_CASCADE_BPS * DEFAULT_LINEAGE_MAX_HOPS,
-      );
-      expect(splits.reduce((s, x) => s + x.bps, 0)).toBe(FULL_PIE_BPS);
+      // Distribution is explicit-only: with nothing authored, no money moves up
+      // the lineage. The project retains the entire net.
+      expect(DEFAULT_LINEAGE_CASCADE_BPS).toBe(0);
+      expect(DEFAULT_LINEAGE_MAX_HOPS).toBe(0);
+      expect(splits.find((s) => s.ownerAgentId === parentOrg.id)).toBeUndefined();
+      expect(splits.find((s) => s.ownerAgentId === grandparent.id)).toBeUndefined();
+      expect(splits).toEqual([
+        {
+          walletKind: "project",
+          ownerAgentId: org.id,
+          projectResourceId: project.id,
+          role: "project",
+          bps: FULL_PIE_BPS,
+        },
+      ]);
     }));
 
   it("an explicit project opt-out disables the default cascade (override)", () =>

@@ -100,39 +100,37 @@ describe('parseLineageConfig', () => {
 // ---------------------------------------------------------------------------
 
 describe('defaultLineageConfig', () => {
-  it('builds an enabled, non-explicit flat per-hop cascade from the constants', () => {
+  it('is DISABLED — distribution is explicit-only, no implicit cascade', () => {
     const config = defaultLineageConfig();
-    expect(config.enabled).toBe(true);
+    expect(config.enabled).toBe(false);
     expect(config.explicit).toBe(false);
     expect(config.coallied).toEqual([]);
-    expect(config.levelBps).toEqual(
-      new Array(DEFAULT_LINEAGE_MAX_HOPS).fill(DEFAULT_LINEAGE_CASCADE_BPS),
-    );
+    expect(config.levelBps).toEqual([]);
   });
 
-  it('keeps the default conservative (each hop is at most a few percent)', () => {
-    // Guard against an accidentally aggressive placeholder: total default
-    // cascade must stay well under 25% of net.
-    const total = DEFAULT_LINEAGE_CASCADE_BPS * DEFAULT_LINEAGE_MAX_HOPS;
-    expect(total).toBeLessThanOrEqual(2500);
+  it('exposes a zero default rate (no money moves on an inferred share)', () => {
+    expect(DEFAULT_LINEAGE_CASCADE_BPS).toBe(0);
+    expect(DEFAULT_LINEAGE_MAX_HOPS).toBe(0);
   });
 });
 
 describe('resolveEffectiveLineageConfig', () => {
-  it('uses the system default when neither project nor org authored config', () => {
+  it('falls back to a DISABLED config when neither project nor org authored config', () => {
     const effective = resolveEffectiveLineageConfig(
       { enabled: false, explicit: false },
       { enabled: false, explicit: false },
     );
     expect(effective).toEqual(defaultLineageConfig());
+    expect(effective.enabled).toBe(false);
   });
 
-  it('uses the system default when there is no org config at all', () => {
+  it('falls back to a DISABLED config when there is no org config at all', () => {
     const effective = resolveEffectiveLineageConfig({
       enabled: false,
       explicit: false,
     });
     expect(effective).toEqual(defaultLineageConfig());
+    expect(effective.enabled).toBe(false);
   });
 
   it('lets an explicit project config win, including an explicit opt-out', () => {

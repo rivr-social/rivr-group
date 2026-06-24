@@ -483,7 +483,7 @@ export function ProjectDistributionTab({
 
         <Separator />
 
-        {/* ── Parent-lineage cascade (default ON, fully overridable) ───────── */}
+        {/* ── Parent-lineage cascade (off until explicitly configured) ─────── */}
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
@@ -492,9 +492,10 @@ export function ProjectDistributionTab({
                 Parent-lineage cascade
               </h3>
               <p className="text-sm text-muted-foreground">
-                Automatically share a slice of net up the parent-organization chain.
-                This is ON by default ({defaultPerHopPercent}% per level) and fully editable.
-                {!lineage.explicit ? " These are the inherited default values — adjust and save to override." : null}
+                Optionally share a slice of net up the parent-organization chain.
+                This is OFF until you turn it on and set a share per level — net is
+                distributed only to the recipients you configure here.
+                {!lineage.explicit ? " Nothing is cascaded by default; enable and save to set shares." : null}
               </p>
             </div>
             <div className="flex items-center gap-2 pt-1">
