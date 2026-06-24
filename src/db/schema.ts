@@ -1159,6 +1159,7 @@ export const walletTransactionTypeEnum = pgEnum('wallet_transaction_type', [
   'eth_record',
   'connect_payout',
   'project_expense',
+  'project_distribution',
 ]);
 
 export const capitalEntrySettlementStatusEnum = pgEnum('capital_entry_settlement_status', [

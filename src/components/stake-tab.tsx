@@ -15,6 +15,12 @@ import { Progress } from "@/components/ui/progress"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  NetAllocationEditor,
+  type NetAllocationClassOption,
+  type NetAllocationMemberOption,
+} from "@/components/net-allocation-editor"
+import type { NetAllocationRule } from "@/lib/net-allocation"
 import type { MemberStake } from "@/lib/types"
 
 /**
@@ -40,13 +46,28 @@ interface StakeTabProps {
    * Contributions section is hidden when there are no recorded contributions.
    */
   recordedContributions?: RecordedContribution[]
+  /**
+   * Whether the current viewer can edit the org net-allocation tree. Only when
+   * true is the admin-only {@link NetAllocationEditor} rendered.
+   */
+  isGroupAdmin?: boolean
+  /** Saved net-allocation rules (`metadata.netAllocation.rules`) for the editor. */
+  netAllocationRules?: NetAllocationRule[]
+  /** Membership classes available as allocation targets in the editor. */
+  netAllocationClasses?: NetAllocationClassOption[]
+  /** Individual members available as allocation targets in the editor. */
+  netAllocationMembers?: NetAllocationMemberOption[]
 }
 
 export function StakeTab({
-  groupId: _groupId,
+  groupId,
   memberStakes,
   totalStakes,
   recordedContributions = [],
+  isGroupAdmin = false,
+  netAllocationRules = [],
+  netAllocationClasses = [],
+  netAllocationMembers = [],
 }: StakeTabProps) {
   const [activeTab, setActiveTab] = useState("overview")
 
@@ -56,6 +77,15 @@ export function StakeTab({
         <h2 className="text-2xl font-bold">Member Stakes</h2>
         <Button variant="outline">Propose Stake Changes</Button>
       </div>
+
+      {isGroupAdmin && (
+        <NetAllocationEditor
+          groupId={groupId}
+          initialRules={netAllocationRules}
+          classOptions={netAllocationClasses}
+          memberOptions={netAllocationMembers}
+        />
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid grid-cols-2 w-full">

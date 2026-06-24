@@ -50,3 +50,7 @@ export {
   getGroupMembersByClass,
   resolveGroupNetAllocation,
 } from './net-allocation';
+
+export {
+  runProjectNetDistributionAction,
+} from './net-distribution';

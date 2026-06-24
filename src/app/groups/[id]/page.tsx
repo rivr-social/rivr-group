@@ -25,6 +25,8 @@ import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data
 import { getAuthenticatedActorId } from "@/lib/server-auth"
 import { calculateTotalStakes, getMemberStakesForGroup } from "@/lib/queries/stakes"
 import { getRecordedContributions } from "@/app/actions/interactions"
+import { getGroupMembersByClass } from "@/app/actions/wallet/net-allocation"
+import { parseNetAllocationTree } from "@/lib/net-allocation"
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -277,6 +279,22 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     }
   })
 
+  // Net-allocation Stake-tree editor data (EPIC J7). Admin-only: the editor is
+  // gated by `isGroupAdmin` and only authoring admins ever see/edit the tree, so
+  // we skip the membership-by-class query entirely for non-admins.
+  const netAllocationTree = parseNetAllocationTree(groupMeta)
+  const netAllocationRules = netAllocationTree.rules
+  let netAllocationClasses: Array<{ key: string; memberCount: number }> = []
+  if (isGroupAdmin) {
+    const membersByClass = await getGroupMembersByClass(id).catch(
+      () => new Map<string, string[]>(),
+    )
+    netAllocationClasses = Array.from(membersByClass.entries()).map(
+      ([key, memberIds]) => ({ key, memberCount: memberIds.length }),
+    )
+  }
+  const netAllocationMembers = members.map((m) => ({ id: m.id, name: m.name }))
+
   const header = (
     <GroupProfileHeader
       groupId={group.id}
@@ -366,6 +384,9 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         serverMemberStakes={serverMemberStakes}
         serverTotalStakes={serverTotalStakes}
         recordedContributions={recordedContributions}
+        netAllocationRules={netAllocationRules}
+        netAllocationClasses={netAllocationClasses}
+        netAllocationMembers={netAllocationMembers}
         pressResources={pressResources}
         documentResources={documentResources.map((r) => {
           const meta = (r.metadata ?? {}) as Record<string, unknown>

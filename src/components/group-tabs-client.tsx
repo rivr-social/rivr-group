@@ -34,6 +34,11 @@ import { GroupAdminManager } from "@/components/group-admin-manager"
 import { GroupRelationshipManager } from "@/components/group-relationship-manager"
 import { FlowPassModal } from "@/components/flow-pass-modal"
 import { GroupAccessDialog } from "@/components/group-access-dialog"
+import type {
+  NetAllocationClassOption,
+  NetAllocationMemberOption,
+} from "@/components/net-allocation-editor"
+import type { NetAllocationRule } from "@/lib/net-allocation"
 import type { Document } from "@/types/domain"
 import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel, GroupTabKey } from "@/lib/types"
 import { ProposalStatus } from "@/lib/types"
@@ -127,6 +132,16 @@ export interface GroupTabsClientProps {
    * omitted the Stake tab renders without a contributions section.
    */
   recordedContributions?: RecordedContribution[]
+  /**
+   * Saved org net-allocation rules (`metadata.netAllocation.rules`). Fed into the
+   * admin-only Stake-tree editor under the Stake tab. Optional: when omitted the
+   * editor starts empty.
+   */
+  netAllocationRules?: NetAllocationRule[]
+  /** Membership classes available as allocation targets in the Stake-tree editor. */
+  netAllocationClasses?: NetAllocationClassOption[]
+  /** Individual members available as allocation targets in the Stake-tree editor. */
+  netAllocationMembers?: NetAllocationMemberOption[]
   pressResources: SerializedResource[]
   documentResources: Document[]
   projectResources: SerializedResource[]
@@ -168,6 +183,9 @@ export function GroupTabsClient({
   serverMemberStakes,
   serverTotalStakes,
   recordedContributions = [],
+  netAllocationRules = [],
+  netAllocationClasses = [],
+  netAllocationMembers = [],
   pressResources,
   documentResources,
   projectResources,
@@ -781,6 +799,10 @@ export function GroupTabsClient({
           memberStakes={memberStakes}
           totalStakes={serverTotalStakes && serverTotalStakes > 0 ? serverTotalStakes : 100}
           recordedContributions={recordedContributions}
+          isGroupAdmin={isGroupAdmin}
+          netAllocationRules={netAllocationRules}
+          netAllocationClasses={netAllocationClasses}
+          netAllocationMembers={netAllocationMembers}
         />
       </TabsContent>
 

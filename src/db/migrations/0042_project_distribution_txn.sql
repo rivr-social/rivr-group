@@ -1,0 +1,11 @@
+-- 0042_project_distribution_txn.sql
+-- Layer-2 project-net distribution (EPIC J7).
+--
+-- A periodic distribution RUN debits a project's treasury net and credits the
+-- resolved per-recipient wallets according to the org's authored net-allocation
+-- tree. The credit leg is a distinct kind of payout (not a marketplace payout,
+-- not an external expense), so it needs its own transaction type for ledger
+-- filtering and UI labeling. `ADD VALUE IF NOT EXISTS` is idempotent and commits
+-- with the migration; the new label is only referenced by application code at
+-- runtime.
+ALTER TYPE "wallet_transaction_type" ADD VALUE IF NOT EXISTS 'project_distribution';
