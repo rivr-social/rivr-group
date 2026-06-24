@@ -4,7 +4,7 @@
  * Shown within group/ring detail pages. Allows users to view their staked amount,
  * stake/unstake tokens, and see staking rewards and voting power.
  *
- * Key props: groupId, memberStakes, totalStakes
+ * Key props: groupId, memberStakes, totalStakes, recordedContributions
  */
 "use client"
 
@@ -13,8 +13,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { MemberStake } from "@/lib/types"
+
+/**
+ * A contributor surfaced because they completed one or more jobs. Recorded via
+ * `recordJobContributionAction` (corrected J2 contribution model: completing a
+ * job records a Stake contribution rather than awarding a badge).
+ */
+export interface RecordedContribution {
+  contributorId: string
+  contributorName: string
+  contributorImage?: string | null
+  jobCount: number
+}
 
 interface StakeTabProps {
   groupId: string
@@ -22,9 +35,19 @@ interface StakeTabProps {
   memberStakes: MemberStake[]
   /** Pre-computed total stake percentage for the group. */
   totalStakes: number
+  /**
+   * Recorded job-contribution stakeholders. Defaults to an empty list so the
+   * Contributions section is hidden when there are no recorded contributions.
+   */
+  recordedContributions?: RecordedContribution[]
 }
 
-export function StakeTab({ groupId: _groupId, memberStakes, totalStakes }: StakeTabProps) {
+export function StakeTab({
+  groupId: _groupId,
+  memberStakes,
+  totalStakes,
+  recordedContributions = [],
+}: StakeTabProps) {
   const [activeTab, setActiveTab] = useState("overview")
 
   return (
@@ -135,6 +158,44 @@ export function StakeTab({ groupId: _groupId, memberStakes, totalStakes }: Stake
           </div>
         </TabsContent>
       </Tabs>
+
+      {recordedContributions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Recorded Contributions</CardTitle>
+            <CardDescription>
+              Contributors recognized for completing jobs in this group&apos;s projects.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {recordedContributions.map((contribution) => (
+                <div
+                  key={contribution.contributorId}
+                  className="flex items-center justify-between p-4 border rounded-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <Avatar>
+                      <AvatarImage
+                        src={contribution.contributorImage || "/placeholder.svg"}
+                        alt={contribution.contributorName}
+                      />
+                      <AvatarFallback>{contribution.contributorName.charAt(0)}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="font-medium">{contribution.contributorName}</p>
+                      <p className="text-sm text-muted-foreground">Contributor</p>
+                    </div>
+                  </div>
+                  <Badge variant="secondary">
+                    {contribution.jobCount} {contribution.jobCount === 1 ? "job" : "jobs"} completed
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

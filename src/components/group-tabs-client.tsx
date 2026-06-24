@@ -64,6 +64,19 @@ interface ProjectJobTree {
   projectLevelTasks: SerializedResource[]
 }
 
+/**
+ * A contributor surfaced in the Stake tab because they completed one or more
+ * jobs (recorded via `recordJobContributionAction`). This is the corrected J2
+ * contribution model: completion records a Stake contribution rather than
+ * awarding a badge.
+ */
+export interface RecordedContribution {
+  contributorId: string
+  contributorName: string
+  contributorImage?: string | null
+  jobCount: number
+}
+
 export interface GroupTabsClientProps {
   groupId: string
   groupName: string
@@ -107,6 +120,13 @@ export interface GroupTabsClientProps {
   stakeActivity: ActivityEntry[]
   serverMemberStakes?: MemberStake[]
   serverTotalStakes?: number
+  /**
+   * Recorded job-contribution stakeholders (EPIC J / J2 contribution model).
+   * Each entry is a contributor who completed one or more jobs, surfaced in the
+   * Stake tab so contributors appear as recognized stakeholders. Optional: when
+   * omitted the Stake tab renders without a contributions section.
+   */
+  recordedContributions?: RecordedContribution[]
   pressResources: SerializedResource[]
   documentResources: Document[]
   projectResources: SerializedResource[]
@@ -147,6 +167,7 @@ export function GroupTabsClient({
   stakeActivity,
   serverMemberStakes,
   serverTotalStakes,
+  recordedContributions = [],
   pressResources,
   documentResources,
   projectResources,
@@ -759,6 +780,7 @@ export function GroupTabsClient({
           groupId={groupId}
           memberStakes={memberStakes}
           totalStakes={serverTotalStakes && serverTotalStakes > 0 ? serverTotalStakes : 100}
+          recordedContributions={recordedContributions}
         />
       </TabsContent>
 

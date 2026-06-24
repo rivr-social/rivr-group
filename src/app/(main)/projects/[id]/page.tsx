@@ -48,6 +48,12 @@ import { ProjectJobsTab } from "@/components/project-jobs-tab"
 import { ProjectDistributionTab } from "@/components/project-distribution-tab"
 import { ProjectExpensePanel } from "@/components/project-expense-panel"
 import { parseProjectDistribution, resolveSettlementSplits, allocateByBps, type SettlementRole } from "@/lib/settlement-splits"
+import {
+  parseLineageConfig,
+  resolveEffectiveLineageConfig,
+  getProjectAncestorChain,
+  DEFAULT_LINEAGE_CASCADE_BPS,
+} from "@/lib/lineage-distribution"
 import { getProjectWalletForResource, getWalletBalance, getTransactionHistory } from "@/lib/wallet"
 import { getJobTimerStatus } from "@/app/actions/job-timer"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -405,6 +411,32 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const recipientOptions = candidateAgents
     .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
     .map((candidate) => ({ id: candidate.id, name: candidate.name, type: candidate.type }))
+
+  // ── Effective lineage cascade config (J6/J8: default ON, overridable) ─────
+  // Resolve what the cascade WILL do today (explicit project → explicit org →
+  // system default) and surface it to the editor as the pre-filled value.
+  const projectLineageConfig = parseLineageConfig(agent.metadata as Record<string, unknown>)
+  const ownerAgentForLineage = projectOwnerAgentId
+    ? await fetchAgent(projectOwnerAgentId).catch(() => null)
+    : null
+  const orgLineageConfig = projectLineageConfig.explicit
+    ? null
+    : parseLineageConfig((ownerAgentForLineage?.metadata ?? null) as Record<string, unknown> | null)
+  const effectiveLineageConfig = resolveEffectiveLineageConfig(
+    projectLineageConfig,
+    orgLineageConfig,
+  )
+  // The ancestor chain gives human names for each per-hop level in the editor.
+  const lineageAncestorIds = projectOwnerAgentId
+    ? await getProjectAncestorChain(projectOwnerAgentId).catch(() => [])
+    : []
+  const lineageAncestorAgents = await Promise.all(
+    lineageAncestorIds.map((id) => fetchAgent(id).catch(() => null)),
+  )
+  const lineageAncestors = lineageAncestorIds.map((id, index) => ({
+    agentId: id,
+    name: lineageAncestorAgents[index]?.name ?? id,
+  }))
 
   // Read-only treasury view: balance + recent settlement transactions. The
   // wallet is only created lazily on first settlement, so absence is normal.
@@ -858,6 +890,13 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             initialDistribution={distributionConfig}
             recipientOptions={recipientOptions}
             isAdmin={isAdmin}
+            lineage={{
+              explicit: projectLineageConfig.explicit ?? false,
+              enabled: effectiveLineageConfig.enabled,
+              levelBps: effectiveLineageConfig.levelBps ?? [],
+              defaultPerHopBps: DEFAULT_LINEAGE_CASCADE_BPS,
+              ancestors: lineageAncestors,
+            }}
           />
         </TabsContent>
       </Tabs>

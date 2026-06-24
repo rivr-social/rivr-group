@@ -25,7 +25,8 @@ import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Plus, Trash2, Landmark, Share2, Loader2 } from "lucide-react"
+import { Plus, Trash2, Landmark, Share2, Loader2, GitBranch } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { updateResource } from "@/app/actions/create-resources"
 import { FULL_PIE_BPS, type SettlementRole } from "@/lib/settlement-splits"
@@ -44,6 +45,27 @@ interface RecipientOption {
   type: string
 }
 
+/** A single parent-lineage ancestor available to receive a cascade share. */
+interface LineageAncestor {
+  agentId: string
+  name: string
+}
+
+/**
+ * The EFFECTIVE lineage cascade config (J6/J8). `explicit` reflects whether the
+ * PROJECT authored its own config; when false the values shown are the resolved
+ * default (system or org-level), pre-filled and editable. `levelBps[i]` is the
+ * share for `ancestors[i]`. `defaultPerHopBps` is the system per-hop default a
+ * newly-added/reset hop should pre-fill to.
+ */
+interface LineageConfigProp {
+  explicit: boolean
+  enabled: boolean
+  levelBps: number[]
+  defaultPerHopBps: number
+  ancestors: LineageAncestor[]
+}
+
 interface ProjectDistributionTabProps {
   projectId: string
   /** The project owner agent — receives the retained "keep" share. */
@@ -54,6 +76,8 @@ interface ProjectDistributionTabProps {
   /** Quick-pick recipients (parent org, allied groups). */
   recipientOptions: RecipientOption[]
   isAdmin: boolean
+  /** Effective parent-lineage cascade config (default ON, overridable). */
+  lineage: LineageConfigProp
 }
 
 /** Downstream-recipient roles selectable in the UI. */
@@ -109,10 +133,68 @@ export function ProjectDistributionTab({
   initialDistribution,
   recipientOptions,
   isAdmin,
+  lineage,
 }: ProjectDistributionTabProps) {
   const { toast } = useToast()
   const [rows, setRows] = useState<DistributionRow[]>(() => initialDistribution.map(entryToRow))
   const [saving, setSaving] = useState(false)
+
+  // ── Lineage cascade editor state (J6/J8: default ON, fully overridable) ─────
+  // Pre-fill with the EFFECTIVE config (default or org/project override). One
+  // editable percentage per ancestor hop; the org keeps whatever is left.
+  const [lineageEnabled, setLineageEnabled] = useState(lineage.enabled)
+  const [lineagePercents, setLineagePercents] = useState<number[]>(() =>
+    lineage.ancestors.map((_, index) => bpsToPercent(lineage.levelBps[index] ?? lineage.defaultPerHopBps)),
+  )
+  const [savingLineage, setSavingLineage] = useState(false)
+  const defaultPerHopPercent = bpsToPercent(lineage.defaultPerHopBps)
+
+  const handleLineagePercentChange = (index: number, value: number) => {
+    setLineagePercents((prev) => prev.map((p, i) => (i === index ? value : p)))
+  }
+
+  const handleResetLineageDefaults = () => {
+    setLineageEnabled(true)
+    setLineagePercents(lineage.ancestors.map(() => defaultPerHopPercent))
+  }
+
+  const handleSaveLineage = async () => {
+    // Persist as metadata.lineage. enabled=false is an explicit OPT-OUT that the
+    // system default will NOT re-enable. levelBps is trimmed of trailing zeros.
+    const levelBps = lineagePercents.map((p) => percentToBps(p))
+    while (levelBps.length > 0 && levelBps[levelBps.length - 1] <= 0) levelBps.pop()
+
+    setSavingLineage(true)
+    try {
+      const result = await updateResource({
+        resourceId: projectId,
+        metadataPatch: { lineage: { enabled: lineageEnabled, levelBps } },
+      })
+      if (result.success) {
+        toast({
+          title: "Lineage cascade saved",
+          description: lineageEnabled
+            ? `Cascading up to ${levelBps.length} parent level${levelBps.length === 1 ? "" : "s"}.`
+            : "Lineage cascade turned off for this project.",
+        })
+      } else {
+        toast({
+          title: "Could not save lineage cascade",
+          description: result.message || "Please try again.",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error("[ProjectDistributionTab] lineage save failed:", error)
+      toast({
+        title: "Could not save lineage cascade",
+        description: "An unexpected error occurred. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setSavingLineage(false)
+    }
+  }
 
   const recipientNameById = useMemo(() => {
     const map = new Map<string, string>()
@@ -397,6 +479,102 @@ export function ProjectDistributionTab({
               "Save Distribution"
             )}
           </Button>
+        </div>
+
+        <Separator />
+
+        {/* ── Parent-lineage cascade (default ON, fully overridable) ───────── */}
+        <div className="space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h3 className="inline-flex items-center gap-2 font-medium">
+                <GitBranch className="h-4 w-4 text-indigo-600" />
+                Parent-lineage cascade
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Automatically share a slice of net up the parent-organization chain.
+                This is ON by default ({defaultPerHopPercent}% per level) and fully editable.
+                {!lineage.explicit ? " These are the inherited default values — adjust and save to override." : null}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <Switch
+                id="lineage-enabled"
+                checked={lineageEnabled}
+                onCheckedChange={setLineageEnabled}
+                aria-label="Enable parent-lineage cascade"
+              />
+              <Label htmlFor="lineage-enabled" className="text-sm">
+                {lineageEnabled ? "On" : "Off"}
+              </Label>
+            </div>
+          </div>
+
+          {lineage.ancestors.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              This organization has no parent in its lineage, so there is nothing to cascade to.
+            </p>
+          ) : lineageEnabled ? (
+            <div className="space-y-3">
+              {lineage.ancestors.map((ancestor, index) => (
+                <div
+                  key={ancestor.agentId}
+                  className="flex items-center justify-between gap-3 p-3 border rounded-md"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm truncate">{ancestor.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Level {index + 1} {index === 0 ? "(immediate parent)" : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.01}
+                      value={Number.isFinite(lineagePercents[index]) ? lineagePercents[index] : 0}
+                      onChange={(e) => {
+                        const parsed = Number.parseFloat(e.target.value)
+                        handleLineagePercentChange(index, Number.isFinite(parsed) ? parsed : 0)
+                      }}
+                      className="w-24"
+                      aria-label={`Cascade share for ${ancestor.name}`}
+                    />
+                    <span className="text-sm text-muted-foreground">%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Lineage cascade is turned off — no net flows up the parent chain by default.
+            </p>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={handleResetLineageDefaults}
+              disabled={savingLineage || lineage.ancestors.length === 0}
+            >
+              Reset to defaults
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleSaveLineage}
+              disabled={savingLineage || lineage.ancestors.length === 0}
+            >
+              {savingLineage ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                "Save Lineage Cascade"
+              )}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

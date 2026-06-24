@@ -17,10 +17,14 @@ import { withTestTransaction } from '@/test/db';
 import { createTestGroup } from '@/test/fixtures';
 import {
   parseLineageConfig,
+  defaultLineageConfig,
+  resolveEffectiveLineageConfig,
   getProjectAncestorChain,
   getVerifiedCoalliedGroups,
   resolveLineageDistribution,
   COALLIED_RELATIONSHIP_TYPES,
+  DEFAULT_LINEAGE_CASCADE_BPS,
+  DEFAULT_LINEAGE_MAX_HOPS,
 } from '@/lib/lineage-distribution';
 import { ledger } from '@/db/schema';
 
@@ -29,11 +33,23 @@ import { ledger } from '@/db/schema';
 // ---------------------------------------------------------------------------
 
 describe('parseLineageConfig', () => {
-  it('returns disabled for missing/non-object lineage metadata', () => {
-    expect(parseLineageConfig(null)).toEqual({ enabled: false });
-    expect(parseLineageConfig({})).toEqual({ enabled: false });
-    expect(parseLineageConfig({ lineage: 'nope' })).toEqual({ enabled: false });
-    expect(parseLineageConfig({ lineage: 42 })).toEqual({ enabled: false });
+  it('returns disabled+non-explicit for missing/non-object lineage metadata', () => {
+    expect(parseLineageConfig(null)).toEqual({ enabled: false, explicit: false });
+    expect(parseLineageConfig({})).toEqual({ enabled: false, explicit: false });
+    expect(parseLineageConfig({ lineage: 'nope' })).toEqual({
+      enabled: false,
+      explicit: false,
+    });
+    expect(parseLineageConfig({ lineage: 42 })).toEqual({
+      enabled: false,
+      explicit: false,
+    });
+  });
+
+  it('marks an authored object explicit even when it opts out', () => {
+    const config = parseLineageConfig({ lineage: { enabled: false } });
+    expect(config.enabled).toBe(false);
+    expect(config.explicit).toBe(true);
   });
 
   it('parses enabled flag, levelBps, and coallied entries', () => {
@@ -45,6 +61,7 @@ describe('parseLineageConfig', () => {
       },
     });
     expect(config.enabled).toBe(true);
+    expect(config.explicit).toBe(true);
     expect(config.levelBps).toEqual([1000, 500, 0]);
     expect(config.coallied).toEqual([{ agentId: 'a1', bps: 300 }]);
   });
@@ -75,6 +92,80 @@ describe('parseLineageConfig', () => {
   it('treats enabled !== true as disabled', () => {
     expect(parseLineageConfig({ lineage: { enabled: 'yes' } }).enabled).toBe(false);
     expect(parseLineageConfig({ lineage: { enabled: 1 } }).enabled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// defaultLineageConfig + resolveEffectiveLineageConfig (J6/J8 default cascade)
+// ---------------------------------------------------------------------------
+
+describe('defaultLineageConfig', () => {
+  it('builds an enabled, non-explicit flat per-hop cascade from the constants', () => {
+    const config = defaultLineageConfig();
+    expect(config.enabled).toBe(true);
+    expect(config.explicit).toBe(false);
+    expect(config.coallied).toEqual([]);
+    expect(config.levelBps).toEqual(
+      new Array(DEFAULT_LINEAGE_MAX_HOPS).fill(DEFAULT_LINEAGE_CASCADE_BPS),
+    );
+  });
+
+  it('keeps the default conservative (each hop is at most a few percent)', () => {
+    // Guard against an accidentally aggressive placeholder: total default
+    // cascade must stay well under 25% of net.
+    const total = DEFAULT_LINEAGE_CASCADE_BPS * DEFAULT_LINEAGE_MAX_HOPS;
+    expect(total).toBeLessThanOrEqual(2500);
+  });
+});
+
+describe('resolveEffectiveLineageConfig', () => {
+  it('uses the system default when neither project nor org authored config', () => {
+    const effective = resolveEffectiveLineageConfig(
+      { enabled: false, explicit: false },
+      { enabled: false, explicit: false },
+    );
+    expect(effective).toEqual(defaultLineageConfig());
+  });
+
+  it('uses the system default when there is no org config at all', () => {
+    const effective = resolveEffectiveLineageConfig({
+      enabled: false,
+      explicit: false,
+    });
+    expect(effective).toEqual(defaultLineageConfig());
+  });
+
+  it('lets an explicit project config win, including an explicit opt-out', () => {
+    const projectOptOut = { enabled: false, explicit: true } as const;
+    expect(resolveEffectiveLineageConfig(projectOptOut)).toBe(projectOptOut);
+
+    const projectCustom = {
+      enabled: true,
+      explicit: true,
+      levelBps: [2000],
+      coallied: [],
+    } as const;
+    expect(
+      resolveEffectiveLineageConfig(projectCustom, {
+        enabled: true,
+        explicit: true,
+        levelBps: [9999],
+      }),
+    ).toBe(projectCustom);
+  });
+
+  it('falls back to an explicit org config when the project is unconfigured', () => {
+    const orgConfig = {
+      enabled: true,
+      explicit: true,
+      levelBps: [3000],
+      coallied: [],
+    } as const;
+    const effective = resolveEffectiveLineageConfig(
+      { enabled: false, explicit: false },
+      orgConfig,
+    );
+    expect(effective).toBe(orgConfig);
   });
 });
 

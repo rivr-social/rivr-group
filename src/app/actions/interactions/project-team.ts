@@ -23,6 +23,11 @@ import { isUuid } from "./types";
  * lightweight `job-application` interest signal). */
 const JOB_CLAIM_INTERACTION = "job-claim";
 
+/** Ledger interaction type marking a recorded job CONTRIBUTION on completion.
+ * This is what surfaces a contributor as a stakeholder in the Stake tab — it is
+ * NOT a badge award (badges are claim-time GATES, not completion rewards). */
+const JOB_CONTRIBUTION_INTERACTION = "job-contribution";
+
 /** Counts the active job-claims on a job, optionally excluding one claimant. */
 async function countActiveJobClaims(
   jobId: string,
@@ -170,25 +175,33 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
 }
 
 /**
- * Awards the badge a job is configured to confer (`metadata.awardBadgeId`) to a
- * claimant who has completed it. This is the EARN-A-BADGE half of J2's
- * claim → fit → earn loop. No-op (success) when the job confers no badge.
+ * Records a job CONTRIBUTION when a claimed job is completed (EPIC J2,
+ * corrected model 2026-06-23).
  *
- * Authorization: only the job owner or a group-write-access holder may award
- * (it moves a real credential). Duplicate awards are skipped idempotently.
+ * Badges are claim-time GATES (you must hold a required badge to CLAIM a job),
+ * NOT completion rewards — so completion does NOT mint a badge. Instead, it
+ * writes a `complete` contribution ledger edge (subject = contributor, object =
+ * the job) tagged `interactionType = 'job-contribution'`. This is the edge the
+ * Stake tab reads to surface the contributor as a project stakeholder; a
+ * recorded contribution CAN later factor into net allocation, but this action
+ * MOVES NO MONEY (money-safety: distribution runs are gated separately).
+ *
+ * Authorization: only the job owner or a group-write-access holder may record a
+ * contribution (it confers stakeholder standing). Duplicate records for the same
+ * contributor+job are skipped idempotently.
  *
  * @param input.jobId UUID of the completed job.
- * @param input.recipientId Agent who completed the job and earns the badge.
- * @returns ActionResult; carries the awarded `resourceId` (badge) on success.
+ * @param input.contributorId Agent who completed the job and earns stakeholder standing.
+ * @returns ActionResult; carries the contribution ledger `resourceId` (the job) on success.
  */
-export async function awardJobCompletionBadgeAction(input: {
+export async function recordJobContributionAction(input: {
   jobId: string;
-  recipientId: string;
+  contributorId: string;
 }): Promise<ActionResult> {
   const userId = await getCurrentUserId();
-  if (!userId) return { success: false, message: "You must be logged in to award a badge." };
-  if (!isUuid(input.jobId) || !isUuid(input.recipientId)) {
-    return { success: false, message: "Invalid job or recipient id." };
+  if (!userId) return { success: false, message: "You must be logged in to record a contribution." };
+  if (!isUuid(input.jobId) || !isUuid(input.contributorId)) {
+    return { success: false, message: "Invalid job or contributor id." };
   }
 
   const [job] = await db
@@ -206,74 +219,100 @@ export async function awardJobCompletionBadgeAction(input: {
 
   const { hasGroupWriteAccess } = await import("@/app/actions/create-resources");
   const isOwner = job.ownerId === userId;
-  const canAward = isOwner ? true : await hasGroupWriteAccess(userId, job.ownerId);
-  if (!canAward) {
-    return { success: false, message: "Only the job owner or a group admin can award completion badges." };
+  const canRecord = isOwner ? true : await hasGroupWriteAccess(userId, job.ownerId);
+  if (!canRecord) {
+    return { success: false, message: "Only the job owner or a group admin can record a contribution." };
   }
 
   const meta = (job.metadata ?? {}) as Record<string, unknown>;
-  const awardBadgeId = typeof meta.awardBadgeId === "string" ? meta.awardBadgeId : null;
-  // No configured badge → the loop simply has no reward; not an error.
-  if (!awardBadgeId) {
-    return { success: true, message: "Job confers no completion badge." };
-  }
+  const projectId = typeof meta.projectId === "string" ? meta.projectId : null;
 
-  // Verify the badge resource exists.
-  const [badge] = await db
-    .select({ id: resources.id })
-    .from(resources)
-    .where(
-      and(
-        eq(resources.id, awardBadgeId),
-        eq(resources.type, "badge"),
-        sql`${resources.deletedAt} IS NULL`,
-      ),
-    )
-    .limit(1);
-  if (!badge) {
-    return { success: false, message: "Configured completion badge no longer exists." };
-  }
-
-  // Idempotent: skip if the recipient already holds it.
+  // Idempotent: skip if a contribution edge already exists for this contributor+job.
   const existing = (await db.execute(sql`
     SELECT 1 FROM ledger
-    WHERE subject_id = ${input.recipientId}::uuid
-      AND resource_id = ${awardBadgeId}::uuid
-      AND verb = 'assign'
+    WHERE subject_id = ${input.contributorId}::uuid
+      AND verb = 'complete'
       AND is_active = true
+      AND metadata->>'interactionType' = ${JOB_CONTRIBUTION_INTERACTION}
+      AND metadata->>'jobId' = ${input.jobId}
     LIMIT 1
   `)) as Array<Record<string, unknown>>;
   if (existing.length > 0) {
-    return { success: true, message: "Recipient already holds this badge.", resourceId: awardBadgeId };
+    return { success: true, message: "Contribution already recorded.", resourceId: input.jobId };
   }
 
   await db.insert(ledger).values({
-    verb: "assign",
-    subjectId: input.recipientId,
-    objectId: awardBadgeId,
+    verb: "complete",
+    subjectId: input.contributorId,
+    objectId: input.jobId,
     objectType: "resource",
-    resourceId: awardBadgeId,
+    resourceId: input.jobId,
     isActive: true,
     metadata: {
-      assignedBy: userId,
-      assignedAt: new Date().toISOString(),
+      interactionType: JOB_CONTRIBUTION_INTERACTION,
+      recordedBy: userId,
+      recordedAt: new Date().toISOString(),
       source: "job-completion",
       jobId: input.jobId,
+      projectId,
     },
   } as NewLedgerEntry);
 
   revalidatePath(`/jobs/${input.jobId}`);
-  revalidatePath("/badges");
+  if (projectId) revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/groups/${job.ownerId}`);
 
   emitDomainEvent({
     eventType: EVENT_TYPES.RESOURCE_UPDATED,
     entityType: "resource",
-    entityId: awardBadgeId,
+    entityId: input.jobId,
     actorId: userId,
-    payload: { action: "award_completion_badge", recipientId: input.recipientId, jobId: input.jobId },
+    payload: { action: "record_job_contribution", contributorId: input.contributorId, jobId: input.jobId },
   }).catch(() => {});
 
-  return { success: true, message: "Completion badge awarded.", resourceId: awardBadgeId };
+  return { success: true, message: "Contribution recorded.", resourceId: input.jobId };
+}
+
+/**
+ * Returns a group/project's recorded contributors — the unique agent ids with a
+ * `job-contribution` ledger edge on the group's (or a specific project's) jobs.
+ * Surfaces in the Stake tab as the contribution-derived stakeholder set.
+ *
+ * @param input.groupId The owning group/org agent id (matches job.ownerId).
+ * @param input.projectId Optional: restrict to one project's jobs.
+ * @returns Unique contributor agent ids with their contribution counts.
+ */
+export async function getRecordedContributions(input: {
+  groupId: string;
+  projectId?: string | null;
+}): Promise<Array<{ contributorId: string; jobCount: number }>> {
+  if (!isUuid(input.groupId)) return [];
+  const projectFilter =
+    input.projectId && isUuid(input.projectId)
+      ? sql`AND l.metadata->>'projectId' = ${input.projectId}`
+      : sql``;
+
+  const rows = (await db.execute(sql`
+    SELECT l.subject_id AS contributor_id, COUNT(*) AS job_count
+    FROM ledger l
+    JOIN resources j ON j.id = l.resource_id
+    WHERE l.verb = 'complete'
+      AND l.is_active = true
+      AND l.metadata->>'interactionType' = ${JOB_CONTRIBUTION_INTERACTION}
+      AND j.type = 'job'
+      AND j.deleted_at IS NULL
+      AND j.owner_id = ${input.groupId}::uuid
+      ${projectFilter}
+    GROUP BY l.subject_id
+    ORDER BY job_count DESC
+  `)) as Array<Record<string, unknown>>;
+
+  return rows
+    .map((row) => ({
+      contributorId: String(row.contributor_id ?? ""),
+      jobCount: Number(row.job_count ?? 0),
+    }))
+    .filter((row) => row.contributorId.length > 0);
 }
 
 /**

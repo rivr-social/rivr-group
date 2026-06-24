@@ -16,11 +16,18 @@
  * project-keep logic; this module only *resolves which recipients and at what
  * bps* the lineage graph implies. `resolveSettlementSplits` composes the two.
  *
- * FINANCIAL SAFETY: there is NO implicit default percentage. A project must
- * configure `lineageBps` per ancestor level (and per coallied group) for any
- * money to flow up the chain. An unconfigured level distributes nothing — the
- * project simply keeps that share. This is deliberate: real money never moves on
- * an inferred default.
+ * DEFAULT CASCADE (J6/J8, decision 2026-06-23): the lineage cascade is now ON
+ * BY DEFAULT but FULLY OVERRIDABLE. When a project (and its org) has NOT
+ * authored an explicit lineage config, net still cascades up the parent lineage
+ * by {@link DEFAULT_LINEAGE_CASCADE_BPS} per hop. The default is intentionally
+ * CONSERVATIVE (see the constant) so real money never moves on an aggressive
+ * inferred split. A project or org can override the default at any time — set
+ * `lineage.enabled = false` to opt OUT entirely, or author explicit
+ * `levelBps`/`coallied` to replace the per-hop default with chosen values.
+ *
+ * The default applies ONLY to the ancestor chain (a flat per-hop share); opted-in
+ * coallied payout remains strictly explicit (a coallied group never shares on an
+ * inferred default — it must be named in config).
  */
 import { db } from '@/db';
 import { agents, ledger } from '@/db/schema';
@@ -30,6 +37,30 @@ import type {
   ProjectDistributionEntry,
   SettlementRole,
 } from '@/lib/settlement-splits';
+
+/**
+ * Default per-ancestor-hop lineage share, in basis points, applied when a
+ * project/org has NOT authored an explicit lineage config.
+ *
+ * ⚠️ PLACEHOLDER — Cameron to set the real value. This is a deliberately
+ * CONSERVATIVE flat 1.00% (100 bps) per hop: the immediate parent org gets 1%,
+ * the grandparent 1%, etc., up to {@link DEFAULT_LINEAGE_MAX_HOPS} levels. The
+ * project keeps the overwhelming majority of its net by default. Set to a curve
+ * (e.g. a per-hop decay) or a different flat value here — every consumer reads
+ * this single constant.
+ */
+export const DEFAULT_LINEAGE_CASCADE_BPS = 100;
+
+/**
+ * Maximum number of ancestor hops the DEFAULT cascade reaches. Bounds the
+ * implicit default so a deep lineage chain cannot silently consume a large share
+ * of project net. Explicit per-level config (`levelBps`) is NOT bounded by this —
+ * an org that authors deeper levels gets exactly what it authored.
+ *
+ * ⚠️ PLACEHOLDER — pairs with {@link DEFAULT_LINEAGE_CASCADE_BPS}; 2 hops at 1%
+ * each caps the default cascade at 2% of net.
+ */
+export const DEFAULT_LINEAGE_MAX_HOPS = 2;
 
 /** Relationship types whose edges are eligible to share in lineage payout. */
 export const COALLIED_RELATIONSHIP_TYPES = [
@@ -47,8 +78,17 @@ export type CoalliedRelationshipType =
  * editor, never client input at settlement time).
  */
 export interface LineageDistributionConfig {
-  /** Master switch — lineage cascade only runs when explicitly enabled. */
+  /** Master switch — lineage cascade only runs when this is true. */
   enabled: boolean;
+  /**
+   * Whether this config was EXPLICITLY authored (a `metadata.lineage` object was
+   * present). When false/absent, no explicit config exists and callers may apply
+   * the {@link DEFAULT_LINEAGE_CASCADE_BPS} default. This lets us tell an
+   * explicit opt-out (`{ enabled: false }`, authored) apart from "nothing
+   * configured" (default cascade applies). Optional so ad-hoc configs passed
+   * directly to {@link resolveLineageDistribution} need not set it.
+   */
+  explicit?: boolean;
   /**
    * Per-ancestor-level bps, indexed by distance from the project owner:
    * `levelBps[0]` = the project owner's immediate parent group, `levelBps[1]` =
@@ -66,13 +106,19 @@ export interface LineageDistributionConfig {
  * Parses and validates `metadata.lineage` off a project resource into a
  * {@link LineageDistributionConfig}. Malformed fields are dropped rather than
  * throwing so a single bad config value cannot strand settlement.
+ *
+ * A MISSING `metadata.lineage` yields `{ enabled: false, explicit: false }` —
+ * "nothing authored" — which lets the default-cascade layer kick in. An authored
+ * object yields `explicit: true` and `enabled` reflects its `enabled` flag, so a
+ * project can explicitly opt OUT (`{ enabled: false }`) and the default will NOT
+ * re-enable it.
  */
 export function parseLineageConfig(
   metadata: Record<string, unknown> | null | undefined,
 ): LineageDistributionConfig {
   const raw = (metadata ?? {})['lineage'];
   if (!raw || typeof raw !== 'object') {
-    return { enabled: false };
+    return { enabled: false, explicit: false };
   }
   const obj = raw as Record<string, unknown>;
   const enabled = obj['enabled'] === true;
@@ -98,7 +144,50 @@ export function parseLineageConfig(
     }
   }
 
-  return { enabled, levelBps, coallied };
+  return { enabled, explicit: true, levelBps, coallied };
+}
+
+/**
+ * Builds the DEFAULT lineage config applied when neither a project nor its org
+ * has authored an explicit `metadata.lineage`. Produces a flat
+ * {@link DEFAULT_LINEAGE_CASCADE_BPS} per ancestor hop, capped at
+ * {@link DEFAULT_LINEAGE_MAX_HOPS} levels, with NO coallied entries (coallied
+ * payout is never inferred). Exposed so the project/org split-config UI can
+ * PRE-FILL these editable values rather than treating them as a hidden rule.
+ *
+ * @returns An enabled, default-valued lineage config.
+ */
+export function defaultLineageConfig(): LineageDistributionConfig {
+  if (DEFAULT_LINEAGE_CASCADE_BPS <= 0 || DEFAULT_LINEAGE_MAX_HOPS <= 0) {
+    return { enabled: false, explicit: false, levelBps: [], coallied: [] };
+  }
+  const levelBps = new Array<number>(DEFAULT_LINEAGE_MAX_HOPS).fill(
+    DEFAULT_LINEAGE_CASCADE_BPS,
+  );
+  return { enabled: true, explicit: false, levelBps, coallied: [] };
+}
+
+/**
+ * Resolves the EFFECTIVE lineage config for a project given the project's own
+ * parsed config and (optionally) its owning org's parsed config. Precedence:
+ *   1. An explicit project config wins outright (including an explicit opt-out).
+ *   2. Otherwise an explicit org config applies (org-level default override).
+ *   3. Otherwise the system {@link defaultLineageConfig} cascade applies.
+ *
+ * This is the single place the "default ON, overridable at org AND project
+ * level" decision is encoded.
+ *
+ * @param projectConfig Parsed `metadata.lineage` from the project resource.
+ * @param orgConfig Parsed `metadata.lineage` from the owning org agent, if any.
+ * @returns The lineage config settlement should actually use.
+ */
+export function resolveEffectiveLineageConfig(
+  projectConfig: LineageDistributionConfig,
+  orgConfig?: LineageDistributionConfig | null,
+): LineageDistributionConfig {
+  if (projectConfig.explicit) return projectConfig;
+  if (orgConfig && orgConfig.explicit) return orgConfig;
+  return defaultLineageConfig();
 }
 
 /**

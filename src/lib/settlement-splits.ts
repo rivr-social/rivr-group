@@ -24,11 +24,12 @@
  * and never drifts between surfaces.
  */
 import { db } from '@/db';
-import { resources } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { agents, resources } from '@/db/schema';
+import { and, eq, sql } from 'drizzle-orm';
 import { BPS_DIVISOR } from '@/lib/wallet-constants';
 import {
   parseLineageConfig,
+  resolveEffectiveLineageConfig,
   resolveLineageDistribution,
 } from '@/lib/lineage-distribution';
 
@@ -254,8 +255,24 @@ export async function resolveSettlementSplits(
   const projectMeta = project.metadata as Record<string, unknown>;
   const explicitEntries = parseProjectDistribution(projectMeta);
 
+  // Lineage cascade is ON by default but fully overridable (J6/J8). Precedence:
+  // explicit project config → explicit org config → system default cascade.
+  // We only need the org's config when the project did NOT author its own.
+  const projectLineage = parseLineageConfig(projectMeta);
+  let orgLineage = null;
+  if (!projectLineage.explicit) {
+    const [orgAgent] = await db
+      .select({ metadata: agents.metadata })
+      .from(agents)
+      .where(and(eq(agents.id, projectOwnerId), sql`${agents.deletedAt} IS NULL`))
+      .limit(1);
+    orgLineage = parseLineageConfig(
+      (orgAgent?.metadata ?? null) as Record<string, unknown> | null,
+    );
+  }
+  const lineageConfig = resolveEffectiveLineageConfig(projectLineage, orgLineage);
+
   let lineageEntries: ProjectDistributionEntry[] = [];
-  const lineageConfig = parseLineageConfig(projectMeta);
   if (lineageConfig.enabled) {
     lineageEntries = await resolveLineageDistribution(
       projectOwnerId,

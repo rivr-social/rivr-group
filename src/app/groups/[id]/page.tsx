@@ -24,6 +24,7 @@ import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
 import { calculateTotalStakes, getMemberStakesForGroup } from "@/lib/queries/stakes"
+import { getRecordedContributions } from "@/app/actions/interactions"
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -258,6 +259,24 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const serverMemberStakes = await getMemberStakesForGroup(id).catch(() => [])
   const serverTotalStakes = serverMemberStakes.length > 0 ? calculateTotalStakes(serverMemberStakes) : 0
 
+  // Job-contribution stakeholders (J2 corrected model): contributors recorded on
+  // job completion surface in the Stake tab. Resolve their display names.
+  const recordedContributionRows = await getRecordedContributions({ groupId: id }).catch(() => [])
+  const contributionAgents =
+    recordedContributionRows.length > 0
+      ? await fetchAgentsByIds(recordedContributionRows.map((row) => row.contributorId)).catch(() => [])
+      : []
+  const contributionAgentById = new Map(contributionAgents.map((a) => [a.id, a]))
+  const recordedContributions = recordedContributionRows.map((row) => {
+    const agent = contributionAgentById.get(row.contributorId)
+    return {
+      contributorId: row.contributorId,
+      contributorName: agent?.name ?? row.contributorId,
+      contributorImage: typeof agent?.image === "string" ? agent.image : null,
+      jobCount: row.jobCount,
+    }
+  })
+
   const header = (
     <GroupProfileHeader
       groupId={group.id}
@@ -346,6 +365,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         stakeActivity={stakeActivity}
         serverMemberStakes={serverMemberStakes}
         serverTotalStakes={serverTotalStakes}
+        recordedContributions={recordedContributions}
         pressResources={pressResources}
         documentResources={documentResources.map((r) => {
           const meta = (r.metadata ?? {}) as Record<string, unknown>

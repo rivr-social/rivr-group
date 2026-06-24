@@ -54,7 +54,8 @@ export {
 
 export {
   claimJobAction,
-  awardJobCompletionBadgeAction,
+  recordJobContributionAction,
+  getRecordedContributions,
   getProjectTeam,
 } from "./project-team";
 
