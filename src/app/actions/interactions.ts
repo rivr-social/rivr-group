@@ -26,6 +26,8 @@ export {
   mintThanksTokensForVoucherRedemption,
   claimTasksAction,
   updateTaskStatus,
+  recordJobContributionAction,
+  getRecordedContributions,
   updateMyProfile,
   toggleSaveListing,
   createGalleryAction,

@@ -197,6 +197,34 @@
       "when": 1782259200000,
       "tag": "0041_user_connectors",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1782345600000,
+      "tag": "0042_project_wallets",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1782432000000,
+      "tag": "0043_project_expense_txn",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1782518400000,
+      "tag": "0044_deliverables_and_outbound_connectors",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1782604800000,
+      "tag": "0045_project_distribution_txn",
+      "breakpoints": true
     }
   ]
 }

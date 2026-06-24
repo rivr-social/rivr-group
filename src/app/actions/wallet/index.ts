@@ -40,3 +40,17 @@ export {
   requestFamilyWithdrawalAction,
   getFamilyContributionsAction,
 } from './family-treasury';
+
+export {
+  recordProjectExpenseAction,
+} from './expenses';
+
+export {
+  saveNetAllocationAction,
+  getGroupMembersByClass,
+  resolveGroupNetAllocation,
+} from './net-allocation';
+
+export {
+  runProjectNetDistributionAction,
+} from './net-distribution';

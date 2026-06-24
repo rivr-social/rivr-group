@@ -38,13 +38,23 @@ import {
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { auth } from "@/auth"
-import { fetchAgent, fetchAgentChildren, fetchAgentFeed, fetchGroupDetail, fetchProjectEvents, fetchResourcesByOwner } from "@/app/actions/graph"
+import { fetchAgent, fetchAgentChildren, fetchAgentFeed, fetchGroupDetail, fetchGroupRelationships, fetchProjectEvents, fetchResourcesByOwner } from "@/app/actions/graph"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
 import { agentToProject } from "@/lib/graph-adapters"
 import { buildGroupPageMetadata } from "@/lib/object-metadata"
 import { buildProjectStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { ProjectActions } from "@/components/project-actions"
 import { ProjectJobsTab } from "@/components/project-jobs-tab"
+import { ProjectDistributionTab } from "@/components/project-distribution-tab"
+import { ProjectExpensePanel } from "@/components/project-expense-panel"
+import { parseProjectDistribution, resolveSettlementSplits, allocateByBps, type SettlementRole } from "@/lib/settlement-splits"
+import {
+  parseLineageConfig,
+  resolveEffectiveLineageConfig,
+  getProjectAncestorChain,
+  DEFAULT_LINEAGE_CASCADE_BPS,
+} from "@/lib/lineage-distribution"
+import { getProjectWalletForResource, getWalletBalance, getTransactionHistory } from "@/lib/wallet"
 import { getJobTimerStatus } from "@/app/actions/job-timer"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -216,6 +226,18 @@ function formatRelativeTime(timestamp: string): string {
   }
 }
 
+/** Sample seller-net used to illustrate the Stake distribution cascade ($100). */
+const STAKE_PREVIEW_SAMPLE_CENTS = 10000
+
+/** Human-readable labels for each settlement role in the Stake preview. */
+const SETTLEMENT_ROLE_LABEL: Record<SettlementRole, string> = {
+  seller: "Seller",
+  project: "Project treasury (keep)",
+  parent_org: "Parent org",
+  ally: "Allied group",
+  distribution: "Distribution",
+}
+
 const FORMAT_MS_PER_HOUR = 3_600_000;
 const FORMAT_MS_PER_MINUTE = 60_000;
 
@@ -367,6 +389,91 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
        (projectGroupId ? await hasGroupWriteAccess(currentUserId, projectGroupId) : false))
     : false
 
+  // ── Revenue-distribution config ──────────────────────────────────────────
+  // The project's owning agent (resources.ownerId) holds the treasury keep; its
+  // affiliated/allied groups are the natural downstream cascade candidates.
+  const projectOwnerAgentId = typeof projectMeta2.ownerId === "string" ? projectMeta2.ownerId : ownerId
+  const distributionConfig = parseProjectDistribution(agent.metadata as Record<string, unknown>)
+  const relationshipGroupId = projectOwnerAgentId ?? projectGroupId
+  const relationships = relationshipGroupId
+    ? await fetchGroupRelationships(relationshipGroupId).catch(() => [])
+    : []
+  const candidateRecipientIds = Array.from(
+    new Set(
+      relationships
+        .flatMap((rel) => [rel.sourceGroupId, rel.targetGroupId])
+        .filter((id): id is string => typeof id === "string" && id.length > 0 && id !== relationshipGroupId),
+    ),
+  )
+  const candidateAgents = await Promise.all(
+    candidateRecipientIds.map((id) => fetchAgent(id).catch(() => null)),
+  )
+  const recipientOptions = candidateAgents
+    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+    .map((candidate) => ({ id: candidate.id, name: candidate.name, type: candidate.type }))
+
+  // ── Effective lineage cascade config (J6/J8: default ON, overridable) ─────
+  // Resolve what the cascade WILL do today (explicit project → explicit org →
+  // system default) and surface it to the editor as the pre-filled value.
+  const projectLineageConfig = parseLineageConfig(agent.metadata as Record<string, unknown>)
+  const ownerAgentForLineage = projectOwnerAgentId
+    ? await fetchAgent(projectOwnerAgentId).catch(() => null)
+    : null
+  const orgLineageConfig = projectLineageConfig.explicit
+    ? null
+    : parseLineageConfig((ownerAgentForLineage?.metadata ?? null) as Record<string, unknown> | null)
+  const effectiveLineageConfig = resolveEffectiveLineageConfig(
+    projectLineageConfig,
+    orgLineageConfig,
+  )
+  // The ancestor chain gives human names for each per-hop level in the editor.
+  const lineageAncestorIds = projectOwnerAgentId
+    ? await getProjectAncestorChain(projectOwnerAgentId).catch(() => [])
+    : []
+  const lineageAncestorAgents = await Promise.all(
+    lineageAncestorIds.map((id) => fetchAgent(id).catch(() => null)),
+  )
+  const lineageAncestors = lineageAncestorIds.map((id, index) => ({
+    agentId: id,
+    name: lineageAncestorAgents[index]?.name ?? id,
+  }))
+
+  // Read-only treasury view: balance + recent settlement transactions. The
+  // wallet is only created lazily on first settlement, so absence is normal.
+  const projectWallet = await getProjectWalletForResource(project.id).catch(() => null)
+  const [projectWalletBalance, projectWalletHistory, projectExpenseHistory] = projectWallet
+    ? await Promise.all([
+        getWalletBalance(projectWallet.id).catch(() => null),
+        getTransactionHistory(projectWallet.id, { limit: 10 }).catch(() => ({ transactions: [], total: 0 })),
+        getTransactionHistory(projectWallet.id, { limit: 10, type: "project_expense" }).catch(() => ({ transactions: [], total: 0 })),
+      ])
+    : [null, { transactions: [], total: 0 }, { transactions: [], total: 0 }]
+
+  // ── Stake distribution preview (read-only) ───────────────────────────────
+  // Show how a sample sale's seller-net cascades per the authoritative config
+  // on the project resource. `resolveSettlementSplits` reads the resources row
+  // directly, so this preview reflects exactly what settlement will do.
+  const previewSplits = projectOwnerAgentId
+    ? await resolveSettlementSplits({
+        sellerId: projectOwnerAgentId,
+        listingMeta: { projectId: project.id },
+      }).catch(() => [])
+    : []
+  const previewAllocations =
+    previewSplits.length > 0 ? allocateByBps(STAKE_PREVIEW_SAMPLE_CENTS, previewSplits) : []
+  const previewNameMap = new Map<string, string>()
+  if (projectOwnerAgentId && owner?.name) previewNameMap.set(projectOwnerAgentId, owner.name)
+  for (const option of recipientOptions) previewNameMap.set(option.id, option.name)
+  const unknownPreviewIds = Array.from(
+    new Set(previewAllocations.map((alloc) => alloc.ownerAgentId).filter((id) => !previewNameMap.has(id))),
+  )
+  const unknownPreviewAgents = await Promise.all(
+    unknownPreviewIds.map((id) => fetchAgent(id).catch(() => null)),
+  )
+  for (const previewAgent of unknownPreviewAgents) {
+    if (previewAgent) previewNameMap.set(previewAgent.id, previewAgent.name)
+  }
+
   return (
     <div className="container max-w-4xl mx-auto px-4 py-6 space-y-4">
       {structuredData ? (
@@ -464,10 +571,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
       {/* Tabbed content */}
       <Tabs defaultValue="about">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="about">About</TabsTrigger>
           <TabsTrigger value="jobs">Jobs ({linkedJobCount})</TabsTrigger>
           <TabsTrigger value="team">Team ({members.length})</TabsTrigger>
+          <TabsTrigger value="treasury">Treasury</TabsTrigger>
         </TabsList>
 
         {/* ── About Tab ─────────────────────────────────────────────────── */}
@@ -678,6 +786,118 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        {/* ── Treasury / Distribution Tab ───────────────────────────────── */}
+        <TabsContent value="treasury" className="space-y-4 mt-4">
+          {/* Project treasury balance + recent settlements (read-only). */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Project Treasury</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm text-muted-foreground">Balance</span>
+                <span className="text-2xl font-semibold">
+                  {new Intl.NumberFormat("en-US", { style: "currency", currency: (projectWalletBalance?.currency || "USD").toUpperCase() }).format((projectWalletBalance?.balanceCents ?? 0) / 100)}
+                </span>
+              </div>
+              {projectWalletBalance && (projectWalletBalance.pendingSettlementCents ?? 0) > 0 ? (
+                <p className="text-xs text-muted-foreground text-right">
+                  {new Intl.NumberFormat("en-US", { style: "currency", currency: (projectWalletBalance.currency || "USD").toUpperCase() }).format((projectWalletBalance.pendingSettlementCents ?? 0) / 100)} pending settlement
+                </p>
+              ) : null}
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Recent settlements</p>
+                {projectWalletHistory.transactions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No settlements yet. Sales of offerings bound to this project will appear here.
+                  </p>
+                ) : (
+                  <div className="divide-y rounded-md border">
+                    {projectWalletHistory.transactions.map((tx) => (
+                      <div key={tx.id} className="flex items-center justify-between gap-3 p-3">
+                        <div className="min-w-0">
+                          <p className="text-sm truncate">{tx.description || tx.type}</p>
+                          <p className="text-xs text-muted-foreground">{formatRelativeTime(tx.createdAt)}</p>
+                        </div>
+                        <span className="font-medium whitespace-nowrap">
+                          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(tx.amountCents / 100)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Read-only Stake distribution preview — how a sample sale cascades. */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Stake distribution preview</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                On a sample {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(STAKE_PREVIEW_SAMPLE_CENTS / 100)} sale of a project-bound offering, the seller-net cascades as:
+              </p>
+              {previewAllocations.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No distribution configured yet — the project treasury keeps the full seller-net.
+                </p>
+              ) : (
+                <div className="divide-y rounded-md border">
+                  {previewAllocations.map((alloc, index) => (
+                    <div key={`${alloc.ownerAgentId}-${alloc.role}-${index}`} className="flex items-center justify-between gap-3 p-3">
+                      <div className="min-w-0">
+                        <p className="text-sm truncate">
+                          {alloc.walletKind === "project"
+                            ? SETTLEMENT_ROLE_LABEL.project
+                            : previewNameMap.get(alloc.ownerAgentId) ?? alloc.ownerAgentId}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {SETTLEMENT_ROLE_LABEL[alloc.role]} · {(alloc.bps / 100).toFixed(2)}%
+                        </p>
+                      </div>
+                      <span className="font-medium whitespace-nowrap">
+                        {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(alloc.amountCents / 100)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <ProjectExpensePanel
+            projectId={project.id}
+            currency={(projectWalletBalance?.currency || "USD").toUpperCase()}
+            balanceCents={projectWalletBalance?.balanceCents ?? 0}
+            canManage={isAdmin}
+            initialExpenses={projectExpenseHistory.transactions.map((tx) => ({
+              id: tx.id,
+              amountCents: tx.amountCents,
+              description: tx.description ?? null,
+              createdAt: tx.createdAt,
+              status: tx.status,
+            }))}
+          />
+
+          <ProjectDistributionTab
+            projectId={project.id}
+            ownerId={projectOwnerAgentId}
+            ownerName={owner?.name ?? null}
+            initialDistribution={distributionConfig}
+            recipientOptions={recipientOptions}
+            isAdmin={isAdmin}
+            lineage={{
+              explicit: projectLineageConfig.explicit ?? false,
+              enabled: effectiveLineageConfig.enabled,
+              levelBps: effectiveLineageConfig.levelBps ?? [],
+              defaultPerHopBps: DEFAULT_LINEAGE_CASCADE_BPS,
+              ancestors: lineageAncestors,
+            }}
+          />
         </TabsContent>
       </Tabs>
     </div>

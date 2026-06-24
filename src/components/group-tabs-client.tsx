@@ -34,6 +34,11 @@ import { GroupAdminManager } from "@/components/group-admin-manager"
 import { GroupRelationshipManager } from "@/components/group-relationship-manager"
 import { FlowPassModal } from "@/components/flow-pass-modal"
 import { GroupAccessDialog } from "@/components/group-access-dialog"
+import type {
+  NetAllocationClassOption,
+  NetAllocationMemberOption,
+} from "@/components/net-allocation-editor"
+import type { NetAllocationRule } from "@/lib/net-allocation"
 import type { Document } from "@/types/domain"
 import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel, GroupTabKey } from "@/lib/types"
 import { ProposalStatus } from "@/lib/types"
@@ -62,6 +67,19 @@ interface ProjectJobTree {
   jobs: SerializedResource[]
   tasksByJob: Record<string, SerializedResource[]>
   projectLevelTasks: SerializedResource[]
+}
+
+/**
+ * A contributor surfaced in the Stake tab because they completed one or more
+ * jobs (recorded via `recordJobContributionAction`). This is the corrected J2
+ * contribution model: completion records a Stake contribution rather than
+ * awarding a badge.
+ */
+export interface RecordedContribution {
+  contributorId: string
+  contributorName: string
+  contributorImage?: string | null
+  jobCount: number
 }
 
 export interface GroupTabsClientProps {
@@ -107,6 +125,23 @@ export interface GroupTabsClientProps {
   stakeActivity: ActivityEntry[]
   serverMemberStakes?: MemberStake[]
   serverTotalStakes?: number
+  /**
+   * Recorded job-contribution stakeholders (EPIC J / J2 contribution model).
+   * Each entry is a contributor who completed one or more jobs, surfaced in the
+   * Stake tab so contributors appear as recognized stakeholders. Optional: when
+   * omitted the Stake tab renders without a contributions section.
+   */
+  recordedContributions?: RecordedContribution[]
+  /**
+   * Saved org net-allocation rules (`metadata.netAllocation.rules`). Fed into the
+   * admin-only Stake-tree editor under the Stake tab. Optional: when omitted the
+   * editor starts empty.
+   */
+  netAllocationRules?: NetAllocationRule[]
+  /** Membership classes available as allocation targets in the Stake-tree editor. */
+  netAllocationClasses?: NetAllocationClassOption[]
+  /** Individual members available as allocation targets in the Stake-tree editor. */
+  netAllocationMembers?: NetAllocationMemberOption[]
   pressResources: SerializedResource[]
   documentResources: Document[]
   projectResources: SerializedResource[]
@@ -147,6 +182,10 @@ export function GroupTabsClient({
   stakeActivity,
   serverMemberStakes,
   serverTotalStakes,
+  recordedContributions = [],
+  netAllocationRules = [],
+  netAllocationClasses = [],
+  netAllocationMembers = [],
   pressResources,
   documentResources,
   projectResources,
@@ -759,6 +798,11 @@ export function GroupTabsClient({
           groupId={groupId}
           memberStakes={memberStakes}
           totalStakes={serverTotalStakes && serverTotalStakes > 0 ? serverTotalStakes : 100}
+          recordedContributions={recordedContributions}
+          isGroupAdmin={isGroupAdmin}
+          netAllocationRules={netAllocationRules}
+          netAllocationClasses={netAllocationClasses}
+          netAllocationMembers={netAllocationMembers}
         />
       </TabsContent>
 

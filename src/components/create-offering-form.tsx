@@ -284,6 +284,8 @@ export interface OfferingDraftPayload {
   dealDurationHours?: number
   targetAgentTypes: string[]
   ownerId?: string
+  /** Binds the offering's settlement to a project treasury (resource of type "project"). */
+  projectId?: string
   scopedLocaleIds?: string[]
   scopedGroupIds?: string[]
   scopedUserIds?: string[]
@@ -676,6 +678,10 @@ export function CreateOfferingForm({
   const [selectedLocaleIds, setSelectedLocaleIds] = useState<string[]>(initialValues?.scopedLocaleIds ?? [])
   const [ownerId, setOwnerId] = useState<string>(initialValues?.ownerId ?? "self")
 
+  // Project treasury binding — projects owned by the selected offering owner.
+  const [projectOptions, setProjectOptions] = useState<Array<{ id: string; name: string }>>([])
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(initialValues?.projectId ?? "")
+
   // Post to feed
   const [postToFeed, setPostToFeed] = useState(initialValues?.postToFeed ?? true)
 
@@ -841,6 +847,44 @@ export function CreateOfferingForm({
       cancelled = true
     }
   }, [session?.user?.id])
+
+  // ─── Fetch projects owned by the selected offering owner ──────────────────
+  // Projects are resources of type "project". Binding an offering to one routes
+  // its settlement through the project's treasury (see settlement resolver).
+  useEffect(() => {
+    const userId = session?.user?.id
+    const effectiveOwnerId = ownerId !== "self" ? ownerId : userId
+    if (!effectiveOwnerId) {
+      setProjectOptions([])
+      return
+    }
+
+    let cancelled = false
+    async function loadProjects() {
+      try {
+        const owned = await fetchResourcesByOwner(effectiveOwnerId!)
+        if (cancelled) return
+        setProjectOptions(
+          owned
+            .filter((r) => r.type === "project")
+            .map((r) => ({ id: r.id, name: r.name })),
+        )
+      } catch {
+        if (!cancelled) setProjectOptions([])
+      }
+    }
+    loadProjects()
+    return () => {
+      cancelled = true
+    }
+  }, [session?.user?.id, ownerId])
+
+  // Clear a stale project selection when the owner changes away from its owner.
+  useEffect(() => {
+    if (selectedProjectId && !projectOptions.some((p) => p.id === selectedProjectId)) {
+      setSelectedProjectId("")
+    }
+  }, [projectOptions, selectedProjectId])
 
   // ─── Auto-generate title from selected item names ─────────────────────────
 
@@ -1034,6 +1078,7 @@ export function CreateOfferingForm({
       dealDurationHours: hasDeal ? dealDurationHours : undefined,
       targetAgentTypes,
       ownerId: ownerId !== "self" ? ownerId : undefined,
+      projectId: selectedProjectId || undefined,
       scopedLocaleIds: selectedLocaleIds.length > 0 ? selectedLocaleIds : undefined,
       scopedGroupIds: scopedGroupIds.length > 0 ? scopedGroupIds : undefined,
       scopedUserIds: scopedUserIds.length > 0 ? scopedUserIds : undefined,
@@ -2155,6 +2200,31 @@ export function CreateOfferingForm({
                   Choose whether this offering is yours personally or belongs to a group you manage.
                 </p>
               </div>
+
+              {projectOptions.length > 0 && (
+                <div className="space-y-2">
+                  <Label>Project treasury (optional)</Label>
+                  <SearchableSelect
+                    value={selectedProjectId || "__none__"}
+                    onChange={(value) => setSelectedProjectId(value === "__none__" ? "" : value)}
+                    placeholder="No project — settle to owner"
+                    searchPlaceholder="Search projects..."
+                    emptyLabel="No projects found."
+                    options={[
+                      { value: "__none__", label: "No project", description: "Sale proceeds settle to the owner" },
+                      ...projectOptions.map((project) => ({
+                        value: project.id,
+                        label: project.name,
+                        description: "Route sale proceeds through this project's treasury",
+                      })),
+                    ]}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Bind this offering to a project so its sales settle into the project treasury and
+                    cascade per the project&apos;s revenue distribution.
+                  </p>
+                </div>
+              )}
 
               <AgentTypeSearchSelect
                 agentType="group"

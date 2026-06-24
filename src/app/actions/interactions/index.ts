@@ -46,6 +46,24 @@ export {
 } from "./tasks";
 
 export {
+  createDeliverableAction,
+  assignTaskToDeliverableAction,
+  recomputeDeliverableStatus,
+  listProjectDeliverables,
+} from "./deliverables";
+
+export {
+  claimJobAction,
+  recordJobContributionAction,
+  getRecordedContributions,
+  getProjectTeam,
+} from "./project-team";
+
+export {
+  reshareToConnectedPlatformsAction,
+} from "./reshare";
+
+export {
   updateMyProfile,
   toggleSaveListing,
   createGalleryAction,
