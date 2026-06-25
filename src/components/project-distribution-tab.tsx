@@ -29,7 +29,13 @@ import { Plus, Trash2, Landmark, Share2, Loader2, GitBranch } from "lucide-react
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { updateResource } from "@/app/actions/create-resources"
-import { FULL_PIE_BPS, type SettlementRole } from "@/lib/settlement-splits"
+import type { SettlementRole } from "@/lib/settlement-splits"
+// Import the pie size from the pure constants module rather than the
+// server-only settlement resolver: a runtime (value) import of
+// `@/lib/settlement-splits` would pull its top-level `@/db` import into this
+// client bundle (webpack: "Can't resolve 'fs'/'net'"). `FULL_PIE_BPS` is just
+// `BPS_DIVISOR`, which lives in a dependency-free module safe for the client.
+import { BPS_DIVISOR as FULL_PIE_BPS } from "@/lib/wallet-constants"
 
 /** A downstream distribution entry as stored on a project resource. */
 interface ProjectDistributionEntry {
