@@ -103,9 +103,9 @@ const VERB_IMPLICATIONS: Partial<Record<VerbType, VerbType[]>> = {
  * group grants for verbs included in their role entry here.
  */
 const ROLE_PERMISSIONS: Record<string, VerbType[]> = {
-  admin: ["manage", "view", "update", "delete", "grant", "assign", "use", "rent", "share"],
-  moderator: ["view", "update", "assign", "use", "rent"],
-  member: ["view", "use", "rent"],
+  admin: ["manage", "view", "update", "delete", "grant", "assign", "use", "rent", "share", "create", "comment", "react"],
+  moderator: ["view", "update", "assign", "use", "rent", "create", "comment", "react"],
+  member: ["view", "use", "rent", "create", "comment", "react"],
   viewer: ["view"],
 };
 

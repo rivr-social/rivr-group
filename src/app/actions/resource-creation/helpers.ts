@@ -7,19 +7,59 @@ import {
   agents,
   ledger,
   resources,
+  type MembershipTier,
   type NewLedgerEntry,
   type NewResource,
 } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { embedResource, scheduleEmbedding } from "@/lib/ai";
+import { hasEntitlement } from "@/lib/billing";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { ensureLocalNode, queueEntityExportEvents } from "@/lib/federation";
 import { getExecutionContext } from "@/lib/federation/execution-context";
 import { isGroupAdmin } from "@/app/actions/group-admin";
 
-import type { ActionResult, CreateResourceInput } from "./types";
-import { GROUP_LIKE_OWNER_AGENT_TYPES } from "./types";
+import type { ActionResult, CreateResourceInput, MemberCapabilityVerb } from "./types";
+import { GROUP_LIKE_OWNER_AGENT_TYPES, resolveGroupMemberCapability } from "./types";
+
+const MEMBERSHIP_TIER_VALUES: MembershipTier[] = [
+  "basic",
+  "host",
+  "seller",
+  "organizer",
+  "steward",
+];
+
+function normalizeRequiredTier(metadata: Record<string, unknown>): MembershipTier | null {
+  const direct = metadata.writeMembershipTier;
+  if (typeof direct === "string" && MEMBERSHIP_TIER_VALUES.includes(direct as MembershipTier)) {
+    return direct as MembershipTier;
+  }
+
+  const accessPolicy = metadata.accessPolicy;
+  if (accessPolicy && typeof accessPolicy === "object" && !Array.isArray(accessPolicy)) {
+    const nested = (accessPolicy as Record<string, unknown>).writeMembershipTier;
+    if (typeof nested === "string" && MEMBERSHIP_TIER_VALUES.includes(nested as MembershipTier)) {
+      return nested as MembershipTier;
+    }
+  }
+
+  return null;
+}
+
+function normalizeRequiredPlanId(metadata: Record<string, unknown>): string | null {
+  const direct = metadata.writeMembershipPlanId;
+  if (typeof direct === "string" && direct.trim().length > 0) return direct.trim();
+
+  const accessPolicy = metadata.accessPolicy;
+  if (accessPolicy && typeof accessPolicy === "object" && !Array.isArray(accessPolicy)) {
+    const nested = (accessPolicy as Record<string, unknown>).writeMembershipPlanId;
+    if (typeof nested === "string" && nested.trim().length > 0) return nested.trim();
+  }
+
+  return null;
+}
 
 export async function resolveAuthenticatedUserId(): Promise<string | null> {
   const executionContext = getExecutionContext();
@@ -42,7 +82,14 @@ export async function resolveAuthenticatedUserId(): Promise<string | null> {
   return resolvedUserId;
 }
 
-export async function hasGroupWriteAccess(userId: string, groupId: string): Promise<boolean> {
+/**
+ * MANAGE/admin authorization on a group-like agent. Delegates to the established
+ * {@link isGroupAdmin} gate (active admin/moderator ledger role, creatorId, or
+ * adminIds metadata). Deliberately does NOT accept a plain `join`/`belong`
+ * membership row (the C4-class ambient-claim hole) or tier/plan entitlement —
+ * structural and destructive operations require an explicit admin grant.
+ */
+export async function hasGroupManageAccess(userId: string, groupId: string): Promise<boolean> {
   const [group] = await db
     .select({ id: agents.id })
     .from(agents)
@@ -51,6 +98,87 @@ export async function hasGroupWriteAccess(userId: string, groupId: string): Prom
 
   if (!group) return false;
   return isGroupAdmin(userId, groupId);
+}
+
+/**
+ * Structural/admin write gate. An alias for {@link hasGroupManageAccess};
+ * retained so structural call sites keep a stable name. Content-creation call
+ * sites must use {@link canPostToGroup} instead.
+ */
+export async function hasGroupWriteAccess(userId: string, groupId: string): Promise<boolean> {
+  return hasGroupManageAccess(userId, groupId);
+}
+
+/**
+ * CONTENT authorization on a group-like agent: a member may author content when
+ * (a) they have manage access (admins always may), OR (b) the group's per-verb
+ * member capability is enabled (default-on) AND they hold a real active
+ * membership edge AND satisfy any required tier/plan entitlement. The membership
+ * edge is necessary-but-not-sufficient — it only grants posting because the
+ * explicit per-group policy permits it.
+ */
+export async function canPostToGroup(
+  userId: string,
+  groupId: string,
+  verb: MemberCapabilityVerb = "create",
+): Promise<boolean> {
+  const [group] = await db
+    .select({ id: agents.id, metadata: agents.metadata })
+    .from(agents)
+    .where(and(eq(agents.id, groupId), inArray(agents.type, [...GROUP_LIKE_OWNER_AGENT_TYPES])))
+    .limit(1);
+
+  if (!group) return false;
+
+  const metadata = ((group.metadata ?? {}) as Record<string, unknown>);
+
+  // Admins/owner always may.
+  if (await hasGroupManageAccess(userId, groupId)) return true;
+
+  // Per-group toggle must permit this content verb for members.
+  if (!resolveGroupMemberCapability(metadata, verb)) return false;
+
+  // Required paid tier, if the group gates writes behind one.
+  const requiredTier = normalizeRequiredTier(metadata);
+  if (requiredTier) {
+    const entitled = await hasEntitlement(userId, requiredTier);
+    if (!entitled) return false;
+  }
+
+  const requiredPlanId = normalizeRequiredPlanId(metadata);
+
+  const rows = await db.execute(sql`
+    SELECT id
+         , metadata
+    FROM ledger
+    WHERE subject_id = ${userId}::uuid
+      AND object_id = ${groupId}::uuid
+      AND is_active = true
+      AND verb IN ('own', 'manage', 'join', 'belong')
+      AND (expires_at IS NULL OR expires_at > NOW())
+    LIMIT 1
+  `);
+
+  const membership = (rows as Array<Record<string, unknown>>)[0];
+  if (!membership) return false;
+
+  if (requiredPlanId) {
+    const membershipMeta =
+      membership.metadata && typeof membership.metadata === "object"
+        ? (membership.metadata as Record<string, unknown>)
+        : {};
+    const planId =
+      typeof membershipMeta.membershipPlanId === "string"
+        ? membershipMeta.membershipPlanId
+        : typeof membershipMeta.planId === "string"
+          ? membershipMeta.planId
+          : null;
+    if (planId !== requiredPlanId) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export async function canModifyResource(userId: string, resourceId: string): Promise<{
@@ -154,7 +282,7 @@ export async function createResourceWithLedger(input: CreateResourceInput): Prom
         .from(agents)
         .where(and(eq(agents.id, ownerId), inArray(agents.type, [...GROUP_LIKE_OWNER_AGENT_TYPES])))
         .limit(1);
-      if (!owner || !(await hasGroupWriteAccess(userId, ownerId))) {
+      if (!owner || !(await canPostToGroup(userId, ownerId, "create"))) {
         return {
           success: false,
           message: "You do not have permission to create content for this group.",

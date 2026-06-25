@@ -20,6 +20,7 @@ import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import {
   resolveAuthenticatedUserId,
   hasGroupWriteAccess,
+  canPostToGroup,
   createResourceWithLedger,
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
@@ -168,7 +169,7 @@ export async function createOfferingResource(input: {
   try {
     const ownerId = input.ownerId ?? resolvedUserId;
     if (ownerId !== resolvedUserId) {
-      const allowed = await hasGroupWriteAccess(resolvedUserId, ownerId);
+      const allowed = await canPostToGroup(resolvedUserId, ownerId, "create");
       if (!allowed) {
         return {
           success: false,
