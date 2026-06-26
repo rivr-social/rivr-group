@@ -2,8 +2,9 @@
  * Terms agreement step for `/auth/signup/terms`.
  *
  * Purpose:
- * - Displays the platform's Terms, Privacy Policy, and EULA for user acceptance.
- * - Navigates to `/auth/signup/login-method` when the user agrees.
+ * - Summarizes the platform's Terms of Service and Privacy Policy and links to
+ *   the full canonical documents at `/terms` and `/privacy`.
+ * - Navigates back to the signup step where acceptance is stored and enforced.
  *
  * Rendering: Client Component (`"use client"`).
  * Data requirements: None.
@@ -44,40 +45,40 @@ export default function TermsPage() {
 
         <p className="mb-6">
           By creating an account, you agree to RIVR&apos;s{" "}
-          <Link href="#terms" className="text-primary hover:underline">
-            Terms and Conditions
-          </Link>
-          ,{" "}
-          <Link href="#privacy" className="text-primary hover:underline">
+          <Link href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+            Terms of Service
+          </Link>{" "}
+          and{" "}
+          <Link href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
             Privacy Policy
           </Link>
-          , and{" "}
-          <Link href="#eula" className="text-primary hover:underline">
-            EULA
-          </Link>
-          .
+          . The summaries below are for convenience only; the full documents govern your use of the Service.
         </p>
 
         <div className="space-y-4 text-sm text-muted-foreground">
           <section id="terms" className="scroll-mt-24">
-            <h2 className="font-medium text-foreground">Terms and Conditions</h2>
+            <h2 className="font-medium text-foreground">Terms of Service</h2>
             <p>
-              You agree to use the platform responsibly, provide accurate account information, and respect
-              other members and community spaces.
+              You agree to use the platform responsibly, provide accurate account information, and respect other
+              members and community spaces. Because RIVR is federated, content you make public or share may be
+              transmitted to other instances and networks. You keep ownership of your content and grant RIVR a
+              license to host, display, and federate it as needed to run the Service.{" "}
+              <Link href="/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                Read the full Terms of Service
+              </Link>
+              .
             </p>
           </section>
           <section id="privacy" className="scroll-mt-24">
             <h2 className="font-medium text-foreground">Privacy Policy</h2>
             <p>
-              We use signup details like email, birthday, and phone to operate your account, improve safety, and
-              support login, verification, and recovery flows.
-            </p>
-          </section>
-          <section id="eula" className="scroll-mt-24">
-            <h2 className="font-medium text-foreground">EULA</h2>
-            <p>
-              Your use of the application is subject to the product rules and any future updates delivered through the
-              service.
+              We collect account details, content you create, and usage data to operate, secure, and improve the
+              Service, and to support login, verification, and recovery. Information you choose to share may federate
+              to other instances. You can manage notification preferences and request deletion of your account.{" "}
+              <Link href="/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                Read the full Privacy Policy
+              </Link>
+              .
             </p>
           </section>
         </div>

@@ -8,6 +8,8 @@ const PUBLIC_PAGE_PATHS = new Set([
   "/manifest.webmanifest",
   "/llms.html",
   "/llms.txt",
+  "/terms",
+  "/privacy",
 ]);
 
 const PUBLIC_PAGE_PREFIXES = [
