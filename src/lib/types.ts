@@ -374,6 +374,28 @@ export const GROUP_TAB_KEYS = [
 export type GroupTabKey = (typeof GROUP_TAB_KEYS)[number]
 
 /**
+ * Default public visibility for each page tab when a group has no explicit
+ * override stored in `metadata.tabVisibility`. Org/group detail pages show
+ * About, Feed, Events, Members, and Press publicly; every other tab is
+ * admin-only until an admin opts to expose it.
+ */
+export const DEFAULT_TAB_VISIBILITY: Record<GroupTabKey, TabVisibilityLevel> = {
+  about: "public",
+  feed: "public",
+  events: "public",
+  members: "public",
+  press: "public",
+  groups: "admin",
+  documents: "admin",
+  jobs: "admin",
+  marketplace: "admin",
+  governance: "admin",
+  badges: "admin",
+  stake: "admin",
+  treasury: "admin",
+}
+
+/**
  * Canonical tab keys for the admin settings page (`/groups/[id]/settings`).
  *
  * These mirror the `TAB_VALUES` set used by the settings page. They are

@@ -7,6 +7,7 @@ import {
   GROUP_CONFIG_TAB_KEYS,
   GROUP_TAB_LABELS,
   CONFIG_TAB_LOCKED_VISIBILITY,
+  DEFAULT_TAB_VISIBILITY,
   isConfigTab,
   type AnyGroupTabKey,
   type GroupTabKey,
@@ -45,7 +46,11 @@ export function TabVisibilityEditor({ value, onChange, groupType }: TabVisibilit
     // Config tabs are locked and must never be mutated from the editor.
     if (isConfigTab(tab)) return;
     const next = { ...value };
-    if (level === "public") {
+    // Store only overrides that diverge from the page tab's default; selecting
+    // the default removes the now-redundant override. Deleting on "public"
+    // unconditionally would silently revert an admin-default tab back to admin
+    // and discard a deliberate "public" choice.
+    if (level === DEFAULT_TAB_VISIBILITY[tab as GroupTabKey]) {
       delete next[tab];
     } else {
       next[tab] = level;
@@ -59,7 +64,7 @@ export function TabVisibilityEditor({ value, onChange, groupType }: TabVisibilit
         const locked = isConfigTab(tab);
         const current: TabVisibilityLevel = locked
           ? CONFIG_TAB_LOCKED_VISIBILITY
-          : (value[tab] ?? "public");
+          : (value[tab] ?? DEFAULT_TAB_VISIBILITY[tab as GroupTabKey]);
         const isOrgOnly = !locked && ORG_ONLY_PAGE_TABS.includes(tab as GroupTabKey);
         return (
           <div key={tab} className="flex items-center justify-between gap-4 rounded-md border p-3">
