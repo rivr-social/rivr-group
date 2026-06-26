@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { agents, userConnectors } from "@/db/schema";
 import { isGroupAgentType } from "@/lib/agent-types";
 import { CONNECTOR_CATALOG, getConnectorDefinition } from "@/lib/connectors/catalog";
+import { runConnectorSync, SYNCABLE_CONNECTOR_PROVIDERS } from "@/lib/connectors/notion-sync";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box";
 
 export const dynamic = "force-dynamic";
@@ -79,13 +80,36 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as null | {
-    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; action?: "save" | "test";
+    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; action?: "save" | "test" | "sync";
   };
   if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   const subject = await resolveSubject(request, body.targetAgentId);
   if ("error" in subject) return NextResponse.json({ error: subject.error }, { status: subject.status });
   const definition = getConnectorDefinition(body.provider ?? "");
   if (!definition) return NextResponse.json({ error: "Unknown connector provider" }, { status: 400 });
+
+  // On-demand import: pull the stored connector's provider items into Resources.
+  // Operates on the already-saved credential, so it skips the account/credential
+  // input validation that `save`/`test` require.
+  if (body.action === "sync") {
+    if (!(SYNCABLE_CONNECTOR_PROVIDERS as readonly string[]).includes(definition.id)) {
+      return NextResponse.json({ error: `Sync is not supported for ${definition.label}.` }, { status: 400 });
+    }
+    try {
+      const result = await runConnectorSync(subject.targetAgentId, definition.id);
+      await db.update(userConnectors).set({ lastSyncedAt: new Date(), lastSyncError: null, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ success: true, result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Connector sync failed.";
+      await db.update(userConnectors).set({ lastSyncError: message, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
   const accountLabel = body.accountLabel?.trim() ?? "";
   const credential = body.credential?.trim() ?? "";
   const refreshCredential = body.refreshCredential?.trim() ?? "";
