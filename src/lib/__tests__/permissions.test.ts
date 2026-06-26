@@ -951,6 +951,138 @@ describe("ABAC policy evaluation", () => {
       expect(result.reason).toBe("no_permission");
     }));
 
+  it("DENY policy overrides owner access", () =>
+    withTestTransaction(async (db) => {
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "deny",
+        allowedActions: ["view" as VerbType],
+        conditions: [{ key: "id", operator: "equals", value: owner.id }],
+        logicalOperator: "AND",
+        label: "Owner denied for test",
+      };
+
+      await createTestResource(db, owner.id, {
+        name: "Deny owner policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(owner.id, "view", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("abac_deny");
+      expect(result.via).toContain(":deny");
+    }));
+
+  it("DENY policy overrides direct grants", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db);
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+      await createGrant(db, actor.id, resource.id, "view" as VerbType);
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "deny",
+        allowedActions: ["view" as VerbType],
+        conditions: [{ key: "id", operator: "equals", value: actor.id }],
+        logicalOperator: "AND",
+      };
+
+      await createTestResource(db, owner.id, {
+        name: "Deny grant policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "view", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("abac_deny");
+    }));
+
+  it("DENY policy overrides group role grants", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db);
+      const owner = await createTestAgent(db);
+      const group = await createTestGroup(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+      await createMembership(db, actor.id, group.id, "member");
+      await createGrant(db, group.id, resource.id, "view" as VerbType);
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "deny",
+        allowedActions: ["view" as VerbType],
+        conditions: [{ key: "id", operator: "equals", value: actor.id }],
+        logicalOperator: "AND",
+      };
+
+      await createTestResource(db, owner.id, {
+        name: "Deny role policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "view", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("abac_deny");
+    }));
+
+  it("supports numeric comparison operators and fails closed for missing attributes", () =>
+    withTestTransaction(async (db) => {
+      const adult = await createTestAgent(db, {
+        type: "person",
+        metadata: { age: "21" },
+      });
+      const missingAge = await createTestAgent(db, {
+        type: "person",
+        metadata: {},
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "allow",
+        allowedActions: ["rent" as VerbType],
+        conditions: [{ key: "age", operator: "gte", value: 18 }],
+        logicalOperator: "AND",
+      };
+
+      await createTestResource(db, owner.id, {
+        name: "Age policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const adultResult = await check(adult.id, "rent", resource.id, "resource");
+      expect(adultResult.allowed).toBe(true);
+      expect(adultResult.reason).toBe("abac_policy");
+
+      const missingResult = await check(missingAge.id, "rent", resource.id, "resource");
+      expect(missingResult.allowed).toBe(false);
+      expect(missingResult.reason).toBe("no_permission");
+    }));
+
   it("policy with localeScope restricts to locale members", () =>
     withTestTransaction(async (db) => {
       const locale = await createTestPlace(db);

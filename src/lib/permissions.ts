@@ -43,18 +43,37 @@ export class PermissionError extends Error {
 // =============================================================================
 
 /**
- * An attribute condition that must be met for a policy to grant access.
+ * Supported ABAC condition operators.
  *
- * Operators:
- * - "equals":   actor's attribute value === condition value
- * - "contains": actor's attribute (array) contains the condition value
- * - "in":       actor's attribute value is in the condition value (array)
- * - "exists":   actor has the attribute key (value is ignored)
+ * - "equals":     actor's attribute value === condition value
+ * - "not_equals": actor's attribute value !== condition value
+ * - "contains":   actor's attribute (array) contains the condition value
+ * - "in":         actor's attribute value is in the condition value (array)
+ * - "exists":     actor has the attribute key (value is ignored)
+ * - "gt"/"gte"/"lt"/"lte": numeric comparison of actor attribute vs value
+ */
+export const ATTRIBUTE_OPERATORS = [
+  "equals",
+  "not_equals",
+  "contains",
+  "in",
+  "exists",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+] as const;
+
+export type AttributeOperator = (typeof ATTRIBUTE_OPERATORS)[number];
+
+/**
+ * An attribute condition that must be met for a policy to apply (grant for
+ * an allow policy, block for a deny policy).
  */
 export interface AttributeCondition {
   key: string;
-  operator: "equals" | "contains" | "in" | "exists";
-  value: string | string[];
+  operator: AttributeOperator;
+  value: string | string[] | number;
 }
 
 /**
@@ -69,6 +88,8 @@ export interface PermissionPolicyMetadata {
   targetId: string;
   /** Whether the target is an agent, resource, or ledger entry */
   targetType: "agent" | "resource" | "ledger";
+  /** Whether matching conditions allow or deny the listed actions. Defaults to allow. */
+  effect?: "allow" | "deny";
   /** Actions this policy permits when conditions are met */
   allowedActions: VerbType[];
   /** Attribute conditions the actor must satisfy */
@@ -167,6 +188,13 @@ export async function check(
 
   if (!target) {
     return { allowed: false, reason: "target_not_found" };
+  }
+
+  // ABAC deny policies take precedence over every allow path below. Evaluate
+  // them up front so an explicit deny short-circuits owner/grant/visibility.
+  const abacDecision = await evaluateAbacPolicies(actorId, targetId, targetType, verb);
+  if (abacDecision?.effect === "deny") {
+    return { allowed: false, reason: "abac_deny", via: abacDecision.via };
   }
 
   // Cache locale overlap to avoid redundant DB queries within a single check() call.
@@ -316,10 +344,9 @@ export async function check(
     return { allowed: true, reason: "hierarchy_inheritance", via: hierarchyAccess };
   }
 
-  // 9. ABAC policy evaluation — check permission policy objects linked to this target
-  const policyAccess = await evaluateAbacPolicies(actorId, targetId, targetType, verb);
-  if (policyAccess) {
-    return { allowed: true, reason: "abac_policy", via: policyAccess };
+  // 9. ABAC policy evaluation — an allow policy (evaluated up front) grants access.
+  if (abacDecision?.effect === "allow") {
+    return { allowed: true, reason: "abac_policy", via: abacDecision.via };
   }
 
   return { allowed: false, reason: "no_permission" };
@@ -1011,14 +1038,15 @@ async function checkLocaleOverlap(
  * matches the target. For each policy, evaluates the actor's attributes
  * against the policy conditions.
  *
- * Returns the via string if access is granted, null otherwise.
+ * Returns the policy decision when a matching policy applies, null otherwise.
+ * A matching deny policy short-circuits and wins over any allow policy.
  */
 async function evaluateAbacPolicies(
   actorId: string,
   targetId: string,
   targetType: "agent" | "resource",
   verb: VerbType
-): Promise<string | null> {
+): Promise<{ effect: "allow" | "deny"; via: string } | null> {
   // Find all permission_policy resources targeting this object
   const policies = await db.execute(sql`
     SELECT *
@@ -1036,6 +1064,7 @@ async function evaluateAbacPolicies(
   if (!actor) return null;
 
   const actorAttributes = buildActorAttributes(actor);
+  let allowDecision: { effect: "allow"; via: string } | null = null;
 
   for (const row of policies as unknown as Resource[]) {
     const policy = row.metadata as unknown as PermissionPolicyMetadata;
@@ -1053,11 +1082,16 @@ async function evaluateAbacPolicies(
     // Evaluate attribute conditions
     const conditionsMet = evaluateConditions(policy.conditions, policy.logicalOperator, actorAttributes);
     if (conditionsMet) {
-      return `policy:${row.id}→${verb} (${policy.label || "abac"})`;
+      const effect = policy.effect === "deny" ? "deny" : "allow";
+      const via = `policy:${row.id}→${verb}:${effect} (${policy.label || "abac"})`;
+      if (effect === "deny") {
+        return { effect, via };
+      }
+      allowDecision = { effect, via };
     }
   }
 
-  return null;
+  return allowDecision;
 }
 
 /**
@@ -1134,6 +1168,12 @@ function evaluateSingleCondition(
       }
       return false;
 
+    case "not_equals":
+      if (typeof attrValue === "string" && typeof condition.value === "string") {
+        return attrValue !== condition.value;
+      }
+      return attrValue !== undefined;
+
     case "contains":
       // Actor's attribute is an array and contains the condition value
       if (Array.isArray(attrValue) && typeof condition.value === "string") {
@@ -1147,6 +1187,22 @@ function evaluateSingleCondition(
         return condition.value.includes(attrValue);
       }
       return false;
+
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte": {
+      if (typeof condition.value !== "number") return false;
+      const numericAttr =
+        typeof attrValue === "string" && attrValue.trim() !== ""
+          ? Number(attrValue)
+          : Number.NaN;
+      if (!Number.isFinite(numericAttr)) return false;
+      if (condition.operator === "gt") return numericAttr > condition.value;
+      if (condition.operator === "gte") return numericAttr >= condition.value;
+      if (condition.operator === "lt") return numericAttr < condition.value;
+      return numericAttr <= condition.value;
+    }
 
     default:
       return false;
@@ -1248,8 +1304,11 @@ export async function canViewPredicate(
   // 6. Policy-based: evaluate the linked permission policy
   if (predicate.policyId) {
     const policyAccess = await evaluateAbacPolicies(actorId, predicateId, "resource", "view");
-    if (policyAccess) {
-      return { allowed: true, reason: "policy_predicate", via: policyAccess };
+    if (policyAccess?.effect === "deny") {
+      return { allowed: false, reason: "abac_deny", via: policyAccess.via };
+    }
+    if (policyAccess?.effect === "allow") {
+      return { allowed: true, reason: "policy_predicate", via: policyAccess.via };
     }
   }
 
@@ -1296,6 +1355,7 @@ export async function createPermissionPolicy(params: {
   creatorId: string;
   targetId: string;
   targetType: "agent" | "resource" | "ledger";
+  effect?: "allow" | "deny";
   allowedActions: VerbType[];
   conditions: AttributeCondition[];
   logicalOperator: "AND" | "OR";
@@ -1320,6 +1380,7 @@ export async function createPermissionPolicy(params: {
   const policyMetadata: PermissionPolicyMetadata = {
     targetId: params.targetId,
     targetType: params.targetType,
+    effect: params.effect ?? "allow",
     allowedActions: params.allowedActions,
     conditions: params.conditions,
     logicalOperator: params.logicalOperator,
