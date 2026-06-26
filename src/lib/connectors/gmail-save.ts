@@ -115,7 +115,7 @@ export function renderGmailMarkdown(message: GmailMessage): { subject: string; m
 }
 
 /** Resolves and decrypts the Gmail access token stored for an agent. */
-async function resolveGmailToken(targetAgentId: string): Promise<string> {
+export async function resolveGmailToken(targetAgentId: string): Promise<string> {
   const [connector] = await db
     .select({ accessToken: userConnectors.accessToken })
     .from(userConnectors)

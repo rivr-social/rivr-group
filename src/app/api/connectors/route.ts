@@ -9,6 +9,7 @@ import { CONNECTOR_CATALOG, getConnectorDefinition } from "@/lib/connectors/cata
 import { runConnectorSync, SYNCABLE_CONNECTOR_PROVIDERS } from "@/lib/connectors/notion-sync";
 import { runConnectorItemSave, ITEM_SAVE_PROVIDERS } from "@/lib/connectors/gmail-save";
 import { runConnectorEventPublish, EVENT_PUBLISH_PROVIDERS } from "@/lib/connectors/luma-publish";
+import { runConnectorSendEmail, EMAIL_SEND_PROVIDERS } from "@/lib/connectors/gmail-send";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box";
 
 export const dynamic = "force-dynamic";
@@ -83,7 +84,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as null | {
-    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; itemId?: string; resourceId?: string; action?: "save" | "test" | "sync" | "saveItem" | "publishEvent";
+    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; itemId?: string; resourceId?: string; email?: { to?: string; subject?: string; body?: string; html?: boolean }; action?: "save" | "test" | "sync" | "saveItem" | "publishEvent" | "sendEmail";
   };
   if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   const subject = await resolveSubject(request, body.targetAgentId);
@@ -154,6 +155,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, result });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Event publish failed.";
+      await db.update(userConnectors).set({ lastSyncError: message, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
+  // On-demand outbound email send (Gmail): send one email AS the agent. Operates
+  // on the stored credential, so it also skips save/test input validation.
+  if (body.action === "sendEmail") {
+    if (!(EMAIL_SEND_PROVIDERS as readonly string[]).includes(definition.id)) {
+      return NextResponse.json({ error: `Email send is not supported for ${definition.label}.` }, { status: 400 });
+    }
+    const to = body.email?.to?.trim() ?? "";
+    const emailSubject = body.email?.subject?.trim() ?? "";
+    const emailBody = body.email?.body ?? "";
+    if (!to) return NextResponse.json({ error: "A recipient email address is required." }, { status: 400 });
+    if (!emailSubject) return NextResponse.json({ error: "A subject is required." }, { status: 400 });
+    try {
+      const result = await runConnectorSendEmail(subject.targetAgentId, definition.id, { to, subject: emailSubject, body: emailBody, html: body.email?.html });
+      await db.update(userConnectors).set({ lastSyncedAt: new Date(), lastSyncError: null, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ success: true, result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Email send failed.";
       await db.update(userConnectors).set({ lastSyncError: message, updatedAt: new Date() }).where(and(
         eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
       ));
