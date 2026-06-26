@@ -17,6 +17,7 @@
     "thanks:demurrage": "tsx src/scripts/process-thanks-demurrage.ts",
     "db:seed:overture": "tsx src/scripts/ingest-overture-locations.ts",
     "db:backfill:embeddings": "tsx src/scripts/backfill-embeddings.ts",
+    "db:backfill:connectors": "tsx src/scripts/backfill-connector-encryption.ts",
     "map:mirror:style": "tsx src/scripts/mirror-mapbox-style.ts",
     "map:prefetch:tiles": "tsx src/scripts/prefetch-map-style-tiles.ts",
     "map:mirror:all": "pnpm map:mirror:style && pnpm map:prefetch:tiles",

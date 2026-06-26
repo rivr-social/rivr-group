@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { agents, userConnectors } from "@/db/schema";
 import { isGroupAgentType } from "@/lib/agent-types";
 import { CONNECTOR_CATALOG, getConnectorDefinition } from "@/lib/connectors/catalog";
+import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box";
 
 export const dynamic = "force-dynamic";
 
@@ -93,7 +94,10 @@ export async function POST(request: Request) {
   const [existing] = await db.select().from(userConnectors).where(and(
     eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
   )).limit(1);
-  const effectiveCredential = credential || existing?.accessToken || "";
+  // `existing.accessToken` is stored encrypted; decrypt it (legacy plaintext
+  // passes through unchanged) so the test fetch and presence check see the real
+  // credential. Freshly-typed `credential` is already plaintext.
+  const effectiveCredential = credential || decryptSecret(existing?.accessToken) || "";
   if (definition.credentialLabel && !effectiveCredential) {
     return NextResponse.json({ error: `${definition.credentialLabel} is required.` }, { status: 400 });
   }
@@ -115,14 +119,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true });
   }
 
+  // Encrypt-at-rest: never persist OAuth tokens / API keys as plaintext.
+  const encryptedAccess = encryptSecret(effectiveCredential || null);
+  const encryptedRefresh = encryptSecret(refreshCredential || null);
   await db.insert(userConnectors).values({
     userAgentId: subject.targetAgentId, provider: definition.id, accountEmail: accountLabel,
-    accessToken: effectiveCredential || null, metadata: { connectionType: "credential" }, updatedAt: new Date(),
-    refreshToken: refreshCredential || null,
+    accessToken: encryptedAccess, metadata: { connectionType: "credential" }, updatedAt: new Date(),
+    refreshToken: encryptedRefresh,
     tokenExpiresAt: definition.id.startsWith("google_") || definition.id === "gmail" ? new Date(Date.now() + 55 * 60 * 1000) : null,
   }).onConflictDoUpdate({
     target: [userConnectors.userAgentId, userConnectors.provider],
-    set: { accountEmail: accountLabel, ...(credential ? { accessToken: credential } : {}), ...(refreshCredential ? { refreshToken: refreshCredential } : {}), ...(credential && (definition.id.startsWith("google_") || definition.id === "gmail") ? { tokenExpiresAt: new Date(Date.now() + 55 * 60 * 1000) } : {}), updatedAt: new Date(), lastSyncError: null },
+    set: { accountEmail: accountLabel, ...(credential ? { accessToken: encryptSecret(credential) } : {}), ...(refreshCredential ? { refreshToken: encryptSecret(refreshCredential) } : {}), ...(credential && (definition.id.startsWith("google_") || definition.id === "gmail") ? { tokenExpiresAt: new Date(Date.now() + 55 * 60 * 1000) } : {}), updatedAt: new Date(), lastSyncError: null },
   });
   return NextResponse.json({ success: true });
 }
