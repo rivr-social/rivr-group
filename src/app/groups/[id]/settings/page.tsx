@@ -37,8 +37,8 @@ import {
   updateGroupJoinSettings,
   updateGroupMembershipPlans,
   updateGroupTabVisibility,
-  GROUP_SETTINGS_ERROR_CODES,
 } from "@/app/actions/group-admin";
+import { GROUP_SETTINGS_ERROR_CODES } from "@/app/actions/group-admin-types";
 import { TabVisibilityEditor } from "@/components/tab-visibility-editor";
 import { updateGroupResource } from "@/app/actions/create-resources";
 import { type GroupMembershipPlan } from "@/lib/group-memberships";

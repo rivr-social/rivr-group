@@ -21,24 +21,12 @@ import {
   saveGroupAssistantSettings,
   type GroupAssistantSettings,
 } from "@/lib/group-assistant-settings";
+import { ALLOWED_ASSISTANT_MODELS } from "./group-assistant-config-types";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MAX_SOUL_MD_LENGTH = 8000;
-
-/**
- * Models a group admin may select for the assistant. Restricting the set keeps
- * arbitrary/typo selectors out of the native-chat provider router.
- */
-export const ALLOWED_ASSISTANT_MODELS = [
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-opus-4-6",
-  "openai/gpt-4o",
-  "gemini/gemini-2.0-flash",
-  "local/ollama",
-] as const;
-export type AllowedAssistantModel = (typeof ALLOWED_ASSISTANT_MODELS)[number];
 
 const ALLOWED_MODEL_SET = new Set<string>(ALLOWED_ASSISTANT_MODELS);
 
