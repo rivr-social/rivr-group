@@ -35,6 +35,10 @@ import {
   normalizeMarketplaceFeeBps,
 } from "@/lib/marketplace-fees";
 import { getAuthenticatedActorId } from "@/lib/server-auth";
+import {
+  GROUP_SETTINGS_ERROR_CODES,
+  type GroupSettingsErrorCode,
+} from "./group-admin-types";
 
 // =============================================================================
 // Constants
@@ -67,20 +71,6 @@ type GroupAdminResult = {
   success: boolean;
   error?: string;
 };
-
-/**
- * Stable, machine-readable failure codes for {@link fetchGroupAdminSettings}.
- * The settings page keys redirect behavior on `FORBIDDEN`/`UNAUTHENTICATED`
- * rather than matching error message text.
- */
-export const GROUP_SETTINGS_ERROR_CODES = {
-  UNAUTHENTICATED: "UNAUTHENTICATED",
-  FORBIDDEN: "FORBIDDEN",
-  INVALID_GROUP: "INVALID_GROUP",
-  NOT_FOUND: "NOT_FOUND",
-} as const;
-export type GroupSettingsErrorCode =
-  (typeof GROUP_SETTINGS_ERROR_CODES)[keyof typeof GROUP_SETTINGS_ERROR_CODES];
 
 type GroupSettingsResult = {
   success: boolean;
