@@ -7,6 +7,7 @@ import { agents, userConnectors } from "@/db/schema";
 import { isGroupAgentType } from "@/lib/agent-types";
 import { CONNECTOR_CATALOG, getConnectorDefinition } from "@/lib/connectors/catalog";
 import { runConnectorSync, SYNCABLE_CONNECTOR_PROVIDERS } from "@/lib/connectors/notion-sync";
+import { runConnectorItemSave, ITEM_SAVE_PROVIDERS } from "@/lib/connectors/gmail-save";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box";
 
 export const dynamic = "force-dynamic";
@@ -80,7 +81,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as null | {
-    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; action?: "save" | "test" | "sync";
+    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; itemId?: string; action?: "save" | "test" | "sync" | "saveItem";
   };
   if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   const subject = await resolveSubject(request, body.targetAgentId);
@@ -103,6 +104,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, result });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Connector sync failed.";
+      await db.update(userConnectors).set({ lastSyncError: message, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
+  // On-demand single-item save (Gmail): mirror one provider item by id into a
+  // Resource. Operates on the stored credential, so it also skips save/test
+  // input validation.
+  if (body.action === "saveItem") {
+    if (!(ITEM_SAVE_PROVIDERS as readonly string[]).includes(definition.id)) {
+      return NextResponse.json({ error: `Single-item save is not supported for ${definition.label}.` }, { status: 400 });
+    }
+    const itemId = body.itemId?.trim() ?? "";
+    if (!itemId) return NextResponse.json({ error: "An item id is required." }, { status: 400 });
+    try {
+      const result = await runConnectorItemSave(subject.targetAgentId, definition.id, itemId);
+      await db.update(userConnectors).set({ lastSyncedAt: new Date(), lastSyncError: null, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ success: true, result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Connector item save failed.";
       await db.update(userConnectors).set({ lastSyncError: message, updatedAt: new Date() }).where(and(
         eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
       ));

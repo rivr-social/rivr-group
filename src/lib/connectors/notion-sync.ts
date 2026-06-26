@@ -15,18 +15,12 @@
  * token — there is no OAuth refresh dance (unlike the person app's
  * NextAuth-account lane).
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { resources, userConnectors } from "@/db/schema";
+import { userConnectors } from "@/db/schema";
+import { upsertMirroredDocument } from "@/lib/connectors/resource-mirror";
 import { decryptSecret } from "@/lib/crypto/secret-box";
-import {
-  buildSourceBlock,
-  getSourceBlock,
-  shouldApplyRemoteUpdate,
-  touchSync,
-  withSourceBlock,
-} from "@/lib/resources/source-block";
 
 const NOTION_PROVIDER = "notion" as const;
 const NOTION_API_BASE = "https://api.notion.com/v1";
@@ -184,23 +178,6 @@ async function fetchPageMarkdown(token: string, pageId: string): Promise<string>
   return blocksToMarkdown(collected);
 }
 
-/** Finds an existing mirrored Resource for a Notion page by its source block. */
-async function findMirroredResourceId(ownerId: string, externalId: string): Promise<string | null> {
-  const [row] = await db
-    .select({ id: resources.id })
-    .from(resources)
-    .where(
-      and(
-        eq(resources.ownerId, ownerId),
-        isNull(resources.deletedAt),
-        sql`${resources.metadata}->'source'->>'provider' = ${NOTION_PROVIDER}`,
-        sql`${resources.metadata}->'source'->>'externalId' = ${externalId}`,
-      ),
-    )
-    .limit(1);
-  return row?.id ?? null;
-}
-
 /**
  * Resolves and decrypts the Notion integration token stored for an agent, or
  * throws when the connector is absent.
@@ -258,81 +235,22 @@ export async function syncNotionConnector(
       continue;
     }
 
-    const title = extractTitle(page);
-    const externalUrl = page.url ?? page.public_url ?? null;
-    const now = new Date();
-    const existingId = await findMirroredResourceId(targetAgentId, page.id);
-
-    if (existingId) {
-      const [existing] = await db
-        .select({ metadata: resources.metadata })
-        .from(resources)
-        .where(eq(resources.id, existingId))
-        .limit(1);
-      const existingSource = getSourceBlock(existing?.metadata ?? null);
-      if (
-        existingSource &&
-        !shouldApplyRemoteUpdate(existingSource, {
-          externalUpdatedAt: page.last_edited_time ?? null,
-          content: markdown,
-        })
-      ) {
-        skipped += 1;
-        continue;
-      }
-      const nextSource = existingSource
-        ? touchSync(existingSource, {
-            provenance: "provider_inbound",
-            externalUpdatedAt: page.last_edited_time ?? null,
-            content: markdown,
-            externalUrl,
-          })
-        : buildSourceBlock({
-            provider: NOTION_PROVIDER,
-            externalId: page.id,
-            lane: "parachute-mirror",
-            externalUrl,
-            externalUpdatedAt: page.last_edited_time ?? null,
-            content: markdown,
-            now,
-          });
-      await db
-        .update(resources)
-        .set({
-          name: title,
-          content: markdown,
-          contentType: "text/markdown",
-          url: externalUrl,
-          metadata: withSourceBlock(existing?.metadata ?? null, nextSource),
-          updatedAt: now,
-        })
-        .where(eq(resources.id, existingId));
-      updated += 1;
-      continue;
-    }
-
-    const source = buildSourceBlock({
+    const outcome = await upsertMirroredDocument({
+      ownerId: targetAgentId,
       provider: NOTION_PROVIDER,
       externalId: page.id,
       lane: "parachute-mirror",
-      externalUrl,
+      title: extractTitle(page),
+      body: markdown,
+      externalUrl: page.url ?? page.public_url ?? null,
       externalUpdatedAt: page.last_edited_time ?? null,
-      content: markdown,
-      now,
-    });
-    await db.insert(resources).values({
-      name: title,
-      type: "document",
-      description: "Imported from Notion",
-      content: markdown,
-      contentType: "text/markdown",
-      url: externalUrl,
-      ownerId: targetAgentId,
-      visibility: "private",
       tags: ["notion", "imported"],
-      metadata: withSourceBlock({ category: "Notion" }, source),
+      category: "Notion",
+      description: "Imported from Notion",
     });
-    imported += 1;
+    if (outcome === "created") imported += 1;
+    else if (outcome === "updated") updated += 1;
+    else skipped += 1;
   }
 
   return {
