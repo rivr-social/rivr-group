@@ -34,9 +34,14 @@ import { GroupAdminManager } from "@/components/group-admin-manager"
 import { GroupRelationshipManager } from "@/components/group-relationship-manager"
 import { FlowPassModal } from "@/components/flow-pass-modal"
 import { GroupAccessDialog } from "@/components/group-access-dialog"
+import type {
+  NetAllocationClassOption,
+  NetAllocationMemberOption,
+} from "@/components/net-allocation-editor"
+import type { NetAllocationRule } from "@/lib/net-allocation"
 import type { Document } from "@/types/domain"
 import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel, GroupTabKey } from "@/lib/types"
-import { ProposalStatus } from "@/lib/types"
+import { ProposalStatus, GROUP_TAB_KEYS, DEFAULT_TAB_VISIBILITY } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
 
 interface ActivityEntry {
@@ -62,6 +67,50 @@ interface ProjectJobTree {
   jobs: SerializedResource[]
   tasksByJob: Record<string, SerializedResource[]>
   projectLevelTasks: SerializedResource[]
+}
+
+/**
+ * A contributor surfaced in the Stake tab because they completed one or more
+ * jobs (recorded via `recordJobContributionAction`). This is the corrected J2
+ * contribution model: completion records a Stake contribution rather than
+ * awarding a badge.
+ */
+export interface RecordedContribution {
+  contributorId: string
+  contributorName: string
+  contributorImage?: string | null
+  jobCount: number
+}
+
+/**
+ * Page tabs available to a "basic" group. Org groups get the full
+ * {@link GROUP_TAB_KEYS} set. Derived against the canonical registry so the
+ * trigger list and the visibility filter stay in lockstep.
+ */
+const BASIC_GROUP_PAGE_TABS: readonly GroupTabKey[] = [
+  "about", "feed", "events", "groups", "members", "documents",
+] as const
+
+/**
+ * Short, tab-strip labels for each page tab. These intentionally differ from
+ * the full {@link GROUP_TAB_LABELS} (e.g. "Docs"/"Mart") to fit the horizontal
+ * strip; keyed by the same canonical {@link GroupTabKey} so the strip is
+ * rendered from the registry rather than a hardcoded JSX list.
+ */
+const GROUP_TAB_TRIGGER_LABELS: Record<GroupTabKey, string> = {
+  about: "About",
+  feed: "Feed",
+  events: "Events",
+  groups: "Groups",
+  members: "Members",
+  documents: "Docs",
+  jobs: "Jobs",
+  marketplace: "Mart",
+  governance: "Governance",
+  badges: "Badges",
+  stake: "Stake",
+  press: "Press",
+  treasury: "Treasury",
 }
 
 export interface GroupTabsClientProps {
@@ -107,6 +156,23 @@ export interface GroupTabsClientProps {
   stakeActivity: ActivityEntry[]
   serverMemberStakes?: MemberStake[]
   serverTotalStakes?: number
+  /**
+   * Recorded job-contribution stakeholders (EPIC J / J2 contribution model).
+   * Each entry is a contributor who completed one or more jobs, surfaced in the
+   * Stake tab so contributors appear as recognized stakeholders. Optional: when
+   * omitted the Stake tab renders without a contributions section.
+   */
+  recordedContributions?: RecordedContribution[]
+  /**
+   * Saved org net-allocation rules (`metadata.netAllocation.rules`). Fed into the
+   * admin-only Stake-tree editor under the Stake tab. Optional: when omitted the
+   * editor starts empty.
+   */
+  netAllocationRules?: NetAllocationRule[]
+  /** Membership classes available as allocation targets in the Stake-tree editor. */
+  netAllocationClasses?: NetAllocationClassOption[]
+  /** Individual members available as allocation targets in the Stake-tree editor. */
+  netAllocationMembers?: NetAllocationMemberOption[]
   pressResources: SerializedResource[]
   documentResources: Document[]
   projectResources: SerializedResource[]
@@ -147,6 +213,10 @@ export function GroupTabsClient({
   stakeActivity,
   serverMemberStakes,
   serverTotalStakes,
+  recordedContributions = [],
+  netAllocationRules = [],
+  netAllocationClasses = [],
+  netAllocationMembers = [],
   pressResources,
   documentResources,
   projectResources,
@@ -167,12 +237,14 @@ export function GroupTabsClient({
     [currentUserId, members],
   )
   const visibleTabs = useMemo(() => {
-    const allTabs: GroupTabKey[] = isBasicGroup
-      ? ["about", "feed", "events", "groups", "members", "documents"]
-      : ["about", "feed", "events", "groups", "members", "documents", "jobs", "marketplace", "governance", "badges", "stake", "press", "treasury"]
+    // Derive the candidate page tabs from the canonical registry: basic groups
+    // get the basic subset, org groups get every page tab.
+    const allTabs: readonly GroupTabKey[] = isBasicGroup
+      ? BASIC_GROUP_PAGE_TABS
+      : GROUP_TAB_KEYS
 
     return allTabs.filter((tab) => {
-      const level: TabVisibilityLevel = tabVisibility?.[tab] ?? "public"
+      const level: TabVisibilityLevel = tabVisibility?.[tab] ?? DEFAULT_TAB_VISIBILITY[tab]
       if (level === "hidden") return false
       if (level === "admin") return isGroupAdmin
       if (level === "members") return isGroupMember || isGroupAdmin
@@ -439,19 +511,11 @@ export function GroupTabsClient({
     <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
       <div className="overflow-x-auto -mx-4 px-4 scrollbar-hide">
         <TabsList className="inline-flex w-max min-w-full gap-1">
-          {visibleTabs.includes("about") && <TabsTrigger value="about" className="shrink-0">About</TabsTrigger>}
-          {visibleTabs.includes("feed") && <TabsTrigger value="feed" className="shrink-0">Feed</TabsTrigger>}
-          {visibleTabs.includes("events") && <TabsTrigger value="events" className="shrink-0">Events</TabsTrigger>}
-          {visibleTabs.includes("groups") && <TabsTrigger value="groups" className="shrink-0">Groups</TabsTrigger>}
-          {visibleTabs.includes("members") && <TabsTrigger value="members" className="shrink-0">Members</TabsTrigger>}
-          {visibleTabs.includes("documents") && <TabsTrigger value="documents" className="shrink-0">Docs</TabsTrigger>}
-          {visibleTabs.includes("jobs") && <TabsTrigger value="jobs" className="shrink-0">Jobs</TabsTrigger>}
-          {visibleTabs.includes("marketplace") && <TabsTrigger value="marketplace" className="shrink-0">Mart</TabsTrigger>}
-          {visibleTabs.includes("governance") && <TabsTrigger value="governance" className="shrink-0">Governance</TabsTrigger>}
-          {visibleTabs.includes("badges") && <TabsTrigger value="badges" className="shrink-0">Badges</TabsTrigger>}
-          {visibleTabs.includes("stake") && <TabsTrigger value="stake" className="shrink-0">Stake</TabsTrigger>}
-          {visibleTabs.includes("press") && <TabsTrigger value="press" className="shrink-0">Press</TabsTrigger>}
-          {visibleTabs.includes("treasury") && <TabsTrigger value="treasury" className="shrink-0">Treasury</TabsTrigger>}
+          {visibleTabs.map((tab) => (
+            <TabsTrigger key={tab} value={tab} className="shrink-0">
+              {GROUP_TAB_TRIGGER_LABELS[tab]}
+            </TabsTrigger>
+          ))}
         </TabsList>
       </div>
 
@@ -759,6 +823,11 @@ export function GroupTabsClient({
           groupId={groupId}
           memberStakes={memberStakes}
           totalStakes={serverTotalStakes && serverTotalStakes > 0 ? serverTotalStakes : 100}
+          recordedContributions={recordedContributions}
+          isGroupAdmin={isGroupAdmin}
+          netAllocationRules={netAllocationRules}
+          netAllocationClasses={netAllocationClasses}
+          netAllocationMembers={netAllocationMembers}
         />
       </TabsContent>
 

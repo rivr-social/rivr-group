@@ -8,14 +8,20 @@ export type {
 
 export {
   GROUP_LIKE_OWNER_AGENT_TYPES,
+  MEMBER_CAPABILITY_VERBS,
+  resolveGroupMemberCapability,
   normalizeEventTickets,
   getAllowedTerms,
   deriveOfferingListingType,
 } from "./types";
 
+export type { MemberCapabilityVerb } from "./types";
+
 export {
   resolveAuthenticatedUserId,
   hasGroupWriteAccess,
+  hasGroupManageAccess,
+  canPostToGroup,
   canModifyResource,
   revalidateOwnerPaths,
   createResourceWithLedger,

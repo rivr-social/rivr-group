@@ -14,7 +14,15 @@ import { agents, ledger, type MembershipTier } from "@/db/schema";
 import { eq, and, or, isNull, sql } from "drizzle-orm";
 import { hash } from "@node-rs/bcrypt";
 import { revalidatePath } from "next/cache";
-import { JoinType, GROUP_TAB_KEYS, type GroupJoinSettings, type TabVisibilitySettings, type TabVisibilityLevel } from "@/lib/types";
+import {
+  JoinType,
+  ALL_GROUP_TAB_KEYS,
+  CONFIG_TAB_LOCKED_VISIBILITY,
+  isConfigTab,
+  type GroupJoinSettings,
+  type TabVisibilitySettings,
+  type TabVisibilityLevel,
+} from "@/lib/types";
 import {
   normalizeGroupMembershipPlans,
   readGroupMembershipPlans,
@@ -60,9 +68,24 @@ type GroupAdminResult = {
   error?: string;
 };
 
+/**
+ * Stable, machine-readable failure codes for {@link fetchGroupAdminSettings}.
+ * The settings page keys redirect behavior on `FORBIDDEN`/`UNAUTHENTICATED`
+ * rather than matching error message text.
+ */
+export const GROUP_SETTINGS_ERROR_CODES = {
+  UNAUTHENTICATED: "UNAUTHENTICATED",
+  FORBIDDEN: "FORBIDDEN",
+  INVALID_GROUP: "INVALID_GROUP",
+  NOT_FOUND: "NOT_FOUND",
+} as const;
+export type GroupSettingsErrorCode =
+  (typeof GROUP_SETTINGS_ERROR_CODES)[keyof typeof GROUP_SETTINGS_ERROR_CODES];
+
 type GroupSettingsResult = {
   success: boolean;
   error?: string;
+  code?: GroupSettingsErrorCode;
   group?: {
     id: string;
     name: string;
@@ -281,16 +304,16 @@ export async function fetchGroupAdminSettings(
 ): Promise<GroupSettingsResult> {
   const actorId = await requireActorId();
   if (!actorId) {
-    return { success: false, error: "Authentication required." };
+    return { success: false, error: "Authentication required.", code: GROUP_SETTINGS_ERROR_CODES.UNAUTHENTICATED };
   }
 
   if (!groupId || !UUID_RE.test(groupId)) {
-    return { success: false, error: "Invalid group identifier." };
+    return { success: false, error: "Invalid group identifier.", code: GROUP_SETTINGS_ERROR_CODES.INVALID_GROUP };
   }
 
   const admin = await isGroupAdmin(actorId, groupId);
   if (!admin) {
-    return { success: false, error: "Only group admins can view group settings." };
+    return { success: false, error: "Only group admins can view group settings.", code: GROUP_SETTINGS_ERROR_CODES.FORBIDDEN };
   }
 
   const [group] = await db
@@ -300,7 +323,7 @@ export async function fetchGroupAdminSettings(
     .limit(1);
 
   if (!group) {
-    return { success: false, error: "Group not found." };
+    return { success: false, error: "Group not found.", code: GROUP_SETTINGS_ERROR_CODES.NOT_FOUND };
   }
 
   // Parse metadata defensively because historical records may not match current schema.
@@ -889,16 +912,24 @@ export async function updateGroupTabVisibility(
 // =============================================================================
 
 const VALID_TAB_VISIBILITY_LEVELS: TabVisibilityLevel[] = ["public", "members", "admin", "hidden"];
-const VALID_TAB_KEYS = new Set<string>(GROUP_TAB_KEYS);
+const VALID_TAB_KEYS = new Set<string>(ALL_GROUP_TAB_KEYS);
 
 /**
  * Normalize raw tab visibility input: drop unknown keys and invalid levels.
+ *
+ * Config/settings tabs are admin-only surfaces, so any stored level for them
+ * is coerced to {@link CONFIG_TAB_LOCKED_VISIBILITY} regardless of the input —
+ * the editor renders them locked, but this guards against tampered payloads.
  */
 function normalizeTabVisibility(raw: unknown): TabVisibilitySettings {
   if (!raw || typeof raw !== "object") return {};
   const result: TabVisibilitySettings = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!VALID_TAB_KEYS.has(key)) continue;
+    if (isConfigTab(key)) {
+      result[key] = CONFIG_TAB_LOCKED_VISIBILITY;
+      continue;
+    }
     if (typeof value !== "string" || !VALID_TAB_VISIBILITY_LEVELS.includes(value as TabVisibilityLevel)) continue;
     result[key as keyof TabVisibilitySettings] = value as TabVisibilityLevel;
   }

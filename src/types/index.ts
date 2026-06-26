@@ -782,7 +782,7 @@ export interface WalletBalance {
   walletId: string
   ownerId: string
   ownerName: string
-  type: "personal" | "group"
+  type: "personal" | "group" | "project"
   balanceCents: number
   balanceDollars: number
   currency: string

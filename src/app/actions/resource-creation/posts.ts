@@ -22,7 +22,7 @@ import { federatedWrite, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/i
 
 import {
   resolveAuthenticatedUserId,
-  hasGroupWriteAccess,
+  canPostToGroup,
   createResourceWithLedger,
 } from "./helpers";
 import type { ActionResult } from "./types";
@@ -201,7 +201,7 @@ export async function createPostResource(input: {
 
   if (input.groupId) {
     // Posting into a group requires explicit write access to prevent unauthorized publishing.
-    const allowed = await hasGroupWriteAccess(userId, input.groupId);
+    const allowed = await canPostToGroup(userId, input.groupId, "create");
     if (!allowed) {
       return {
         success: false,
@@ -218,7 +218,7 @@ export async function createPostResource(input: {
   // here with ownerId set to this instance's local group via withTargetOwner.
   const ownerId = input.ownerId ?? userId;
   if (ownerId !== userId) {
-    const allowedOwner = await hasGroupWriteAccess(userId, ownerId);
+    const allowedOwner = await canPostToGroup(userId, ownerId, "create");
     if (!allowedOwner) {
       return {
         success: false,
@@ -370,13 +370,21 @@ export async function createPostResource(input: {
           })
         : null;
 
-    emitDomainEvent({
-      eventType: EVENT_TYPES.POST_CREATED,
-      entityType: "resource",
-      entityId: actionResult.resourceId,
-      actorId: userId,
-      payload: { postType: input.postType ?? "social", groupId: input.groupId ?? null, ownerId },
-    }).catch(() => {});
+    // Only the HOME instance projects this post into federation. When the write
+    // was forwarded to a sovereign home, that instance emits/exports its own
+    // POST_CREATED + snapshot upsert; emitting here too would project a second,
+    // thin manifest reference from THIS instance (placeholder title, wrong
+    // canonical URL, no author edge) that shadows the real one.
+    if (facadeResult.executedOn === "local") {
+      emitDomainEvent({
+        eventType: EVENT_TYPES.POST_CREATED,
+        entityType: "resource",
+        entityId: actionResult.resourceId,
+        actorId: userId,
+        visibility,
+        payload: { postType: input.postType ?? "social", groupId: input.groupId ?? null, ownerId },
+      }).catch(() => {});
+    }
 
     if (linkedBundle) {
       return {
@@ -497,7 +505,7 @@ export async function createPostCommerceResource(input: {
   }
 
   if (input.groupId) {
-    const allowed = await hasGroupWriteAccess(userId, input.groupId);
+    const allowed = await canPostToGroup(userId, input.groupId, "create");
     if (!allowed) {
       return {
         success: false,
@@ -1013,13 +1021,17 @@ export async function createPostCommerceResource(input: {
   const commerceActionResult = commerceFacadeResult.data as ActionResult;
 
   if (commerceActionResult?.success && commerceActionResult.resourceId) {
-    emitDomainEvent({
-      eventType: EVENT_TYPES.POST_CREATED,
-      entityType: "resource",
-      entityId: commerceActionResult.resourceId,
-      actorId: userId,
-      payload: { postType: input.postType ?? "social", commerce: true, groupId: input.groupId ?? null },
-    }).catch(() => {});
+    // Only the HOME instance projects to federation (see note above).
+    if (commerceFacadeResult.executedOn === "local") {
+      emitDomainEvent({
+        eventType: EVENT_TYPES.POST_CREATED,
+        entityType: "resource",
+        entityId: commerceActionResult.resourceId,
+        actorId: userId,
+        visibility,
+        payload: { postType: input.postType ?? "social", commerce: true, groupId: input.groupId ?? null },
+      }).catch(() => {});
+    }
   }
 
   return commerceActionResult;

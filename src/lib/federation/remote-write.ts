@@ -31,6 +31,7 @@
 
 import { routeWrite, resolveWriteTarget } from "./write-router";
 import type { RoutedWrite, WriteRouterResult } from "./write-router";
+import { ensureLocalActorAgent } from "./actor-projection";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,16 @@ export async function federatedWrite<T, R = unknown>(
   params: FederatedWriteParams<T>,
   localExecutor: () => Promise<R>,
 ): Promise<FederatedWriteResult<R>> {
+  // Direct (non-forwarded) path: the actor is the verified principal on THIS
+  // instance. A cross-instance visitor (federated SSO viewer) has no local
+  // `agents` row, so a local ledger write keyed on their id would violate the
+  // `ledger.subject_id` foreign key. Materialize a private local mirror of the
+  // verified actor before routing so basic interactions (like/comment/follow)
+  // succeed. Forwarded writes arrive through `/api/federation/mutations`, which
+  // normalizes their actor through `federation_entity_map` and never reaches
+  // this helper, so there is no competing placeholder to worry about.
+  await ensureLocalActorAgent(params.actorId);
+
   const write: RoutedWrite<T> = {
     type: params.type,
     actorId: params.actorId,

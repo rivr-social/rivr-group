@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import { db } from "@/db";
-import { nodePeers, nodes } from "@/db/schema";
+import { federationEntityMap, nodePeers, nodes } from "@/db/schema";
 import { getEnv } from "@/lib/env";
 import { and, eq } from "drizzle-orm";
 import crypto from "crypto";
@@ -195,6 +195,50 @@ export function bindAuthorizedFederationActor(
   }
 
   return { authorized: true, actorId: authorization.actorId };
+}
+
+/**
+ * Normalize a peer-supplied actor id to its local agent id.
+ *
+ * A single human has a distinct agent id on each sovereign instance (e.g.
+ * Cameron is `aa29fa2d…` on his Camalot person instance but `ea079076…` — the
+ * group creator/admin — on the Regen Hub group instance). When that person
+ * acts cross-instance (posting AS a group they administer), the forwarding
+ * instance sends ITS local actor id in the mutation body. Authority checks on
+ * the receiver (`hasGroupWriteAccess`, ledger membership lookups) run against
+ * the receiver's OWN graph, so they must see the receiver-local agent id, not
+ * the remote one.
+ *
+ * `federation_entity_map` already holds this binding (origin peer node id +
+ * external entity id → local entity id); it is populated by the materializer
+ * during normal federation sync. This is a strict READ-ONLY lookup — unlike the
+ * materializer's `resolveLocalEntityId`, it never mints a new mapping, because
+ * an authority decision must not invent identity. When no mapping exists the
+ * original id is returned unchanged so behavior is identical to today for
+ * unmapped actors (the downstream authority check still gates the action).
+ *
+ * @param originNodeId The authenticated peer's node id (from peer-secret auth).
+ * @param externalActorId The actor id as supplied by the forwarding instance.
+ * @returns The receiver-local agent id when a mapping exists, else the input.
+ */
+export async function resolveLocalActorId(
+  originNodeId: string | undefined,
+  externalActorId: string,
+): Promise<string> {
+  if (!originNodeId) return externalActorId;
+
+  const mapping = await db.query.federationEntityMap
+    .findFirst({
+      where: and(
+        eq(federationEntityMap.originNodeId, originNodeId),
+        eq(federationEntityMap.externalEntityId, externalActorId),
+        eq(federationEntityMap.entityType, "agent"),
+      ),
+      columns: { localEntityId: true },
+    })
+    .catch(() => null);
+
+  return mapping?.localEntityId ?? externalActorId;
 }
 
 /**

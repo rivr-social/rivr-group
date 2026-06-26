@@ -37,6 +37,7 @@ import {
   updateGroupJoinSettings,
   updateGroupMembershipPlans,
   updateGroupTabVisibility,
+  GROUP_SETTINGS_ERROR_CODES,
 } from "@/app/actions/group-admin";
 import { TabVisibilityEditor } from "@/components/tab-visibility-editor";
 import { updateGroupResource } from "@/app/actions/create-resources";
@@ -133,6 +134,9 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
   const [groupName, setGroupName] = useState("Group");
   const [groupType, setGroupType] = useState("basic");
   const [error, setError] = useState<string | null>(null);
+  // True when the viewer is not a group admin (or not signed in). Drives a
+  // clean redirect to the group page rather than an access-denied card.
+  const [forbidden, setForbidden] = useState(false);
 
   const [joinSettings, setJoinSettings] = useState<GroupJoinSettings>({
     joinType: JoinType.Public,
@@ -169,6 +173,17 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
       if (cancelled) return;
 
       if (!result.success || !result.group) {
+        // Non-admins (and unauthenticated viewers) are redirected to the group
+        // page — config surfaces are admin-only and must not render at all.
+        if (
+          result.code === GROUP_SETTINGS_ERROR_CODES.FORBIDDEN ||
+          result.code === GROUP_SETTINGS_ERROR_CODES.UNAUTHENTICATED
+        ) {
+          setForbidden(true);
+          setLoading(false);
+          router.replace(`/groups/${groupId}`);
+          return;
+        }
         setError(result.error ?? "Unable to load group settings.");
         setLoading(false);
         return;
@@ -231,7 +246,7 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
     return () => {
       cancelled = true;
     };
-  }, [groupId]);
+  }, [groupId, router]);
 
   /**
    * Persists join settings through the group-admin server action.
@@ -462,6 +477,12 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
   // Connections tab — other tabs should not render unrelated error cards.
   const connectionsInitialError =
     initialTab === TAB_VALUES.CONNECTIONS ? searchParams.get("error") : null;
+
+  // Non-admins are redirected away; render a neutral placeholder while the
+  // client-side navigation to the group page completes.
+  if (forbidden) {
+    return <div className="container max-w-4xl mx-auto p-4">Redirecting…</div>;
+  }
 
   // Conditional render for initial client fetch state.
   if (loading) {

@@ -366,15 +366,111 @@ export type GroupDiscoveryMode = "public" | "hidden"
 /** Visibility level controlling who can see a group tab. */
 export type TabVisibilityLevel = "public" | "members" | "admin" | "hidden"
 
-/** Canonical tab keys for group pages. */
+/** Canonical tab keys for the public group page (`/groups/[id]`). */
 export const GROUP_TAB_KEYS = [
   "about", "feed", "events", "groups", "members", "documents",
   "jobs", "marketplace", "governance", "badges", "stake", "press", "treasury",
 ] as const
 export type GroupTabKey = (typeof GROUP_TAB_KEYS)[number]
 
-/** Per-tab visibility settings stored in group metadata. */
-export type TabVisibilitySettings = Partial<Record<GroupTabKey, TabVisibilityLevel>>
+/**
+ * Default public visibility for each page tab when a group has no explicit
+ * override stored in `metadata.tabVisibility`. Org/group detail pages show
+ * About, Feed, Events, Members, and Press publicly; every other tab is
+ * admin-only until an admin opts to expose it.
+ */
+export const DEFAULT_TAB_VISIBILITY: Record<GroupTabKey, TabVisibilityLevel> = {
+  about: "public",
+  feed: "public",
+  events: "public",
+  members: "public",
+  press: "public",
+  groups: "admin",
+  documents: "admin",
+  jobs: "admin",
+  marketplace: "admin",
+  governance: "admin",
+  badges: "admin",
+  stake: "admin",
+  treasury: "admin",
+}
+
+/**
+ * Canonical tab keys for the admin settings page (`/groups/[id]/settings`).
+ *
+ * These mirror the `TAB_VALUES` set used by the settings page. They are
+ * administrative surfaces, so they are LOCKED at `admin` visibility — the
+ * tab-visibility editor renders them read-only and `isConfigTab` callers
+ * treat them as never publicly/member visible.
+ */
+export const GROUP_CONFIG_TAB_KEYS = [
+  "memberships", "join", "requests", "tab-visibility", "chat",
+  "announcements", "connections", "map-marker", "admin-overview",
+] as const
+export type GroupConfigTabKey = (typeof GROUP_CONFIG_TAB_KEYS)[number]
+
+/**
+ * The single combined registry of every group tab key (page + config).
+ * This is the one source of truth iterated by the tab-visibility editor and
+ * validated by the tab-visibility normalizer.
+ */
+export const ALL_GROUP_TAB_KEYS = [
+  ...GROUP_TAB_KEYS,
+  ...GROUP_CONFIG_TAB_KEYS,
+] as const
+export type AnyGroupTabKey = GroupTabKey | GroupConfigTabKey
+
+/**
+ * Human-readable label for every tab key (page + config). Used by the
+ * tab-visibility editor so labels are derived from the registry, not
+ * re-declared per component.
+ */
+export const GROUP_TAB_LABELS: Record<AnyGroupTabKey, string> = {
+  // Page tabs.
+  about: "About",
+  feed: "Feed",
+  events: "Events",
+  groups: "Groups",
+  members: "Members",
+  documents: "Documents",
+  jobs: "Jobs",
+  marketplace: "Marketplace",
+  governance: "Governance",
+  badges: "Badges",
+  stake: "Stake",
+  press: "Press",
+  treasury: "Treasury",
+  // Config / settings tabs (locked at admin).
+  memberships: "Memberships",
+  join: "Join Settings",
+  requests: "Join Requests",
+  "tab-visibility": "Tab Visibility",
+  chat: "Chat",
+  announcements: "Announcements",
+  connections: "Connections",
+  "map-marker": "Map Marker",
+  "admin-overview": "Admin Overview",
+}
+
+/**
+ * The fixed visibility level for admin/config tabs. Config surfaces are never
+ * exposed to non-admins regardless of stored settings, so the editor locks
+ * them at this level and the normalizer coerces any stored value back to it.
+ */
+export const CONFIG_TAB_LOCKED_VISIBILITY: TabVisibilityLevel = "admin"
+
+const GROUP_CONFIG_TAB_KEY_SET: ReadonlySet<string> = new Set(GROUP_CONFIG_TAB_KEYS)
+
+/** Whether a tab key is an admin-only config/settings tab. */
+export function isConfigTab(key: string): key is GroupConfigTabKey {
+  return GROUP_CONFIG_TAB_KEY_SET.has(key)
+}
+
+/**
+ * Per-tab visibility settings stored in group metadata. Keyed by any tab
+ * (page or config); config tabs are constrained to `admin` by the normalizer.
+ */
+export type TabVisibilitySettings = Partial<Record<AnyGroupTabKey, TabVisibilityLevel>>
 
 /** Group join workflow configuration model. */
 export type GroupJoinSettings = {

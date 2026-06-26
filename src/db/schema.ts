@@ -33,7 +33,7 @@ import {
   uuid,
   customType,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 /**
  * Custom tsvector type for full-text search columns.
@@ -224,6 +224,7 @@ export const resourceTypeEnum = pgEnum('resource_type', [
   'job',
   'shift',
   'task',
+  'deliverable',
   'training',
   'place',
   'venue',
@@ -1212,7 +1213,7 @@ export const groupMembershipSubscriptionsRelations = relations(
 /**
  * Wallet enums
  */
-export const walletTypeEnum = pgEnum('wallet_type', ['personal', 'group']);
+export const walletTypeEnum = pgEnum('wallet_type', ['personal', 'group', 'project']);
 
 export const walletTransactionTypeEnum = pgEnum('wallet_transaction_type', [
   'stripe_deposit',
@@ -1228,6 +1229,8 @@ export const walletTransactionTypeEnum = pgEnum('wallet_transaction_type', [
   'thanks',
   'eth_record',
   'connect_payout',
+  'project_expense',
+  'project_distribution',
 ]);
 
 export const capitalEntrySettlementStatusEnum = pgEnum('capital_entry_settlement_status', [
@@ -1246,6 +1249,10 @@ export const wallets = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     ownerId: uuid('owner_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
     type: walletTypeEnum('type').notNull().default('personal'),
+    // Treasury wallets bound to a `project` resource. NULL for owner-scoped
+    // (personal/group) wallets. `ownerId` still points at the owning group/org
+    // agent so payout authority and the settlement-cascade lineage resolve.
+    resourceId: uuid('resource_id').references(() => resources.id, { onDelete: 'cascade' }),
     balanceCents: integer('balance_cents').notNull().default(0),
     currency: text('currency').notNull().default('usd'),
     ethAddress: text('eth_address'),
@@ -1257,7 +1264,17 @@ export const wallets = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex('wallets_owner_id_type_idx').on(table.ownerId, table.type),
+    // Owner-scoped wallets (personal/group) stay unique per (owner, type); the
+    // partial predicate excludes resource-bound project wallets so they do not
+    // collide with the owner's group wallet.
+    uniqueIndex('wallets_owner_id_type_idx')
+      .on(table.ownerId, table.type)
+      .where(sql`${table.resourceId} IS NULL`),
+    // Exactly one treasury wallet per project resource.
+    uniqueIndex('wallets_resource_id_unique_idx')
+      .on(table.resourceId)
+      .where(sql`${table.resourceId} IS NOT NULL`),
+    index('wallets_resource_id_idx').on(table.resourceId),
     index('wallets_owner_id_idx').on(table.ownerId),
     index('wallets_eth_address_idx').on(table.ethAddress),
     index('wallets_stripe_customer_id_idx').on(table.stripeCustomerId),
@@ -1268,6 +1285,10 @@ export const walletsRelations = relations(wallets, ({ one, many }) => ({
   owner: one(agents, {
     fields: [wallets.ownerId],
     references: [agents.id],
+  }),
+  project: one(resources, {
+    fields: [wallets.resourceId],
+    references: [resources.id],
   }),
   outgoingTransactions: many(walletTransactions, { relationName: 'fromWallet' }),
   incomingTransactions: many(walletTransactions, { relationName: 'toWallet' }),
@@ -1879,6 +1900,63 @@ export const groupConnections = pgTable(
 
 export type GroupConnectionRecord = typeof groupConnections.$inferSelect;
 export type NewGroupConnectionRecord = typeof groupConnections.$inferInsert;
+
+/**
+ * Per-group OUTBOUND social/reshare connectors (EPIC J9).
+ *
+ * Distinct from {@link groupConnections} (which is Google-Workspace inbound
+ * OAuth for mail/calendar): this is a GENERIC outbound lane that lets a group
+ * reshare its content (offerings, posts, events) to external platforms it has
+ * connected — Discord, Slack, Twitter/X, etc. One row per (groupId, platform).
+ *
+ * Credentials are platform-specific (webhook URL, bot token, channel id, access
+ * token) and resolved only at dispatch time. `config.enabled` defaults to
+ * `false`; an admin must explicitly opt the connector in before anything is
+ * posted outbound.
+ */
+export const groupOutboundConnectors = pgTable(
+  'group_outbound_connectors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    platform: text('platform').notNull(),
+    connectedByUserId: uuid('connected_by_user_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'restrict' }),
+    displayName: text('display_name'),
+    credentials: jsonb('credentials')
+      .$type<{
+        webhookUrl?: string;
+        botToken?: string;
+        channelId?: string;
+        accessToken?: string;
+        [key: string]: unknown;
+      }>()
+      .notNull()
+      .default({}),
+    config: jsonb('config')
+      .$type<{ enabled: boolean; [key: string]: unknown }>()
+      .notNull()
+      .default({ enabled: false }),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('group_outbound_connectors_group_platform_idx').on(
+      table.groupId,
+      table.platform,
+    ),
+    index('group_outbound_connectors_group_id_idx').on(table.groupId),
+  ],
+);
+
+export type GroupOutboundConnectorRecord =
+  typeof groupOutboundConnectors.$inferSelect;
+export type NewGroupOutboundConnectorRecord =
+  typeof groupOutboundConnectors.$inferInsert;
 
 /**
  * Sidecar that pairs a Rivr resource (event) with its external counterpart on

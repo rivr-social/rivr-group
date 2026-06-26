@@ -13,7 +13,7 @@ import { hasEntitlement } from "@/lib/billing";
 
 import {
   resolveAuthenticatedUserId,
-  hasGroupWriteAccess,
+  canPostToGroup,
   createResourceWithLedger,
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
@@ -213,7 +213,7 @@ export async function createEventResource(input: {
 
   if (input.groupId) {
     // Group-linked events must be created by a member with group write capability.
-    const allowed = await hasGroupWriteAccess(resolvedUserId, input.groupId);
+    const allowed = await canPostToGroup(resolvedUserId, input.groupId, "create");
     if (!allowed) {
       return {
         success: false,
@@ -225,7 +225,7 @@ export async function createEventResource(input: {
 
   const ownerId = input.ownerId ?? input.groupId ?? resolvedUserId;
   if (ownerId !== resolvedUserId) {
-    const allowed = await hasGroupWriteAccess(resolvedUserId, ownerId);
+    const allowed = await canPostToGroup(resolvedUserId, ownerId, "create");
     if (!allowed) {
       return {
         success: false,

@@ -20,6 +20,7 @@ import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import {
   resolveAuthenticatedUserId,
   hasGroupWriteAccess,
+  canPostToGroup,
   createResourceWithLedger,
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
@@ -93,6 +94,12 @@ export async function createOfferingResource(input: {
   dealDurationHours?: number;
   targetAgentTypes: string[];
   ownerId?: string;
+  /**
+   * Binds this offering to a project resource so its seller-net settles into
+   * the project treasury + the project's configured distribution cascade.
+   * Validated against the project's owner — the creator must control it.
+   */
+  projectId?: string;
   scopedLocaleIds?: string[];
   scopedRegionIds?: string[];
   scopedGroupIds?: string[];
@@ -162,7 +169,7 @@ export async function createOfferingResource(input: {
   try {
     const ownerId = input.ownerId ?? resolvedUserId;
     if (ownerId !== resolvedUserId) {
-      const allowed = await hasGroupWriteAccess(resolvedUserId, ownerId);
+      const allowed = await canPostToGroup(resolvedUserId, ownerId, "create");
       if (!allowed) {
         return {
           success: false,
@@ -170,6 +177,46 @@ export async function createOfferingResource(input: {
           error: { code: "FORBIDDEN" },
         };
       }
+    }
+
+    // If a project binding is requested, verify it points to a real, live
+    // `project` resource the creator controls (owns it, or has write access to
+    // its owning group). This is a trust boundary: it stops an offering from
+    // diverting its seller-net into a project treasury the seller cannot manage.
+    let validatedProjectId: string | undefined;
+    if (input.projectId) {
+      const [project] = await db
+        .select({
+          id: resources.id,
+          type: resources.type,
+          ownerId: resources.ownerId,
+          deletedAt: resources.deletedAt,
+        })
+        .from(resources)
+        .where(eq(resources.id, input.projectId))
+        .limit(1);
+
+      if (!project || project.type !== "project" || project.deletedAt) {
+        return {
+          success: false,
+          message: "Linked project not found.",
+          error: { code: "INVALID_INPUT", details: `projectId: ${input.projectId}` },
+        };
+      }
+
+      const controlsProject =
+        project.ownerId === ownerId ||
+        project.ownerId === resolvedUserId ||
+        (await hasGroupWriteAccess(resolvedUserId, project.ownerId));
+      if (!controlsProject) {
+        return {
+          success: false,
+          message: "You do not have permission to bind offerings to this project.",
+          error: { code: "FORBIDDEN", details: `projectId: ${input.projectId}` },
+        };
+      }
+
+      validatedProjectId = project.id;
     }
 
     // Validate all resourceIds belong to current user (only when items provided)
@@ -343,6 +390,7 @@ export async function createOfferingResource(input: {
           priceCents: i.priceCents,
         })),
         targetAgentTypes: input.targetAgentTypes,
+        ...(validatedProjectId ? { projectId: validatedProjectId } : {}),
         groupId: firstGroupId,
         groupTags,
         chapterTags: Array.from(new Set([...(input.scopedLocaleIds ?? []), ...scopedRegionIds])),

@@ -2,28 +2,23 @@
 
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { GROUP_TAB_KEYS, type GroupTabKey, type TabVisibilityLevel, type TabVisibilitySettings } from "@/lib/types";
+import {
+  GROUP_TAB_KEYS,
+  GROUP_CONFIG_TAB_KEYS,
+  GROUP_TAB_LABELS,
+  CONFIG_TAB_LOCKED_VISIBILITY,
+  DEFAULT_TAB_VISIBILITY,
+  isConfigTab,
+  type AnyGroupTabKey,
+  type GroupTabKey,
+  type TabVisibilityLevel,
+  type TabVisibilitySettings,
+} from "@/lib/types";
 
 type TabVisibilityEditorProps = {
   value: TabVisibilitySettings;
   onChange: (settings: TabVisibilitySettings) => void;
   groupType: string;
-};
-
-const TAB_LABELS: Record<GroupTabKey, string> = {
-  about: "About",
-  feed: "Feed",
-  events: "Events",
-  groups: "Groups",
-  members: "Members",
-  documents: "Documents",
-  jobs: "Jobs",
-  marketplace: "Marketplace",
-  governance: "Governance",
-  badges: "Badges",
-  stake: "Stake",
-  press: "Press",
-  treasury: "Treasury",
 };
 
 const VISIBILITY_OPTIONS: Array<{ value: TabVisibilityLevel; label: string; description: string }> = [
@@ -33,16 +28,29 @@ const VISIBILITY_OPTIONS: Array<{ value: TabVisibilityLevel; label: string; desc
   { value: "hidden", label: "Hidden", description: "Tab is completely hidden" },
 ];
 
-const BASIC_TABS: GroupTabKey[] = ["about", "feed", "events", "groups", "members", "documents"];
-const ORG_ONLY_TABS: GroupTabKey[] = ["jobs", "marketplace", "governance", "badges", "stake", "press", "treasury"];
+// Page tabs available to every group, plus org-only page tabs.
+const BASIC_PAGE_TABS: GroupTabKey[] = ["about", "feed", "events", "groups", "members", "documents"];
+const ORG_ONLY_PAGE_TABS: GroupTabKey[] = GROUP_TAB_KEYS.filter(
+  (key) => !BASIC_PAGE_TABS.includes(key),
+);
 
 export function TabVisibilityEditor({ value, onChange, groupType }: TabVisibilityEditorProps) {
   const isOrg = groupType === "organization" || groupType === "org";
-  const availableTabs = isOrg ? GROUP_TAB_KEYS : BASIC_TABS;
 
-  const onTabChange = (tab: GroupTabKey, level: TabVisibilityLevel) => {
+  // Derive the full set of rows from the canonical registry. Page tabs are
+  // gated by group type; config tabs are always shown but locked at admin.
+  const pageTabs: GroupTabKey[] = isOrg ? [...GROUP_TAB_KEYS] : BASIC_PAGE_TABS;
+  const availableTabs: AnyGroupTabKey[] = [...pageTabs, ...GROUP_CONFIG_TAB_KEYS];
+
+  const onTabChange = (tab: AnyGroupTabKey, level: TabVisibilityLevel) => {
+    // Config tabs are locked and must never be mutated from the editor.
+    if (isConfigTab(tab)) return;
     const next = { ...value };
-    if (level === "public") {
+    // Store only overrides that diverge from the page tab's default; selecting
+    // the default removes the now-redundant override. Deleting on "public"
+    // unconditionally would silently revert an admin-default tab back to admin
+    // and discard a deliberate "public" choice.
+    if (level === DEFAULT_TAB_VISIBILITY[tab as GroupTabKey]) {
       delete next[tab];
     } else {
       next[tab] = level;
@@ -53,18 +61,26 @@ export function TabVisibilityEditor({ value, onChange, groupType }: TabVisibilit
   return (
     <div className="space-y-3">
       {availableTabs.map((tab) => {
-        const current = value[tab] ?? "public";
+        const locked = isConfigTab(tab);
+        const current: TabVisibilityLevel = locked
+          ? CONFIG_TAB_LOCKED_VISIBILITY
+          : (value[tab] ?? DEFAULT_TAB_VISIBILITY[tab as GroupTabKey]);
+        const isOrgOnly = !locked && ORG_ONLY_PAGE_TABS.includes(tab as GroupTabKey);
         return (
           <div key={tab} className="flex items-center justify-between gap-4 rounded-md border p-3">
             <div className="min-w-0">
-              <Label className="font-medium">{TAB_LABELS[tab]}</Label>
-              {ORG_ONLY_TABS.includes(tab) && (
+              <Label className="font-medium">{GROUP_TAB_LABELS[tab]}</Label>
+              {isOrgOnly && (
                 <span className="ml-2 text-xs text-muted-foreground">(Organization)</span>
+              )}
+              {locked && (
+                <span className="ml-2 text-xs text-muted-foreground">(Admin only — locked)</span>
               )}
             </div>
             <Select
               value={current}
               onValueChange={(v) => onTabChange(tab, v as TabVisibilityLevel)}
+              disabled={locked}
             >
               <SelectTrigger className="w-[140px]">
                 <SelectValue />

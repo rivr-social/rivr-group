@@ -213,6 +213,13 @@ export async function updateTaskStatus(
         },
       } as NewLedgerEntry);
 
+      // Keep the parent deliverable's progress/status roll-up in sync (J3).
+      const deliverableId = typeof meta.deliverableId === "string" ? meta.deliverableId : undefined;
+      if (deliverableId) {
+        const { recomputeDeliverableStatus } = await import("./deliverables");
+        await recomputeDeliverableStatus(deliverableId, userId);
+      }
+
       // Revalidate task-visible paths.
       const jobId = typeof meta.jobId === "string" ? meta.jobId : undefined;
       revalidatePath("/");
