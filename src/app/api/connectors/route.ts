@@ -8,6 +8,7 @@ import { isGroupAgentType } from "@/lib/agent-types";
 import { CONNECTOR_CATALOG, getConnectorDefinition } from "@/lib/connectors/catalog";
 import { runConnectorSync, SYNCABLE_CONNECTOR_PROVIDERS } from "@/lib/connectors/notion-sync";
 import { runConnectorItemSave, ITEM_SAVE_PROVIDERS } from "@/lib/connectors/gmail-save";
+import { runConnectorEventPublish, EVENT_PUBLISH_PROVIDERS } from "@/lib/connectors/luma-publish";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +58,7 @@ function buildTestUrl(provider: string, template: string, token: string, account
 function testHeaders(provider: string, token: string): Record<string, string> {
   if (!token || provider === "telegram" || provider === "substack" || provider === "signal") return {};
   if (provider === "notion") return { Authorization: `Bearer ${token}`, "Notion-Version": "2022-06-28" };
+  if (provider === "luma") return { "x-luma-api-key": token };
   return { Authorization: `Bearer ${token}` };
 }
 
@@ -81,7 +83,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as null | {
-    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; itemId?: string; action?: "save" | "test" | "sync" | "saveItem";
+    targetAgentId?: string; provider?: string; accountLabel?: string; credential?: string; refreshCredential?: string; itemId?: string; resourceId?: string; action?: "save" | "test" | "sync" | "saveItem" | "publishEvent";
   };
   if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   const subject = await resolveSubject(request, body.targetAgentId);
@@ -128,6 +130,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, result });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Connector item save failed.";
+      await db.update(userConnectors).set({ lastSyncError: message, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
+  // On-demand event publish (Luma): push a RIVR event resource OUT to the
+  // provider. Operates on the stored credential, so it also skips save/test
+  // input validation.
+  if (body.action === "publishEvent") {
+    if (!(EVENT_PUBLISH_PROVIDERS as readonly string[]).includes(definition.id)) {
+      return NextResponse.json({ error: `Event publish is not supported for ${definition.label}.` }, { status: 400 });
+    }
+    const resourceId = body.resourceId?.trim() ?? "";
+    if (!resourceId) return NextResponse.json({ error: "An event resource id is required." }, { status: 400 });
+    try {
+      const result = await runConnectorEventPublish(subject.targetAgentId, definition.id, resourceId);
+      await db.update(userConnectors).set({ lastSyncedAt: new Date(), lastSyncError: null, updatedAt: new Date() }).where(and(
+        eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
+      ));
+      return NextResponse.json({ success: true, result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Event publish failed.";
       await db.update(userConnectors).set({ lastSyncError: message, updatedAt: new Date() }).where(and(
         eq(userConnectors.userAgentId, subject.targetAgentId), eq(userConnectors.provider, definition.id),
       ));

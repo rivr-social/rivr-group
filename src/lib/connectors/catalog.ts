@@ -23,7 +23,7 @@ export const CONNECTOR_CATALOG = [
   { id: "facebook", label: "Facebook", credentialLabel: "Graph API access token", accountLabel: "Page or profile ID", testUrl: "https://graph.facebook.com/v21.0/me?fields=id,name" },
   { id: "instagram", label: "Instagram", credentialLabel: "Graph API access token", accountLabel: "Instagram account ID", testUrl: "https://graph.facebook.com/v21.0/me?fields=id,username" },
   { id: "substack", label: "Substack", credentialLabel: null, accountLabel: "Publication URL", testUrl: "{account}/feed" },
-  { id: "luma", label: "Luma", credentialLabel: "API key", accountLabel: "Calendar ID or URL", testUrl: "https://api.lu.ma/public/v1/calendar/get?calendar_api_id={account}" },
+  { id: "luma", label: "Luma", credentialLabel: "API key", accountLabel: "Calendar name", testUrl: "https://public-api.luma.com/v1/users/get-self" },
   { id: "x", label: "X", credentialLabel: "Bearer token", accountLabel: "X handle", testUrl: "https://api.x.com/2/users/me" },
 ] as const;
 
