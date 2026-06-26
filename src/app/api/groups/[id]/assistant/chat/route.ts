@@ -31,6 +31,7 @@ import {
   nativeCloudChat,
   type HistoryMessage,
 } from "@/lib/ai/native-chat";
+import { buildGroupConnectorTools } from "@/lib/connectors/assistant-tools";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -258,6 +259,17 @@ export async function POST(
     systemPrompt += `\n\n## Knowledge\nThe following facts come from the group's knowledge graph. Use them to answer, but never reveal anything beyond what they contain:\n\n${kgContext}\n`;
   }
 
+  // ---- Connector tools (owner/admin only) --------------------------------
+  // Connectors can send/publish AS the group, so the act-tools are offered only
+  // to the privileged tiers — the same boundary the /api/connectors route
+  // enforces with `isGroupAdmin`. Lower tiers get a plain, tool-less completion.
+  const canAct = tier === "owner" || tier === "admin";
+  const connectorTools = buildGroupConnectorTools({ groupId, canAct });
+
+  if (connectorTools) {
+    systemPrompt += `\n\n## Connector Actions\nThis group has connectors you can operate on the operator's behalf. Use list_group_connectors first to see what is connected and which actions each provider supports. Only sync, save, publish, or send when the operator clearly asks for it; confirm recipients and content before sending email.\n`;
+  }
+
   // ---- Answer natively ----------------------------------------------------
   try {
     const result = await nativeCloudChat({
@@ -265,6 +277,8 @@ export async function POST(
       systemPrompt,
       history: sanitizedHistory,
       message,
+      tools: connectorTools?.tools,
+      executeTool: connectorTools?.executeTool,
     });
 
     return NextResponse.json({
@@ -272,6 +286,7 @@ export async function POST(
       model: result.model || direct.settings.selectedModel,
       scope: access.kgScope,
       assistantName: direct.isPersona ? undefined : groupAgent.name,
+      actions: result.toolCalls,
     });
   } catch (error) {
     const errorMessage =
