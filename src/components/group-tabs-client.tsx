@@ -41,7 +41,7 @@ import type {
 import type { NetAllocationRule } from "@/lib/net-allocation"
 import type { Document } from "@/types/domain"
 import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel, GroupTabKey } from "@/lib/types"
-import { ProposalStatus, GROUP_TAB_KEYS } from "@/lib/types"
+import { ProposalStatus, GROUP_TAB_KEYS, DEFAULT_TAB_VISIBILITY } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
 
 interface ActivityEntry {
@@ -244,7 +244,7 @@ export function GroupTabsClient({
       : GROUP_TAB_KEYS
 
     return allTabs.filter((tab) => {
-      const level: TabVisibilityLevel = tabVisibility?.[tab] ?? "public"
+      const level: TabVisibilityLevel = tabVisibility?.[tab] ?? DEFAULT_TAB_VISIBILITY[tab]
       if (level === "hidden") return false
       if (level === "admin") return isGroupAdmin
       if (level === "members") return isGroupMember || isGroupAdmin
