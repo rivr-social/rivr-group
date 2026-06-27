@@ -935,6 +935,30 @@ function parseTabVisibility(raw: unknown): TabVisibilitySettings {
 
 export async function isGroupAdmin(userId: string, groupId: string): Promise<boolean> {
   const now = new Date();
+
+  // Ownership/manage edges are the authoritative structural grant. The group
+  // creator always receives an `own` edge at creation time, and `own` implies
+  // `manage` per the permission model; `manage` is the explicit admin
+  // delegation. Neither carries a `role`, so the belong/join+role check below
+  // misses them — a creator/owner whose membership predates (or never received)
+  // a role-bearing membership row would otherwise lose the Edit button + admin
+  // tabs despite holding the strongest edge on the group.
+  const [ownerEntry] = await db
+    .select({ id: ledger.id })
+    .from(ledger)
+    .where(
+      and(
+        eq(ledger.subjectId, userId),
+        eq(ledger.objectId, groupId),
+        eq(ledger.isActive, true),
+        or(eq(ledger.verb, "own"), eq(ledger.verb, "manage")),
+        or(isNull(ledger.expiresAt), sql`${ledger.expiresAt} > ${now}`)
+      )
+    )
+    .limit(1);
+
+  if (ownerEntry) return true;
+
   const [adminEntry] = await db
     .select({ id: ledger.id })
     .from(ledger)

@@ -23,6 +23,7 @@ import { GroupTabsClient } from "@/components/group-tabs-client"
 import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
+import { isGroupAdmin as resolveGroupAdmin } from "@/app/actions/group-admin"
 import { calculateTotalStakes, getMemberStakesForGroup } from "@/lib/queries/stakes"
 import { getRecordedContributions } from "@/app/actions/interactions"
 import { getGroupMembersByClass } from "@/app/actions/wallet/net-allocation"
@@ -61,10 +62,14 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const canonicalGroupType = rawGroupType === "org" ? "organization" : (rawGroupType || "basic")
   const ownerId = typeof groupMeta.creatorId === "string" ? groupMeta.creatorId : undefined
   const currentUserId = session ?? null
-  const isGroupAdmin = !!(currentUserId && (
-    groupMeta.creatorId === currentUserId ||
-    (Array.isArray(groupMeta.adminIds) && (groupMeta.adminIds as unknown[]).includes(currentUserId))
-  ))
+  // Membership ledger roles + the authoritative own/manage edges are the source
+  // of truth (resolved by the shared isGroupAdmin gate). Metadata creatorId /
+  // adminIds remain a legacy fallback inside that resolver — gating only on
+  // metadata here hid the Edit button + admin tabs from owners/admins whose
+  // grant lives in the ledger (the normal case).
+  const isGroupAdmin = currentUserId
+    ? await resolveGroupAdmin(currentUserId, group.id)
+    : false
   const isMember = !!(currentUserId && members.some((m) => m.id === currentUserId))
   const membershipPlans = readGroupMembershipPlans(groupMeta)
   const affiliatedGroupsRaw = (
