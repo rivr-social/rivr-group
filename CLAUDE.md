@@ -168,6 +168,32 @@ Resolved 2026-06-11 (Spirit instance — deployed live to `pmdl_rivr_group_bould
   shared with the prod `rivr` service) also had to be split into a
   Spirit-scoped `SPIRIT_FEDERATION_PEER_SECRET_CAMERON` var.
 
+## Creation Suite (Phase G parity — ported from person 2026-06-28)
+
+Ported global's already-PROD creation suite into this sovereign group app for
+parity. Adapted to the group's session-derived owner model (no global A7
+connectors).
+
+- **Design creation (P-G1):** `/create/design` (route group `(main)`) renders
+  the Polotno canvas editor via `next/dynamic(..., { ssr: false })`
+  (`components/design/design-editor-lazy.tsx` → `polotno-editor.tsx`). Saving
+  goes through the `createDesignResource` server action
+  (`app/actions/resource-creation/designs.ts`), which lands the export as an
+  `image` Resource (no migration). Requires the `react-konva: ^19.2.5` pnpm
+  override (React-19 crash fix). Owner-media "My Photos" panel
+  (`GET /api/design/media`) replaces Unsplash; it is owner-scoped via
+  `resolveAuthenticatedUserId` + `hasGroupWriteAccess` (server-side, never
+  client-trusted).
+- **Media gallery (P-G2):** a public **Gallery** tab on `/groups/[id]` built
+  from the group's posts + image/video + listing/event resources
+  (`collectGalleryItems`, `components/media-gallery.tsx`). Registered as the
+  `gallery` key in the canonical tab registry (`src/lib/types.ts`:
+  `GROUP_TAB_KEYS`, `DEFAULT_TAB_VISIBILITY` = public, `GROUP_TAB_LABELS`).
+- **Validated social links (P-G2):** `components/social-links-editor.tsx` on the
+  settings form; final validation/normalization happens **server-side** in
+  `updateProfileAction` via `validateSocialLinks` (`src/lib/social-links.ts`).
+- **Tab visibility (P-G3):** already present (predates this port).
+
 ## Development
 
 ```bash

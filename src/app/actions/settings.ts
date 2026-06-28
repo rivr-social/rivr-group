@@ -38,6 +38,7 @@ import { syncProfileToMatrix } from "@/lib/matrix-sync";
 import { normalizeAssetUrl } from "@/lib/asset-url";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { hashToken } from "@/lib/token-hash";
+import { validateSocialLinks } from "@/lib/social-links";
 
 const MAX_NAME_LENGTH = 100;
 const MAX_EMAIL_LENGTH = 255;
@@ -157,6 +158,20 @@ export async function updateProfileAction(
     return { success: false, error: `Phone must be ${MAX_PHONE_LENGTH} characters or fewer.` };
   }
 
+  // Validate + normalize social links SERVER-SIDE before persistence. Invalid
+  // entries (bad host, non-http scheme, malformed email/phone) are rejected so
+  // the editor can surface the precise problem; only normalized values reach
+  // the metadata map and dedicated columns. `undefined` input means "leave
+  // existing links untouched"; an empty map means "clear all links".
+  let validatedSocialLinks: Record<string, string> | undefined;
+  if (input.socialLinks !== undefined) {
+    const { socialLinks: normalizedLinks, errors } = validateSocialLinks(input.socialLinks);
+    if (errors.length > 0) {
+      return { success: false, error: errors[0].message };
+    }
+    validatedSocialLinks = normalizedLinks;
+  }
+
   try {
     const [current] = await db
       .select({ metadata: agents.metadata, email: agents.email, name: agents.name, emailVerified: agents.emailVerified })
@@ -203,7 +218,7 @@ export async function updateProfileAction(
         eventReminders: true,
         newMessages: true,
       },
-      socialLinks: input.socialLinks ?? (existingMetadata.socialLinks as Record<string, string> | undefined) ?? {},
+      socialLinks: validatedSocialLinks ?? (existingMetadata.socialLinks as Record<string, string> | undefined) ?? {},
       profilePhotos: Array.isArray(input.profilePhotos)
         ? input.profilePhotos.filter((value): value is string => typeof value === "string" && value.length > 0)
         : Array.isArray(existingMetadata.profilePhotos)
