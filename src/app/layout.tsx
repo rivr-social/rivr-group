@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SessionProvider } from "@/components/session-provider";
 import { AuthGuard } from "@/components/auth-guard";
-import { Toaster } from "sonner";
+import { Toaster } from "@/components/ui/toaster";
 import { GlobalHeader } from "@/components/global-header";
 import { PersonaBanner } from "@/components/persona-banner";
 import { AppProvider } from "@/contexts/app-context";

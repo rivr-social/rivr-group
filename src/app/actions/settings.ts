@@ -38,7 +38,7 @@ import { syncProfileToMatrix } from "@/lib/matrix-sync";
 import { normalizeAssetUrl } from "@/lib/asset-url";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { hashToken } from "@/lib/token-hash";
-import { validateSocialLinks } from "@/lib/social-links";
+import { validateSocialLinks, isSupportedSocialPlatform } from "@/lib/social-links";
 
 const MAX_NAME_LENGTH = 100;
 const MAX_EMAIL_LENGTH = 255;
@@ -166,8 +166,16 @@ export async function updateProfileAction(
   let validatedSocialLinks: Record<string, string> | undefined;
   if (input.socialLinks !== undefined) {
     const { socialLinks: normalizedLinks, errors } = validateSocialLinks(input.socialLinks);
-    if (errors.length > 0) {
-      return { success: false, error: errors[0].message };
+    // Only block the save on errors for SUPPORTED platforms — those are genuine
+    // user-entered problems the editor can surface and the user can correct.
+    // Errors for unknown/legacy keys (e.g. a deprecated "web" key from older
+    // seed data) are cruft the editor never exposes and the user cannot fix from
+    // the UI; they must not poison the whole profile save. They are simply
+    // dropped (the normalized map already omits them), which also cleans the
+    // legacy key out of metadata on the next successful write.
+    const blockingErrors = errors.filter((error) => isSupportedSocialPlatform(error.platform));
+    if (blockingErrors.length > 0) {
+      return { success: false, error: blockingErrors[0].message };
     }
     validatedSocialLinks = normalizedLinks;
   }
