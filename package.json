@@ -86,6 +86,7 @@
     "nodemailer": "^8.0.1",
     "nuqs": "^2.8.8",
     "open-graph-scraper": "^6.10.0",
+    "polotno": "^2.30.0",
     "postgres": "^3.4.5",
     "react": "^19.0.0",
     "react-day-picker": "^9.13.1",
@@ -136,6 +137,9 @@
       "onnxruntime-node",
       "unrs-resolver",
       "@node-rs/bcrypt"
-    ]
+    ],
+    "overrides": {
+      "react-konva": "^19.2.5"
+    }
   }
 }

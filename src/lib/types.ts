@@ -370,6 +370,7 @@ export type TabVisibilityLevel = "public" | "members" | "admin" | "hidden"
 export const GROUP_TAB_KEYS = [
   "about", "feed", "events", "groups", "members", "documents",
   "jobs", "marketplace", "governance", "badges", "stake", "press", "treasury",
+  "gallery",
 ] as const
 export type GroupTabKey = (typeof GROUP_TAB_KEYS)[number]
 
@@ -385,6 +386,7 @@ export const DEFAULT_TAB_VISIBILITY: Record<GroupTabKey, TabVisibilityLevel> = {
   events: "public",
   members: "public",
   press: "public",
+  gallery: "public",
   groups: "admin",
   documents: "admin",
   jobs: "admin",
@@ -440,6 +442,7 @@ export const GROUP_TAB_LABELS: Record<AnyGroupTabKey, string> = {
   stake: "Stake",
   press: "Press",
   treasury: "Treasury",
+  gallery: "Gallery",
   // Config / settings tabs (locked at admin).
   memberships: "Memberships",
   join: "Join Settings",
