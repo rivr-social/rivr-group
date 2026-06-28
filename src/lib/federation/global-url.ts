@@ -15,17 +15,35 @@
 const REGISTRY_PATH_SUFFIX = "/api/federation/registry";
 
 /**
+ * Canonical default when no env hints are available. Matches the workspace
+ * CLAUDE.md / ticket #109 expectation that GLOBAL === `https://app.rivr.social`
+ * (the production global).
+ */
+const DEFAULT_GLOBAL_BASE_URL = "https://app.rivr.social";
+
+/**
  * Derive the global (platform) instance base URL.
  *
  * Resolution order:
- * 1. NEXT_PUBLIC_GLOBAL_URL (explicit override)
- * 2. REGISTRY_URL with the API path stripped
- * 3. NEXT_PUBLIC_BASE_URL (assumes this IS the global instance)
- * 4. Window origin (client-side fallback)
- * 5. Empty string (SSR fallback)
+ * 1. NEXT_PUBLIC_GLOBAL_IDENTITY_AUTHORITY_URL or GLOBAL_IDENTITY_AUTHORITY_URL
+ *    (explicit federation-wide override)
+ * 2. NEXT_PUBLIC_GLOBAL_URL (legacy override still honored)
+ * 3. REGISTRY_URL with the API path stripped
+ * 4. NEXT_PUBLIC_BASE_URL (assumes this IS the global instance)
+ * 5. DEFAULT_GLOBAL_BASE_URL — `https://app.rivr.social`
  */
 export function getGlobalBaseUrl(): string {
-  // Explicit global URL override
+  // Ticket #109: prefer the canonical identity-authority env used across
+  // rivr-monorepo / rivr-person / rivr-group / rivr-locale-commons /
+  // rivr-bioregional.
+  const identityAuthority =
+    process.env.NEXT_PUBLIC_GLOBAL_IDENTITY_AUTHORITY_URL ||
+    process.env.GLOBAL_IDENTITY_AUTHORITY_URL;
+  if (identityAuthority) {
+    return identityAuthority.replace(/\/+$/, "");
+  }
+
+  // Legacy explicit global URL override
   const explicitGlobal = process.env.NEXT_PUBLIC_GLOBAL_URL;
   if (explicitGlobal) {
     return explicitGlobal.replace(/\/+$/, "");
@@ -53,12 +71,7 @@ export function getGlobalBaseUrl(): string {
     return baseUrl.replace(/\/+$/, "");
   }
 
-  // Client-side fallback
-  if (typeof window !== "undefined") {
-    return window.location.origin;
-  }
-
-  return "";
+  return DEFAULT_GLOBAL_BASE_URL;
 }
 
 /**
