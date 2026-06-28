@@ -1128,6 +1128,42 @@ export async function importFederationEvents(params: {
           ? event.payload.id
           : null;
 
+    // Local-home conflict guard (federation loop-back protection).
+    //
+    // If THIS instance authored the resource carrying `eventEntityId` — i.e. a
+    // federation event with our own node as origin already exists for it — then
+    // the resource is sovereign-homed HERE. An inbound event attributing the
+    // SAME id to a peer origin is a loop-back: the owner's agent can be
+    // entity-mapped (`mirrored_remote`) to a peer node, so our own exported
+    // `*.created`/`upsert` echoes back through pull-sync as a peer-origin
+    // import. Re-homing it would stamp a foreign `canonicalUrl` + write an
+    // active `manifest_reference`, and the sovereign-resource redirect would
+    // then bounce the resource off its real home to a logged-out peer page.
+    // Reject before any materialization. Scoped to resources: agents/groups can
+    // legitimately be sovereign-homed on a peer and mirrored here, so this never
+    // blocks their import.
+    if (
+      event.entityType === "resource" &&
+      eventEntityId &&
+      peerNode.id !== params.localNodeId
+    ) {
+      const selfAuthored = await db.query.federationEvents.findFirst({
+        where: and(
+          eq(federationEvents.originNodeId, params.localNodeId),
+          eq(federationEvents.entityType, "resource"),
+          eq(federationEvents.entityId, eventEntityId),
+        ),
+        columns: { id: true },
+      });
+      if (selfAuthored) {
+        rejected.push({ index: i, reason: "local-home conflict (loop-back)" });
+        console.warn(
+          `[federation] Rejected event ${i} from ${params.fromPeerSlug}: resource ${eventEntityId} is locally homed (self-authored); refusing peer re-home`
+        );
+        continue;
+      }
+    }
+
     // Version check: only apply events with version > current for the entity
     if (event.eventVersion != null && eventEntityId) {
       const latestEvent = await db.query.federationEvents.findFirst({
