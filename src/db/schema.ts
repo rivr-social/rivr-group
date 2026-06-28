@@ -2159,3 +2159,65 @@ export const userConnectors = pgTable(
 
 export type UserConnector = typeof userConnectors.$inferSelect;
 export type NewUserConnector = typeof userConnectors.$inferInsert;
+
+/**
+ * Site builder version snapshots (Phase G / P-G4). Full per-owner static-site
+ * file maps for lossless rollback. Matches the global + person app
+ * `site_versions` shape so snapshots are fleet-portable. The owner is any
+ * first-class agent: a person OR a group (this instance homes both). `agentId`
+ * is the site owner resolved server-side from the session — never client input.
+ * Home-authority; never federated.
+ */
+export const siteVersions = pgTable(
+  'site_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+    versionNumber: integer('version_number').notNull(),
+    commitMessage: text('commit_message'),
+    filesSnapshot: jsonb('files_snapshot').$type<Record<string, string>>().notNull(),
+    trigger: text('trigger').notNull().default('manual'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('site_versions_agent_idx').on(table.agentId),
+    uniqueIndex('site_versions_agent_version_idx').on(table.agentId, table.versionNumber),
+    index('site_versions_created_at_idx').on(table.createdAt),
+  ],
+);
+
+export type SiteVersion = typeof siteVersions.$inferSelect;
+export type NewSiteVersion = typeof siteVersions.$inferInsert;
+
+/**
+ * The CURRENT published state of an owner's site (Phase G / P-G4). One row per
+ * owner agent. Tracks which version is live. The custom-domain columns are kept
+ * for fleet/schema parity with global, but this sovereign group instance does
+ * not offer DNS binding (no A7 connector lane), so they stay `unbound`.
+ * Home-authority; never federated.
+ */
+export const sitePublications = pgTable(
+  'site_publications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+    publishedVersionId: uuid('published_version_id').references(() => siteVersions.id, { onDelete: 'set null' }),
+    publishedVersionNumber: integer('published_version_number'),
+    theme: text('theme'),
+    customDomain: text('custom_domain'),
+    domainProvider: text('domain_provider'),
+    domainStatus: text('domain_status').notNull().default('unbound'),
+    domainError: text('domain_error'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('site_publications_agent_idx').on(table.agentId),
+    uniqueIndex('site_publications_domain_idx').on(table.customDomain),
+  ],
+);
+
+export type SitePublication = typeof sitePublications.$inferSelect;
+export type NewSitePublication = typeof sitePublications.$inferInsert;

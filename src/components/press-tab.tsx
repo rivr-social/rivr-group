@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { AlertCircle, Calendar, ExternalLink, FileText, Instagram, Loader2, Plus, Video } from "lucide-react"
-import { fetchGroupPressFeedAction, type GroupPressSources, updateGroupPressSourcesAction } from "@/app/actions/press"
+import { fetchGroupPressFeedAction, type GroupPressSources, type PressFeedItem, updateGroupPressSourcesAction } from "@/app/actions/press"
 import type { SerializedResource } from "@/lib/graph-serializers"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
+import { NewsletterTab } from "@/components/newsletter-tab"
 
 type PressTabProps = {
   groupId: string
@@ -42,6 +43,8 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
     source: string
   }>>([])
   const [sourceErrors, setSourceErrors] = useState<Partial<Record<"substack" | "youtube" | "instagram", string>>>({})
+  /** Combined articles + media forwarded to NewsletterTab's press picker. */
+  const [allPressItems, setAllPressItems] = useState<PressFeedItem[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -52,6 +55,7 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
       setArticles(result.articles)
       setMedia(result.media)
       setSourceErrors(result.sourceErrors)
+      setAllPressItems([...result.articles, ...result.media])
     })
     return () => {
       cancelled = true
@@ -173,10 +177,11 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
       ) : null}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className={`grid w-full ${isGroupAdmin ? "grid-cols-4" : "grid-cols-3"}`}>
           <TabsTrigger value="featured">Featured</TabsTrigger>
           <TabsTrigger value="articles">Articles</TabsTrigger>
           <TabsTrigger value="media">Media</TabsTrigger>
+          {isGroupAdmin && <TabsTrigger value="newsletter">Newsletter</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="featured" className="space-y-4">
@@ -277,6 +282,16 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
             ))
           )}
         </TabsContent>
+
+        {isGroupAdmin && (
+          <TabsContent value="newsletter" className="mt-4">
+            <NewsletterTab
+              groupId={groupId}
+              isGroupAdmin={isGroupAdmin}
+              pressItems={allPressItems}
+            />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )
