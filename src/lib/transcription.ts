@@ -3,10 +3,17 @@ const WHISPER_TRANSCRIBE_API_KEY = process.env.WHISPER_TRANSCRIBE_API_KEY?.trim(
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim();
 const OPENAI_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
 
-type TranscriptionResult = {
+export type TranscriptionResult = {
   text: string;
   provider: "whisper" | "openai";
 };
+
+/**
+ * Provider identifier for a completed transcription. Derived from
+ * {@link TranscriptionResult} so the faceted-vault doc layer can name the
+ * producing provider without re-declaring the union.
+ */
+export type TranscriptionProvider = TranscriptionResult["provider"];
 
 export function isTranscriptionConfigured(): boolean {
   return Boolean(WHISPER_TRANSCRIBE_URL || OPENAI_API_KEY);
