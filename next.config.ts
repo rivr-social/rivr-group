@@ -44,7 +44,14 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   output: "standalone",
   experimental: {
-    staleTimes: { dynamic: 0, static: 0 },
+    // Client-side router cache (Wave A, perf #69/#92). Previously {0,0} which
+    // forced every back/forward/tab-switch to re-fetch the RSC payload from the
+    // server — the "every click hits the network" sluggishness. Restored to
+    // dynamic 30s / static 180s: visited routes are reused from the in-memory
+    // client cache for that window. This is a per-browser cache (no CDN/shared
+    // state → no cross-user session leak); mutations still invalidate via the
+    // existing revalidatePath/revalidateTag calls.
+    staleTimes: { dynamic: 30, static: 180 },
     // Barrel-import optimization: rewrite named imports from these large
     // packages to direct deep imports so unused exports are tree-shaken out of
     // the shared chunk.
