@@ -171,7 +171,7 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
 
     void (async () => {
       try {
-        const response = await fetch("/api/federation/status", {
+        const response = await fetch("/api/federation/node-status", {
           method: "GET",
           credentials: "same-origin",
           cache: "no-store",
@@ -185,15 +185,22 @@ export function CreatePost({ eventId, groupId, onPostCreated, eftValues, capital
         }
 
         const data = (await response.json()) as {
+          enabled?: boolean
           node?: { slug?: string; baseUrl?: string }
           metrics?: { queuedEvents?: number; trustedPeers?: number }
         }
         if (cancelled) return
 
+        // No hosted federation node on this instance → keep the toggle off.
+        if (!data.enabled || !data.node) {
+          setFederationState({ status: "unavailable" })
+          return
+        }
+
         setFederationState({
           status: "enabled",
-          nodeSlug: data.node?.slug ?? "local-node",
-          baseUrl: data.node?.baseUrl,
+          nodeSlug: data.node.slug ?? "local-node",
+          baseUrl: data.node.baseUrl,
           queuedEvents: data.metrics?.queuedEvents,
           trustedPeers: data.metrics?.trustedPeers,
         })

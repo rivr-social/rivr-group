@@ -488,6 +488,39 @@ export async function getFederationStatus(localNodeId: string) {
 }
 
 /**
+ * Read-only federation status for THIS instance's hosted node, for UI probes
+ * such as the composer's federate-on-post toggle. Unlike {@link ensureLocalNode}
+ * it NEVER bootstraps a node row as a side effect of a status read: if no local
+ * self-node exists yet it reports `enabled: false` so the UI degrades to
+ * "unavailable" instead of provisioning a node from a GET.
+ *
+ * @returns `{ enabled }`, plus `node` ({slug, baseUrl}) and `metrics`
+ *   ({queuedEvents, trustedPeers}) when a local node exists.
+ */
+export async function getLocalNodeFederationStatus(): Promise<{
+  enabled: boolean;
+  node?: { slug: string; baseUrl: string };
+  metrics?: { queuedEvents: number; trustedPeers: number };
+}> {
+  const slug = getNodeSlug();
+  const configuredInstanceId = getInstanceConfig().instanceId;
+  const localNode =
+    (await db.query.nodes.findFirst({ where: eq(nodes.slug, slug) })) ??
+    (await db.query.nodes.findFirst({ where: eq(nodes.id, configuredInstanceId) }));
+  if (!localNode) return { enabled: false };
+
+  const metrics = await getFederationStatus(localNode.id);
+  return {
+    enabled: true,
+    node: { slug: localNode.slug, baseUrl: localNode.baseUrl },
+    metrics: {
+      queuedEvents: metrics.queuedEvents,
+      trustedPeers: metrics.trustedPeers,
+    },
+  };
+}
+
+/**
  * Create queued export events from local agents/resources that satisfy visibility
  * and optional scope filters.
  *
