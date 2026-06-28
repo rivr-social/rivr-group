@@ -45,6 +45,10 @@ const nextConfig: NextConfig = {
   output: "standalone",
   experimental: {
     staleTimes: { dynamic: 0, static: 0 },
+    // Barrel-import optimization: rewrite named imports from these large
+    // packages to direct deep imports so unused exports are tree-shaken out of
+    // the shared chunk.
+    optimizePackageImports: ["lucide-react", "date-fns", "recharts"],
   },
   typescript: {
     ignoreBuildErrors: false,
