@@ -100,7 +100,7 @@ const HIERARCHICAL_RELATIONSHIP_TYPES: ReadonlySet<RelationshipType> = new Set([
   "organized_by",
 ]);
 
-const AGENT_ENTITY_TYPES = new Set<EntityType>(["person", "organization"]);
+const AGENT_ENTITY_TYPES = new Set<EntityType>(["person", "organization", "ring"]);
 
 function resolveTargetTable(entity: ConfirmedEntity): "agents" | "resources" {
   if (entity.targetTable === "agents" || entity.targetTable === "resources") {
@@ -196,6 +196,7 @@ export async function createEntitiesFromScaffold(
     "place",
     "person",
     "organization",
+    "ring",
   ];
   for (const entity of payload.entities) {
     if (!entity.name || !entity.name.trim()) {

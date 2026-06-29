@@ -30,6 +30,7 @@ export const ENTITY_TYPES = {
   PLACE: "place",
   PERSON: "person",
   ORGANIZATION: "organization",
+  RING: "ring",
 } as const;
 
 /** Union of supported parser entity values. */
@@ -1006,6 +1007,7 @@ export const ENTITY_TYPE_LABELS: Record<EntityType, string> = {
   [ENTITY_TYPES.PLACE]: "Place",
   [ENTITY_TYPES.PERSON]: "Person",
   [ENTITY_TYPES.ORGANIZATION]: "Organization",
+  [ENTITY_TYPES.RING]: "Ring",
 };
 
 /** Human-readable label map for presenting relationship types in UI text. */

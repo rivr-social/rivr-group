@@ -46,6 +46,17 @@ import { Plus, X, Search, Filter, Trash2, Save, FileText, ChevronDown, ChevronRi
 import { useToast } from "@/components/ui/use-toast"
 import { parseNaturalLanguageV2 } from "@/lib/nlp-parser-v2"
 import type { V2ParseResult } from "@/lib/nlp-parser-v2"
+import { isSemanticParserV1Enabled } from "@/lib/semantic/flag"
+import { parse as parseSemantic } from "@/lib/semantic/parser"
+import { makeContext } from "@/lib/semantic/context"
+import {
+  toComposerState,
+  isEmptyComposerState,
+} from "@/lib/semantic/adapters/to-composer-state"
+import { thirdPersonSingular } from "@/lib/grammar"
+
+/** Deictic-grounding actor for the semantic parser when no session id is wired. */
+const SEMANTIC_CLIENT_ACTOR_SENTINEL = "client:query-composer"
 import { ENTITY_COLORS } from "@/lib/entity-style"
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -444,10 +455,10 @@ function composerToSentence(
 
   // WHEN
   const whenSubject = when.agentName ?? (when.agentDeterminer ? `${when.agentDeterminer} agent` : "")
-  const whenVerb = when.verb?.replace("_", " ") ?? ""
-  const whenObject = when.resourceName ?? (when.resourceDeterminer ? `${when.resourceDeterminer} resource` : "")
+  const whenVerb = thirdPersonSingular(when.verb?.replace(/_/g, " "))
+  const whenObject = when.resourceName ?? (when.resourceDeterminer ? `${when.resourceDeterminer} ${when.resourceType ?? "resource"}` : "")
   if (whenSubject || whenVerb || whenObject) {
-    parts.push(`When ${when.agentDeterminer ?? ""} ${whenSubject} ${whenVerb} ${when.resourceDeterminer ?? ""} ${whenObject}`.replace(/\s+/g, " ").trim())
+    parts.push(`When ${whenSubject} ${whenVerb} ${whenObject}`.replace(/\s+/g, " ").trim())
   }
 
   // THEN
@@ -1624,7 +1635,30 @@ export function QueryComposer({ onApply, onClear }: QueryComposerProps) {
   // NLP parse handler
   const handleNlpParse = useCallback(() => {
     if (!nlpInput.trim()) return
-    const parsed = parseNlpToComposer(nlpInput.trim(), agents, resources)
+    const trimmed = nlpInput.trim()
+
+    // Semantic parser v1 (flag-gated): try the new parser → composer adapter
+    // first; on any throw or empty interpretation, fall through to the legacy
+    // v2 path so behavior is unchanged when the flag is off.
+    if (isSemanticParserV1Enabled()) {
+      try {
+        const program = parseSemantic(trimmed, makeContext(SEMANTIC_CLIENT_ACTOR_SENTINEL))
+        const state = toComposerState(program, makeContext(SEMANTIC_CLIENT_ACTOR_SENTINEL))
+        if (!isEmptyComposerState(state)) {
+          setWhenCondition(state.when)
+          setThenActions(state.thenActions.length > 0 ? state.thenActions : [{}])
+          if (state.hasIf) {
+            setIfCondition(state.ifCondition)
+            setShowIf(true)
+          }
+          return
+        }
+      } catch (semanticError) {
+        console.warn("Semantic parser v1 failed, falling back to v2:", semanticError)
+      }
+    }
+
+    const parsed = parseNlpToComposer(trimmed, agents, resources)
     setWhenCondition(parsed.when)
     setThenActions(parsed.thenActions.length > 0 ? parsed.thenActions : [{}])
     if (parsed.hasIf) {
