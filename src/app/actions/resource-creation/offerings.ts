@@ -14,6 +14,7 @@ import {
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { hasEntitlement } from "@/lib/billing";
+import { getSellerCardCapability, SELLER_CARD_NO_ACCOUNT_REASON } from "@/lib/wallet";
 import { getAgent } from "@/lib/queries/agents";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 
@@ -317,6 +318,38 @@ export async function createOfferingResource(input: {
             requiredTier: "seller",
           },
         };
+      }
+
+      // A paid, card-accepting offering also requires the OWNER's settlement
+      // wallet to be able to RECEIVE card money (Stripe Connect account +
+      // charges enabled) — the same capability checkout enforces. Without this
+      // gate the listing is created but every buyer hits a disabled "Buy Now"
+      // ("Seller has not set up card payments yet"), i.e. a dead-on-arrival paid
+      // listing. Gate it at creation so you must be a set-up seller to post for
+      // money. THANKS/TRADE-only offerings settle off the card rail, so scope to
+      // offerings that accept USD/card.
+      const acceptedCurrencies = (input.acceptedCurrencies ?? []).map((c) =>
+        c.toUpperCase(),
+      );
+      const acceptsCard =
+        acceptedCurrencies.length > 0
+          ? acceptedCurrencies.includes("USD")
+          : (input.currency ?? "USD").toUpperCase() === "USD";
+      if (acceptsCard) {
+        const sellerCard = await getSellerCardCapability(ownerId);
+        if (!sellerCard.available) {
+          const isSelf = ownerId === resolvedUserId;
+          return {
+            success: false,
+            message: isSelf
+              ? "Set up card payments before posting a paid offering — open Settings → Payments to finish seller onboarding."
+              : "This group can't accept card payments yet. Finish its Stripe payment onboarding before posting a paid offering.",
+            error: {
+              code: "SELLER_PAYMENTS_NOT_SET_UP",
+              details: sellerCard.reason ?? SELLER_CARD_NO_ACCOUNT_REASON,
+            },
+          };
+        }
       }
     }
 

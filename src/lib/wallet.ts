@@ -314,6 +314,66 @@ export async function getSettlementWalletForAgent(agentId: string): Promise<Wall
   return getOrCreateWallet(agentId, walletType);
 }
 
+/** Reason copy shown when a seller's settlement wallet cannot accept card payments. */
+export const SELLER_CARD_NO_ACCOUNT_REASON =
+  'Seller has not set up card payments yet.';
+export const SELLER_CARD_NOT_ENABLED_REASON =
+  'Seller payment account is not fully enabled yet.';
+
+export type SellerCardCapability = {
+  /** True only when a Connect account exists AND charges are enabled. */
+  available: boolean;
+  /** Human-readable reason when unavailable; null when available. */
+  reason: string | null;
+  connectAccountId: string | null;
+  chargesEnabled: boolean;
+};
+
+/**
+ * Read-only check of whether `agentId`'s settlement wallet can accept card
+ * payments — i.e. it has a Stripe Connect account AND `connectChargesEnabled`.
+ *
+ * Unlike {@link getSettlementWalletForAgent} this NEVER creates a wallet (it is
+ * called on read-heavy paths like rendering every listing card), so a missing
+ * agent or missing wallet simply reads as "no account". This is the single
+ * source of truth for both the offering-creation gate (block posting a paid,
+ * card-accepting offering before the seller can receive money) and the checkout
+ * card-availability flag, so the two can never disagree.
+ */
+export async function getSellerCardCapability(
+  agentId: string,
+): Promise<SellerCardCapability> {
+  const [agent] = await db
+    .select({ type: agents.type })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+  const walletType: WalletType =
+    agent && isGroupWalletAgentType(agent.type) ? 'group' : 'personal';
+
+  const [wallet] = await db
+    .select({ metadata: wallets.metadata })
+    .from(wallets)
+    .where(and(eq(wallets.ownerId, agentId), eq(wallets.type, walletType)))
+    .limit(1);
+
+  const meta = (wallet?.metadata ?? {}) as Record<string, unknown>;
+  const connectAccountId =
+    typeof meta.stripeConnectAccountId === 'string' &&
+    meta.stripeConnectAccountId.length > 0
+      ? meta.stripeConnectAccountId
+      : null;
+  const chargesEnabled = meta.connectChargesEnabled === true;
+  const available = connectAccountId !== null && chargesEnabled;
+  const reason = available
+    ? null
+    : connectAccountId === null
+      ? SELLER_CARD_NO_ACCOUNT_REASON
+      : SELLER_CARD_NOT_ENABLED_REASON;
+
+  return { available, reason, connectAccountId, chargesEnabled };
+}
+
 export async function getPlatformWallet(): Promise<WalletRecord> {
   const configuredOwnerId = process.env.PLATFORM_AGENT_ID?.trim();
 
