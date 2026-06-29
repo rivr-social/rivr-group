@@ -1,8 +1,8 @@
 // src/lib/federation/domain-events.ts
 
 import { db } from "@/db";
-import { federationEvents, nodes } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { federationEvents } from "@/db/schema";
+import { and, desc, eq } from "drizzle-orm";
 import { getInstanceConfig } from "./instance-config";
 
 /**
@@ -120,22 +120,50 @@ export async function emitDomainEvent(params: {
   const nonce = crypto.randomUUID();
   const timestamp = new Date();
 
-  // Try to sign if we have crypto available
+  // Sign via ensureLocalNode so missing keypair state gets backfilled —
+  // the old id-only lookup would silently drop the signature when the
+  // node row had no private_key, producing unsigned events that every
+  // peer would reject with "missing signature" on import.
   let signature: string | undefined;
+  let signingNodeId: string | null = null;
   try {
     const { signPayload } = await import('@/lib/federation-crypto');
-    // signPayload needs the node's private key — fetch from nodes table
-    const localNode = await db
-      .select({ privateKey: nodes.privateKey })
-      .from(nodes)
-      .where(eq(nodes.id, config.instanceId))
-      .limit(1);
-
-    if (localNode.length > 0 && localNode[0].privateKey) {
-      signature = signPayload(params.payload, localNode[0].privateKey);
+    const { ensureLocalNode } = await import('@/lib/federation');
+    const localNode = await ensureLocalNode();
+    if (localNode?.privateKey) {
+      signature = signPayload(params.payload, localNode.privateKey);
+      signingNodeId = localNode.id;
+    } else {
+      console.warn(
+        '[emitDomainEvent] ensureLocalNode returned no privateKey; event will be unsigned and rejected by peers.',
+      );
     }
-  } catch {
-    // Signing unavailable — proceed without signature
+  } catch (err) {
+    console.warn('[emitDomainEvent] signing failed; event will be unsigned.', err);
+  }
+
+  // Compute the next eventVersion for this (origin, entityType, entityId)
+  // tuple. Peer instances reject `event.eventVersion <= latestVersion`
+  // as "stale version" — a hard-coded 1 collides with any upsert already
+  // on record for the same entity (e.g. deleting a post created moments
+  // earlier fails "stale version 1 <= 1"). Fleet parity with global/person.
+  const originNodeId = signingNodeId ?? config.instanceId;
+  let nextEventVersion = 1;
+  try {
+    const latest = await db.query.federationEvents.findFirst({
+      where: and(
+        eq(federationEvents.originNodeId, originNodeId),
+        eq(federationEvents.entityType, params.entityType),
+        eq(federationEvents.entityId, params.entityId),
+      ),
+      orderBy: [desc(federationEvents.eventVersion)],
+      columns: { eventVersion: true },
+    });
+    if (latest?.eventVersion != null) {
+      nextEventVersion = latest.eventVersion + 1;
+    }
+  } catch (err) {
+    console.warn('[emitDomainEvent] eventVersion lookup failed; using 1.', err);
   }
 
   // Insert into federation_events
@@ -143,7 +171,7 @@ export async function emitDomainEvent(params: {
     .insert(federationEvents)
     .values({
       id: eventId,
-      originNodeId: config.instanceId,
+      originNodeId,
       targetNodeId: params.targetNodeId || null,
       entityType: params.entityType,
       entityId: params.entityId,
@@ -152,7 +180,7 @@ export async function emitDomainEvent(params: {
       payload: params.payload,
       signature: signature || null,
       nonce,
-      eventVersion: 1,
+      eventVersion: nextEventVersion,
       status: 'queued',
       actorId: params.actorId,
       correlationId: params.correlationId || null,
@@ -171,7 +199,7 @@ export async function emitDomainEvent(params: {
     entityId: params.entityId,
     actorId: params.actorId,
     timestamp: timestamp.toISOString(),
-    version: 1,
+    version: nextEventVersion,
     payload: params.payload as Record<string, unknown>,
     metadata: {
       correlationId: params.correlationId,
