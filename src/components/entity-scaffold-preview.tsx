@@ -73,6 +73,7 @@ const ENTITY_TYPE_OPTIONS: { value: EntityType; label: string }[] = [
   { value: ENTITY_TYPES.PLACE, label: "Place" },
   { value: ENTITY_TYPES.PERSON, label: "Person" },
   { value: ENTITY_TYPES.ORGANIZATION, label: "Organization" },
+  { value: ENTITY_TYPES.RING, label: "Ring" },
 ];
 
 const ENTITY_ICONS: Record<EntityType, typeof Briefcase> = {
@@ -81,6 +82,7 @@ const ENTITY_ICONS: Record<EntityType, typeof Briefcase> = {
   [ENTITY_TYPES.PLACE]: MapPin,
   [ENTITY_TYPES.PERSON]: User,
   [ENTITY_TYPES.ORGANIZATION]: Building2,
+  [ENTITY_TYPES.RING]: Building2,
 };
 
 const ENTITY_COLORS: Record<EntityType, string> = {
@@ -89,6 +91,7 @@ const ENTITY_COLORS: Record<EntityType, string> = {
   [ENTITY_TYPES.PLACE]: "bg-green-100 text-green-800 border-green-200",
   [ENTITY_TYPES.PERSON]: "bg-amber-100 text-amber-800 border-amber-200",
   [ENTITY_TYPES.ORGANIZATION]: "bg-rose-100 text-rose-800 border-rose-200",
+  [ENTITY_TYPES.RING]: "bg-indigo-100 text-indigo-800 border-indigo-200",
 };
 
 // ---------------------------------------------------------------------------

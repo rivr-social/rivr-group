@@ -25,6 +25,12 @@ ENV NODE_ENV=production
 ENV AUTH_SECRET="build-placeholder"
 ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
 
+# Semantic parser v1 (NL IF/WHEN/THEN conditionals) rollout. Default "1" = ON:
+# the composer uses src/lib/semantic/ instead of legacy parseNaturalLanguageV2.
+# Override with --build-arg NEXT_PUBLIC_SEMANTIC_PARSER_V1=0.
+ARG NEXT_PUBLIC_SEMANTIC_PARSER_V1="1"
+ENV NEXT_PUBLIC_SEMANTIC_PARSER_V1=$NEXT_PUBLIC_SEMANTIC_PARSER_V1
+
 RUN pnpm build
 
 FROM node:20-slim AS runner
