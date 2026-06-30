@@ -31,48 +31,18 @@
 import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { agents, nodes } from "@/db/schema";
+import { agents } from "@/db/schema";
 import { getSession } from "@/lib/auth/get-session";
 
-import { resolveHomeInstance, type HomeInstanceInfo } from "./resolution";
+import {
+  resolveHomeByBaseUrl,
+  resolveHomeInstance,
+  type HomeInstanceInfo,
+} from "./resolution";
 
 /** Strip a trailing slash so base URLs compare/store consistently. */
 function normalizeBaseUrl(rawUrl: string): string {
   return rawUrl.replace(/\/+$/, "");
-}
-
-/**
- * Resolve the registered node for a base URL into a {@link HomeInstanceInfo}.
- *
- * Used when the only home signal we have is the session's `homeBaseUrl` (the
- * remote-viewer cookie carries the URL, not the node id). Returns null when no
- * node is registered for that URL — common on a sovereign, where a visitor's
- * home is reached through the global hub rather than registered locally.
- */
-async function resolveHomeByBaseUrl(baseUrl: string): Promise<HomeInstanceInfo | null> {
-  const normalized = normalizeBaseUrl(baseUrl);
-  const [node] = await db
-    .select({
-      id: nodes.id,
-      slug: nodes.slug,
-      baseUrl: nodes.baseUrl,
-      instanceType: nodes.instanceType,
-      migrationStatus: nodes.migrationStatus,
-    })
-    .from(nodes)
-    .where(eq(nodes.baseUrl, normalized))
-    .limit(1);
-
-  if (!node || node.migrationStatus === "archived") return null;
-
-  return {
-    nodeId: node.id,
-    instanceType: node.instanceType || "person",
-    slug: node.slug,
-    baseUrl: node.baseUrl,
-    isLocal: false,
-    migrationStatus: node.migrationStatus || "active",
-  };
 }
 
 /**
@@ -131,6 +101,13 @@ export async function ensureLocalActorAgent(actorId: string): Promise<void> {
     .values({
       id: actorId,
       name: sessionName ?? `Federated agent${remoteHome ? ` (${remoteHome.slug})` : ""}`,
+      // Provisional type: the acting principal's real agent type is unknown at
+      // viewer-projection time (we only hold the signed session). The
+      // authoritative type is reconciled in place when the visitor's home peer
+      // federates their agent upsert — the importer's placeholder-upgrade path
+      // (federatedPlaceholder) carries the real `type` — so an org never stays a
+      // person. Owner-id convergence (resolveLocalEntityId keys by the external
+      // UUID) is what lets that upgrade land on THIS row rather than a duplicate.
       type: "person",
       visibility: "private",
       metadata: {
@@ -138,6 +115,12 @@ export async function ensureLocalActorAgent(actorId: string): Promise<void> {
         isProjection: true,
         externalEntityId: actorId,
         homeInstanceUrl: resolvedHomeBaseUrl,
+        // Canonical home stamps consumed by resolveHomeInstance's
+        // homeBaseUrl/canonicalUrl branch (H1) so this federated-viewer
+        // projection routes "My Profile" back to its sovereign home even when no
+        // node-id (`sourceNodeId`) signal is available downstream.
+        homeBaseUrl: resolvedHomeBaseUrl,
+        canonicalUrl: `${resolvedHomeBaseUrl}/profile/${actorId}`,
         ...(remoteHome
           ? {
               sourceNodeId: remoteHome.nodeId,

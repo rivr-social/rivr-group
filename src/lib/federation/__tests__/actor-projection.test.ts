@@ -15,11 +15,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  */
 
 const mockAgentFindFirst = vi.fn();
-const mockNodeRows = vi.fn();
 const mockInsertValues = vi.fn();
 const mockOnConflict = vi.fn();
 const mockGetSession = vi.fn();
 const mockResolveHomeInstance = vi.fn();
+const mockResolveHomeByBaseUrl = vi.fn();
 
 vi.mock("@/db", () => ({
   db: {
@@ -28,14 +28,6 @@ vi.mock("@/db", () => ({
         findFirst: (...args: unknown[]) => mockAgentFindFirst(...args),
       },
     },
-    // resolveHomeByBaseUrl: db.select().from().where().limit()
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: (...args: unknown[]) => mockNodeRows(...args),
-        }),
-      }),
-    }),
     // db.insert().values().onConflictDoNothing()
     insert: () => ({
       values: (...args: unknown[]) => {
@@ -46,20 +38,26 @@ vi.mock("@/db", () => ({
   },
 }));
 
-vi.mock("@/db/schema", () => ({ agents: { id: "id", baseUrl: "base_url" }, nodes: { baseUrl: "base_url" } }));
+vi.mock("@/db/schema", () => ({ agents: { id: "id", baseUrl: "base_url" } }));
 vi.mock("@/lib/auth/get-session", () => ({ getSession: (...a: unknown[]) => mockGetSession(...a) }));
-vi.mock("../resolution", () => ({ resolveHomeInstance: (...a: unknown[]) => mockResolveHomeInstance(...a) }));
+vi.mock("../resolution", () => ({
+  resolveHomeInstance: (...a: unknown[]) => mockResolveHomeInstance(...a),
+  // resolveHomeByBaseUrl moved into resolution.ts and is now shared with the
+  // home resolver (H1); the projection consumes it via the module boundary.
+  resolveHomeByBaseUrl: (...a: unknown[]) => mockResolveHomeByBaseUrl(...a),
+}));
 
 import { ensureLocalActorAgent } from "../actor-projection";
 
 const ACTOR_ID = "aa29fa2d-4c2a-4eaf-a069-b2203a2ce667";
 const CAMALOT_NODE_ID = "22222222-2222-2222-2222-222222222222";
 
-const camalotNode = {
-  id: CAMALOT_NODE_ID,
+const camalotHome = {
+  nodeId: CAMALOT_NODE_ID,
   slug: "camalot",
   baseUrl: "https://rivr.camalot.me",
   instanceType: "person",
+  isLocal: false,
   migrationStatus: "active",
 };
 
@@ -102,7 +100,7 @@ describe("ensureLocalActorAgent", () => {
   it("projects a private mirror for a federated visitor whose home is a registered node", async () => {
     mockAgentFindFirst.mockResolvedValue(undefined);
     mockGetSession.mockResolvedValue(federatedSession());
-    mockNodeRows.mockResolvedValue([camalotNode]); // resolveHomeByBaseUrl hit
+    mockResolveHomeByBaseUrl.mockResolvedValue(camalotHome); // shared resolver hit
 
     await ensureLocalActorAgent(ACTOR_ID);
 
@@ -117,6 +115,9 @@ describe("ensureLocalActorAgent", () => {
     expect(meta.isProjection).toBe(true);
     expect(meta.externalEntityId).toBe(ACTOR_ID);
     expect(meta.homeInstanceUrl).toBe("https://rivr.camalot.me");
+    // H1 home stamps consumed by resolveHomeInstance's homeBaseUrl branch.
+    expect(meta.homeBaseUrl).toBe("https://rivr.camalot.me");
+    expect(meta.canonicalUrl).toBe(`https://rivr.camalot.me/profile/${ACTOR_ID}`);
     expect(meta.sourceNodeId).toBe(CAMALOT_NODE_ID);
     expect(meta.sourceNodeSlug).toBe("camalot");
     expect(mockOnConflict).toHaveBeenCalled();
@@ -125,7 +126,7 @@ describe("ensureLocalActorAgent", () => {
   it("trusts the signed home claim when no local node is registered for it (typical sovereign case)", async () => {
     mockAgentFindFirst.mockResolvedValue(undefined);
     mockGetSession.mockResolvedValue(federatedSession());
-    mockNodeRows.mockResolvedValue([]); // no node registered locally for the home URL
+    mockResolveHomeByBaseUrl.mockResolvedValue(null); // no node registered locally for the home URL
     mockResolveHomeInstance.mockResolvedValue({
       nodeId: "global-node",
       instanceType: "global",
@@ -148,7 +149,7 @@ describe("ensureLocalActorAgent", () => {
   it("refuses to fabricate an agent for a stale/local account with no remote home", async () => {
     mockAgentFindFirst.mockResolvedValue(undefined);
     mockGetSession.mockResolvedValue(null); // no session hint
-    mockNodeRows.mockResolvedValue([]);
+    mockResolveHomeByBaseUrl.mockResolvedValue(null);
     mockResolveHomeInstance.mockResolvedValue({
       nodeId: "local-node",
       instanceType: "person",
