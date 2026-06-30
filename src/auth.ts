@@ -48,7 +48,6 @@ const MINIMUM_PASSWORD_LENGTH = 8;
  * into thinking a longer password provides additional entropy.
  */
 const MAXIMUM_PASSWORD_LENGTH = 72;
-const buildFallbackAuthSecret = "build-only-auth-secret-not-for-runtime";
 
 function clearStaleTokenIdentity(token: Record<string, unknown>) {
   delete token.sub;
@@ -229,14 +228,13 @@ export const authConfig: NextAuthConfig = {
 
   secret: (() => {
     const secret = process.env.AUTH_SECRET;
-    if (secret) {
-      return secret;
+    if (!secret) {
+      throw new Error(
+        "AUTH_SECRET environment variable is required. " +
+          "Generate one with: npx auth secret"
+      );
     }
-
-    console.warn(
-      "AUTH_SECRET is not set. Using build-time placeholder secret; runtime deployment must provide AUTH_SECRET."
-    );
-    return buildFallbackAuthSecret;
+    return secret;
   })(),
 };
 
