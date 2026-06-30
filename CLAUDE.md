@@ -184,11 +184,15 @@ connectors).
   (`GET /api/design/media`) replaces Unsplash; it is owner-scoped via
   `resolveAuthenticatedUserId` + `hasGroupWriteAccess` (server-side, never
   client-trusted).
-- **Media gallery (P-G2):** a public **Gallery** tab on `/groups/[id]` built
-  from the group's posts + image/video + listing/event resources
-  (`collectGalleryItems`, `components/media-gallery.tsx`). Registered as the
-  `gallery` key in the canonical tab registry (`src/lib/types.ts`:
-  `GROUP_TAB_KEYS`, `DEFAULT_TAB_VISIBILITY` = public, `GROUP_TAB_LABELS`).
+- **Media gallery (P-G2):** the group's media gallery — built from its posts +
+  image/video + listing/event resources (`collectGalleryItems`,
+  `components/media-gallery.tsx`). As of the app-review parity batch (2026-06-29)
+  it is no longer a top-level page tab: it now renders inside **Press → Media**
+  (`group-tabs-client` excludes `gallery` from the page-tab strip via
+  `NON_PAGE_TAB_KEYS`; `press-tab` shows the gallery above external sources).
+  The `gallery` key is still **retained** in the canonical tab registry
+  (`src/lib/types.ts`: `GROUP_TAB_KEYS`, `DEFAULT_TAB_VISIBILITY` = public,
+  `GROUP_TAB_LABELS`) so tab-visibility settings keep working.
 - **Validated social links (P-G2):** `components/social-links-editor.tsx` on the
   settings form; final validation/normalization happens **server-side** in
   `updateProfileAction` via `validateSocialLinks` (`src/lib/social-links.ts`).
