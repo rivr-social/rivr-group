@@ -14,14 +14,19 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
 import { NewsletterTab } from "@/components/newsletter-tab"
+import { MediaGallery } from "@/components/media-gallery"
+import { DesignEditorLazy } from "@/components/design/design-editor-lazy"
+import type { GalleryItem } from "@/lib/gallery"
 
 type PressTabProps = {
   groupId: string
   isGroupAdmin: boolean
   pressResources: SerializedResource[]
+  /** Group media gallery items, rendered in the Media sub-tab (D2). */
+  galleryItems?: GalleryItem[]
 }
 
-export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProps) {
+export function PressTab({ groupId, isGroupAdmin, pressResources, galleryItems = [] }: PressTabProps) {
   const { toast } = useToast()
   const [activeTab, setActiveTab] = useState("featured")
   const [isPending, startTransition] = useTransition()
@@ -177,11 +182,12 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
       ) : null}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className={`grid w-full ${isGroupAdmin ? "grid-cols-4" : "grid-cols-3"}`}>
+        <TabsList className={`grid w-full ${isGroupAdmin ? "grid-cols-5" : "grid-cols-3"}`}>
           <TabsTrigger value="featured">Featured</TabsTrigger>
           <TabsTrigger value="articles">Articles</TabsTrigger>
           <TabsTrigger value="media">Media</TabsTrigger>
           {isGroupAdmin && <TabsTrigger value="newsletter">Newsletter</TabsTrigger>}
+          {isGroupAdmin && <TabsTrigger value="canvas">Canvas</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="featured" className="space-y-4">
@@ -243,7 +249,15 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
           )}
         </TabsContent>
 
-        <TabsContent value="media" className="space-y-4">
+        <TabsContent value="media" className="space-y-6">
+          {/* Group media gallery (posts + image/video + listing resources). */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-muted-foreground">Gallery</h3>
+            <MediaGallery items={galleryItems} emptyMessage="No media yet." />
+          </div>
+
+          {/* External media sources (YouTube / Instagram). */}
+          <div className="space-y-4">
           {media.length === 0 ? (
             <p className="text-sm text-muted-foreground">No media sources found yet. Add a YouTube URL or Instagram handle above.</p>
           ) : (
@@ -281,6 +295,7 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
               </Card>
             ))
           )}
+          </div>
         </TabsContent>
 
         {isGroupAdmin && (
@@ -290,6 +305,15 @@ export function PressTab({ groupId, isGroupAdmin, pressResources }: PressTabProp
               isGroupAdmin={isGroupAdmin}
               pressItems={allPressItems}
             />
+          </TabsContent>
+        )}
+
+        {/* Canvas: Polotno design editor scoped to this group's media (D1). */}
+        {isGroupAdmin && (
+          <TabsContent value="canvas" className="mt-4">
+            <div className="h-[70vh] w-full overflow-hidden rounded-lg border">
+              <DesignEditorLazy ownerAgentId={groupId} />
+            </div>
           </TabsContent>
         )}
       </Tabs>

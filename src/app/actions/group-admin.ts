@@ -80,6 +80,18 @@ type GroupSettingsResult = {
     id: string;
     name: string;
     groupType: string;
+    /** Group profile description (from `agents.description`). */
+    description: string;
+    /** Display string for the group's location (name/address), or "". */
+    location: string;
+    /** Structured location, when stored as an object `{name,city,lat,lng}`. */
+    locationData: { name?: string; city?: string; lat?: number; lng?: number } | null;
+    /** Profile tags (from `metadata.tags`/`chapterTags`). */
+    tags: string[];
+    /** Cover image URL (from `metadata.coverImage`), or "". */
+    coverImage: string;
+    /** Mart commission in basis points (orgs only). */
+    commissionBps: number;
     joinSettings: GroupJoinSettings;
     membershipPlans: GroupMembershipPlan[];
     writeMembershipTier?: MembershipTier | null;
@@ -307,7 +319,7 @@ export async function fetchGroupAdminSettings(
   }
 
   const [group] = await db
-    .select({ id: agents.id, name: agents.name, metadata: agents.metadata, groupPasswordHash: agents.groupPasswordHash })
+    .select({ id: agents.id, name: agents.name, description: agents.description, metadata: agents.metadata, groupPasswordHash: agents.groupPasswordHash })
     .from(agents)
     .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
     .limit(1);
@@ -321,6 +333,32 @@ export async function fetchGroupAdminSettings(
     group.metadata && typeof group.metadata === "object"
       ? (group.metadata as Record<string, unknown>)
       : {};
+
+  // Resolve the group's stored location into both a display string (for the
+  // autocomplete input) and structured coordinates (when persisted as an
+  // object), mirroring how the profile editor round-trips `metadata.location`.
+  const rawLocation = metadata.location;
+  let locationText = "";
+  let locationData: { name?: string; city?: string; lat?: number; lng?: number } | null = null;
+  if (typeof rawLocation === "string") {
+    locationText = rawLocation;
+  } else if (rawLocation && typeof rawLocation === "object") {
+    const loc = rawLocation as Record<string, unknown>;
+    const name = typeof loc.name === "string" ? loc.name : undefined;
+    const address = typeof loc.address === "string" ? loc.address : undefined;
+    const city = typeof loc.city === "string" ? loc.city : undefined;
+    const lat = typeof loc.lat === "number" ? loc.lat : undefined;
+    const lng = typeof loc.lng === "number" ? loc.lng : undefined;
+    locationText = name ?? address ?? city ?? "";
+    locationData = { name, city, lat, lng };
+  }
+
+  const tags = Array.isArray(metadata.tags)
+    ? metadata.tags.filter((tag): tag is string => typeof tag === "string")
+    : Array.isArray(metadata.chapterTags)
+      ? (metadata.chapterTags as unknown[]).filter((tag): tag is string => typeof tag === "string")
+      : [];
+
   const rawJoin = metadata.joinSettings as Partial<GroupJoinSettings> | undefined;
   const joinTypeValue = rawJoin?.joinType;
   // Only accept known enum values; unknown values are safely downgraded to public join mode.
@@ -349,6 +387,12 @@ export async function fetchGroupAdminSettings(
       id: group.id,
       name: group.name,
       groupType: typeof metadata.groupType === "string" ? metadata.groupType : "basic",
+      description: typeof group.description === "string" ? group.description : "",
+      location: locationText,
+      locationData,
+      tags,
+      coverImage: typeof metadata.coverImage === "string" ? metadata.coverImage : "",
+      commissionBps: typeof metadata.commissionBps === "number" ? metadata.commissionBps : 0,
       joinSettings,
       membershipPlans: readGroupMembershipPlans(metadata),
       writeMembershipTier:

@@ -14,6 +14,7 @@ import { agentToGroup, agentToUser } from "@/lib/graph-adapters"
 import { isUuid } from "@/app/actions/graph/types"
 import { resolveEventWindow } from "@/lib/calendar/event-window"
 import { readGroupMembershipPlans } from "@/lib/group-memberships"
+import { getActiveGroupSubscriptionPlanId } from "@/lib/group-subscriptions"
 import { buildGroupPageMetadata } from "@/lib/object-metadata"
 import { AgentPageShell } from "@/components/agent-page-shell"
 import { Button } from "@/components/ui/button"
@@ -67,6 +68,11 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   ))
   const isMember = !!(currentUserId && members.some((m) => m.id === currentUserId))
   const membershipPlans = readGroupMembershipPlans(groupMeta)
+  // Resolve the viewer's current group-subscription plan (if any) so the About
+  // tab can hide/disable the already-subscribed plan's Subscribe CTA (B2).
+  const activeGroupPlanId = currentUserId
+    ? await getActiveGroupSubscriptionPlanId(currentUserId, group.id).catch(() => null)
+    : null
   const affiliatedGroupsRaw = (
     (groupMeta.affiliatedGroups as unknown[]) ??
     (groupMeta.affiliations as unknown[]) ??
@@ -316,15 +322,13 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
       tags={group.chapterTags ?? []}
       tagLabels={tagLabels}
       isAdmin={isGroupAdmin}
-      groupType={canonicalGroupType}
-      commissionBps={typeof groupMeta.commissionBps === "number" ? groupMeta.commissionBps as number : undefined}
     >
       <div className="flex items-center gap-2">
         {isGroupAdmin && (
           <Link href={`/groups/${group.id}/settings`}>
             <Button variant="outline" size="sm">
               <Settings className="h-4 w-4 mr-2" />
-              Edit Group
+              Group Settings
             </Button>
           </Link>
         )}
@@ -354,8 +358,6 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
 
   return (
     <AgentPageShell
-      backHref="/?tab=groups"
-      backLabel="Back to groups"
       header={header}
       structuredDataJson={structuredData ? serializeJsonLd(structuredData) : null}
     >
@@ -372,6 +374,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         isGroupAdmin={!!isGroupAdmin}
         currentUserId={currentUserId}
         membershipPlans={membershipPlans}
+        activeSubscriptionPlanId={activeGroupPlanId}
         members={members.map((m) => ({ id: m.id, name: m.name, username: m.username, image: m.avatar }))}
         authors={authors}
         groupPostResources={groupPostResources}

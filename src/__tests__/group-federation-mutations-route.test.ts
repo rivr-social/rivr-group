@@ -28,7 +28,6 @@ vi.mock("@/lib/federation/resolution", () => ({
 vi.mock("@/lib/federation-auth", () => ({
   authorizeFederationRequest: vi.fn(),
   bindAuthorizedFederationActor: vi.fn(),
-  resolveLocalActorId: vi.fn(),
 }));
 
 vi.mock("@/lib/federation/execution-context", () => ({

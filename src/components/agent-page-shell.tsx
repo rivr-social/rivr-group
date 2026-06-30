@@ -4,8 +4,10 @@ import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
 
 interface AgentPageShellProps {
-  backHref: string
-  backLabel: string
+  /** Optional back-link target. When omitted, no back link is rendered. */
+  backHref?: string
+  /** Optional back-link label. Required (with `backHref`) to render the link. */
+  backLabel?: string
   header: React.ReactNode
   children: React.ReactNode
   structuredDataJson?: string | null
@@ -28,10 +30,12 @@ export function AgentPageShell({
           dangerouslySetInnerHTML={{ __html: structuredDataJson }}
         />
       ) : null}
-      <Link href={backHref} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" />
-        {backLabel}
-      </Link>
+      {backHref && backLabel ? (
+        <Link href={backHref} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" />
+          {backLabel}
+        </Link>
+      ) : null}
       {header}
       {children}
     </div>

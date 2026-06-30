@@ -66,17 +66,29 @@ async function resolveHomeInstanceWithDepth(
     };
   }
 
-  // Parent chain: check if this agent's parent has an instance
+  // Parent chain / home-stamp: load the agent's parent links and metadata.
   const agent = await db
     .select({
       parentId: agents.parentId,
       parentAgentId: agents.parentAgentId,
+      metadata: agents.metadata,
     })
     .from(agents)
     .where(eq(agents.id, agentId))
     .limit(1);
 
   if (agent.length > 0) {
+    // A federated-homed agent may carry only a `homeBaseUrl`/`canonicalUrl`
+    // stamp (no node id) — e.g. a federated-viewer projection minted by
+    // ensureLocalActorAgent. Consult it so the server-side home guard agrees
+    // with the registry API and the client redirect (H1: profile buttons not
+    // routing to the sovereign home). The loop guard inside never resolves to
+    // us.
+    const homeUrlHome = await resolveViaHomeBaseUrlMetadata(agent[0].metadata);
+    if (homeUrlHome) {
+      return homeUrlHome;
+    }
+
     const parentId = agent[0].parentAgentId || agent[0].parentId;
     if (parentId) {
       return resolveHomeInstanceWithDepth(parentId, depth + 1);
@@ -85,6 +97,91 @@ async function resolveHomeInstanceWithDepth(
 
   // Fallback: global instance
   return getGlobalInstanceInfo();
+}
+
+/** Strip a trailing slash so base URLs compare/store consistently. */
+function normalizeBaseUrl(rawUrl: string): string {
+  return rawUrl.replace(/\/+$/, "");
+}
+
+/** Compare two URLs by host only, tolerating parse failures. */
+function sameHost(a: string, b: string): boolean {
+  try {
+    return new URL(a).host === new URL(b).host;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the registered node for a base URL into a {@link HomeInstanceInfo}.
+ *
+ * Used when the only home signal is a `homeBaseUrl`/`canonicalUrl` stamp (the
+ * remote-viewer cookie and federated stamps carry the URL, not the node id).
+ * Returns null when no non-archived node is registered for that URL — common on
+ * a sovereign, where a visitor's home is reached through the global hub rather
+ * than registered locally. Shared with {@link ensureLocalActorAgent} so
+ * projection and home resolution agree on one lookup.
+ */
+export async function resolveHomeByBaseUrl(
+  baseUrl: string,
+): Promise<HomeInstanceInfo | null> {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const [node] = await db
+    .select()
+    .from(nodes)
+    .where(eq(nodes.baseUrl, normalized))
+    .limit(1);
+
+  if (!node || node.migrationStatus === "archived") return null;
+
+  return {
+    nodeId: node.id,
+    instanceType: node.instanceType || "person",
+    slug: node.slug,
+    baseUrl: node.baseUrl,
+    isLocal: node.id === getInstanceConfig().instanceId,
+    migrationStatus: node.migrationStatus || "active",
+  };
+}
+
+/**
+ * Resolve canonical home from a federated-homed agent's own
+ * `homeBaseUrl`/`canonicalUrl` metadata stamp.
+ *
+ * Prefers the explicit `homeBaseUrl`; otherwise falls back to the origin of
+ * `canonicalUrl`. Returns null when no URL stamp is present, when it points back
+ * at this instance (loop guard), or when no non-archived node is registered.
+ */
+async function resolveViaHomeBaseUrlMetadata(
+  metadata: unknown,
+): Promise<HomeInstanceInfo | null> {
+  if (!metadata || typeof metadata !== "object") return null;
+  const meta = metadata as Record<string, unknown>;
+
+  const homeBaseUrl =
+    (typeof meta.homeBaseUrl === "string" && meta.homeBaseUrl) || null;
+  const canonicalUrl =
+    (typeof meta.canonicalUrl === "string" && meta.canonicalUrl) || null;
+
+  let candidateBaseUrl = homeBaseUrl;
+  if (!candidateBaseUrl && canonicalUrl) {
+    try {
+      candidateBaseUrl = new URL(canonicalUrl).origin;
+    } catch {
+      candidateBaseUrl = null;
+    }
+  }
+  if (!candidateBaseUrl) return null;
+
+  const config = getInstanceConfig();
+  // Loop guard: a stamp pointing at our own host is local — never redirect to
+  // ourselves.
+  if (sameHost(candidateBaseUrl, config.baseUrl)) return null;
+
+  const home = await resolveHomeByBaseUrl(candidateBaseUrl).catch(() => null);
+  if (!home || home.isLocal || home.nodeId === config.instanceId) return null;
+  return home;
 }
 
 async function getGlobalInstanceInfo(): Promise<HomeInstanceInfo> {

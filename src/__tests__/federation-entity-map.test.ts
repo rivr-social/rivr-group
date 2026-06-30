@@ -278,6 +278,47 @@ describe("importFederationEvents - entity namespace mapping", () => {
     expect(agentInsertCalls[0][0].id).not.toBe(REMOTE_AGENT_ID);
   });
 
+  it("keys the local id by the external id when it is a UUID (H2 owner-id split fix)", async () => {
+    setupStandardMocks();
+
+    const UUID_AGENT_ID = "12345678-1234-1234-1234-123456789abc";
+    const { importFederationEvents } = await loadFederationModule();
+
+    await importFederationEvents({
+      localNodeId: LOCAL_NODE_ID,
+      fromPeerSlug: PEER_SLUG,
+      events: [
+        makeAgentEvent({
+          payload: {
+            id: UUID_AGENT_ID,
+            name: "Remote Agent",
+            type: "person",
+            description: "An agent from a peer node",
+            image: null,
+            metadata: { originalField: "kept" },
+            parentId: null,
+            pathIds: null,
+          },
+        }),
+      ],
+    });
+
+    // The entity map and the agent row both adopt the EXTERNAL id directly so the
+    // importer projection and the federated-viewer projection converge on ONE
+    // owner agent row instead of a random-id duplicate.
+    const entityMapInsertCalls = mockValues.mock.calls.filter(
+      (call) => call[0]?.externalEntityId === UUID_AGENT_ID && call[0]?.entityType === "agent",
+    );
+    expect(entityMapInsertCalls.length).toBe(1);
+    expect(entityMapInsertCalls[0][0].localEntityId).toBe(UUID_AGENT_ID);
+
+    const agentInsertCalls = mockValues.mock.calls.filter(
+      (call) => call[0]?.name === "Remote Agent" && !call[0]?.externalEntityId,
+    );
+    expect(agentInsertCalls.length).toBe(1);
+    expect(agentInsertCalls[0][0].id).toBe(UUID_AGENT_ID);
+  });
+
   it("reuses existing mapping on re-import", async () => {
     const existingMapping = {
       id: "map-existing",

@@ -26,7 +26,7 @@ import { EventFeed } from "@/components/event-feed"
 import { PeopleFeed } from "@/components/people-feed"
 import { GroupCalendar } from "@/components/group-calendar"
 import { resourceToPost, resourceToMarketplaceListing } from "@/lib/graph-adapters"
-import { MediaGallery } from "@/components/media-gallery"
+import { GroupPlanCard } from "@/components/group-plan-card"
 import { collectGalleryItems, type GallerySourcePost, type GallerySourceResource } from "@/lib/gallery"
 import { createGovernanceProposalAction } from "@/app/actions/create-resources"
 import { AboutDocumentsCard } from "@/components/about-documents-card"
@@ -90,8 +90,16 @@ export interface RecordedContribution {
  * trigger list and the visibility filter stay in lockstep.
  */
 const BASIC_GROUP_PAGE_TABS: readonly GroupTabKey[] = [
-  "about", "feed", "events", "groups", "members", "documents", "gallery",
+  "about", "feed", "events", "groups", "members", "documents",
 ] as const
+
+/**
+ * Registry keys that are NOT rendered as top-level page tabs. `gallery` is
+ * retained in the canonical {@link GROUP_TAB_KEYS} registry (so tab-visibility
+ * settings keep working) but its media now lives inside Press → Media (D2), so
+ * it is excluded from the page-tab strip.
+ */
+const NON_PAGE_TAB_KEYS: ReadonlySet<GroupTabKey> = new Set<GroupTabKey>(["gallery"])
 
 /**
  * Short, tab-strip labels for each page tab. These intentionally differ from
@@ -129,6 +137,8 @@ export interface GroupTabsClientProps {
   isGroupAdmin: boolean
   currentUserId: string | null
   membershipPlans: MembershipPlan[]
+  /** The viewer's currently active group-subscription plan id, if any (B2). */
+  activeSubscriptionPlanId?: string | null
   members: Array<{ id: string; name: string; username?: string; image?: string | null }>
   /**
    * Owner agents for posts/events/listings whose authors are NOT in the
@@ -200,6 +210,7 @@ export function GroupTabsClient({
   isGroupAdmin,
   currentUserId,
   membershipPlans,
+  activeSubscriptionPlanId = null,
   members,
   authors = [],
   groupPostResources,
@@ -247,6 +258,7 @@ export function GroupTabsClient({
       : GROUP_TAB_KEYS
 
     return allTabs.filter((tab) => {
+      if (NON_PAGE_TAB_KEYS.has(tab)) return false
       const level: TabVisibilityLevel = tabVisibility?.[tab] ?? DEFAULT_TAB_VISIBILITY[tab]
       if (level === "hidden") return false
       if (level === "admin") return isGroupAdmin
@@ -272,9 +284,6 @@ export function GroupTabsClient({
     }
     setActiveTab(requestedTab)
   }, [requestedTab, visibleTabs])
-
-  const formatCurrency = (cents: number | null): string =>
-    cents === null ? "Custom pricing" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100)
 
   const handleOfferingCreated = () => {
     setOfferingModalOpen(false)
@@ -613,28 +622,19 @@ export function GroupTabsClient({
                 <p className="text-sm text-muted-foreground">No membership plans configured yet.</p>
               )}
               {membershipPlans.map((plan) => (
-                <div key={plan.id} className="rounded-md border p-3 space-y-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-medium">{plan.name}</p>
-                    <div className="flex items-center gap-2">
-                      {!plan.active && <Badge variant="outline">Inactive</Badge>}
-                      {plan.isDefault && <Badge>Default</Badge>}
-                    </div>
-                  </div>
-                  {plan.description && <p className="text-sm text-muted-foreground">{plan.description}</p>}
-                  <p className="text-sm text-muted-foreground">
-                    Monthly: {formatCurrency(plan.amountMonthlyCents)} · Yearly: {formatCurrency(plan.amountYearlyCents)}
-                  </p>
-                  {plan.perks.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {plan.perks.map((perk) => <Badge key={perk} variant="secondary">{perk}</Badge>)}
-                    </div>
-                  )}
-                </div>
+                <GroupPlanCard
+                  key={plan.id}
+                  groupId={groupId}
+                  plan={plan}
+                  currentUserId={currentUserId}
+                  isSubscribed={activeSubscriptionPlanId === plan.id}
+                />
               ))}
-              <Link href={`/groups/${groupId}/settings`} className="inline-flex text-sm text-primary hover:underline">
-                Manage membership plans
-              </Link>
+              {isGroupAdmin && (
+                <Link href={`/groups/${groupId}/settings?tab=memberships`} className="inline-flex text-sm text-primary hover:underline">
+                  Manage membership plans
+                </Link>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -736,11 +736,6 @@ export function GroupTabsClient({
           documents={documentResources}
           docsPath={`/groups/${groupId}/docs`}
         />
-      </TabsContent>
-
-      {/* ── Gallery ── */}
-      <TabsContent value="gallery" className="mt-4">
-        <MediaGallery items={galleryItems} emptyMessage="No media yet." />
       </TabsContent>
 
       {/* ── Jobs ── */}
@@ -867,7 +862,7 @@ export function GroupTabsClient({
 
       {/* ── Press ── */}
       <TabsContent value="press" className="mt-4">
-        <PressTab groupId={groupId} isGroupAdmin={isGroupAdmin} pressResources={pressResources} />
+        <PressTab groupId={groupId} isGroupAdmin={isGroupAdmin} pressResources={pressResources} galleryItems={galleryItems} />
       </TabsContent>
 
       {/* ── Treasury ── */}
