@@ -14,7 +14,10 @@ import {
   getPlatformWallet,
   getSettlementWalletForAgent,
 } from '@/lib/wallet';
-import { calculateLegacyCheckoutFeesCents } from '@/lib/fees';
+import {
+  calculateLegacyCheckoutFeesCents,
+  calculateOfferingDestinationCharge,
+} from '@/lib/fees';
 import { resolveMarketplaceFeePolicy } from '@/lib/marketplace-fees';
 import { canView } from '@/lib/permissions';
 import { resolvePostOfferingDeal } from '@/lib/post-offer-deals';
@@ -834,24 +837,35 @@ export async function createProvidePaymentAction(offeringId: string): Promise<{
         throw new Error('Seller is not set up to receive payments.');
       }
 
-      // Calculate fees
-      const breakdown = calculateLegacyCheckoutFeesCents(totalPriceCents);
+      // Calculate fees. On a destination charge the seller nets
+      // `amount − application_fee_amount`, so the application fee must capture
+      // the FULL buyer surcharge (platform fee + sales tax + processing) — not
+      // just the platform fee — or the buyer-paid tax/processing settle into the
+      // seller's Connect account (COM-DSN-001). `calculateOfferingDestinationCharge`
+      // makes the seller net exactly the subtotal.
+      const charge = calculateOfferingDestinationCharge(totalPriceCents);
+      const { breakdown } = charge;
 
       // Create PaymentIntent with destination charge
       const stripe = getStripe();
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: breakdown.totalCents,
+        amount: charge.totalCents,
         currency: 'usd',
-        application_fee_amount: breakdown.platformFeeCents,
+        application_fee_amount: charge.applicationFeeCents,
         transfer_data: { destination: connectAccountId },
         metadata: {
           type: 'offering_purchase',
+          // Funds move to the seller's Connect account on settlement; the
+          // webhook uses this rail flag to skip internal capital crediting
+          // (COM-DSN-002) so we don't mint unbacked in-platform currency.
+          settlementRail: 'connect',
           offeringId,
           buyerId: agentId,
           sellerId: offering.ownerId,
           subtotalCents: String(totalPriceCents),
           platformFeeCents: String(breakdown.platformFeeCents),
-          totalCents: String(breakdown.totalCents),
+          applicationFeeCents: String(charge.applicationFeeCents),
+          totalCents: String(charge.totalCents),
         },
       });
 

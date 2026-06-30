@@ -79,3 +79,47 @@ export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyF
     totalCents: Math.round(total * 100),
   };
 }
+
+/**
+ * Destination-charge breakdown for a Connect-settled offering purchase.
+ *
+ * On a Stripe destination charge the seller's connected account nets
+ * `amount − application_fee_amount`. The platform must therefore retain
+ * EVERYTHING the buyer pays on top of the seller's subtotal — platform fee,
+ * sales tax, and processing surcharge — as the application fee; otherwise the
+ * buyer-paid tax + processing land in the seller's account (a tax-remittance
+ * leak and per-sale margin loss). This mirrors a checkout fee split where
+ * `applicationFee = buyerTotal − sellerPrice`.
+ */
+export type OfferingDestinationCharge = {
+  /** Full legacy fee breakdown for transparency / metadata. */
+  breakdown: LegacyFeeBreakdown;
+  /** Amount the buyer is charged = the Stripe PaymentIntent `amount`. */
+  totalCents: number;
+  /** Stripe `application_fee_amount` the platform retains (fee + tax + processing). */
+  applicationFeeCents: number;
+  /** What the seller's connected account nets after the application fee. */
+  sellerNetCents: number;
+};
+
+/**
+ * Computes the destination-charge amounts for an offering purchase so the
+ * seller's connected account nets exactly the subtotal and the platform
+ * captures the full surcharge.
+ *
+ * @param subtotalCents Seller's listed price before fees/tax, in integer cents.
+ * @returns Charge amounts: total (buyer), application fee (platform), seller net.
+ * @throws {Error} When `subtotalCents` is negative or not an integer.
+ */
+export function calculateOfferingDestinationCharge(
+  subtotalCents: number,
+): OfferingDestinationCharge {
+  const breakdown = calculateLegacyCheckoutFeesCents(subtotalCents);
+  const applicationFeeCents = breakdown.totalCents - breakdown.subtotalCents;
+  return {
+    breakdown,
+    totalCents: breakdown.totalCents,
+    applicationFeeCents,
+    sellerNetCents: breakdown.totalCents - applicationFeeCents,
+  };
+}

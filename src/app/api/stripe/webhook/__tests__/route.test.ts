@@ -15,7 +15,13 @@ import {
   STATUS_BAD_REQUEST,
   STATUS_INTERNAL_ERROR,
 } from "@/lib/http-status";
-import { resources, subscriptions, wallets, walletTransactions } from "@/db/schema";
+import {
+  capitalEntries,
+  resources,
+  subscriptions,
+  wallets,
+  walletTransactions,
+} from "@/db/schema";
 
 // ---------------------------------------------------------------------------
 // vi.hoisted — set env vars before module evaluation
@@ -1092,18 +1098,141 @@ describe("POST /api/stripe/webhook", () => {
   });
 
   describe("payment_intent.succeeded (offering purchase)", () => {
-    it("records offering purchases completed through Connect card payment", () =>
+    // COM-DSN-002 — rail gate. An offering purchase paid via a Stripe
+    // destination charge (the production `createProvidePaymentAction` flow)
+    // has ALREADY moved real funds to the seller's Connect account. The webhook
+    // must NOT also credit the seller's internal in-platform balance/capital, or
+    // it mints unbacked currency on top of the real money movement. The internal
+    // settlement is gated to the platform-capital rail only (no Connect
+    // destination + no `settlementRail: 'connect'` marker).
+
+    it("does NOT credit internal capital on a Connect destination charge (COM-DSN-002)", () =>
       withTestTransaction(async (db) => {
+        const platformOrg = await createTestGroup(db, { name: "RIVR" });
+        const platformWallet = await createTestWallet(db, platformOrg.id, {
+          type: "group",
+        });
         const buyer = await createTestAgent(db);
         const seller = await createTestAgent(db);
+        const sellerWallet = await createTestWallet(db, seller.id);
         const { createTestResource } = await import("@/test/fixtures");
         const offering = await createTestResource(db, seller.id, {
           name: "Consulting Session",
           type: "listing",
         });
 
+        // Destination charge: Stripe routed money to the seller's Connect
+        // account (transfer_data.destination) and the action stamped the rail.
         const paymentIntent = {
-          id: "pi_offering_123",
+          id: "pi_offering_connect",
+          amount: 4242,
+          transfer_data: { destination: "acct_seller_connect" },
+          metadata: {
+            type: "offering_purchase",
+            settlementRail: "connect",
+            offeringId: offering.id,
+            buyerId: buyer.id,
+            sellerId: seller.id,
+            subtotalCents: "4000",
+            platformFeeCents: "242",
+            totalCents: "4242",
+          },
+        };
+
+        mockConstructEvent.mockReturnValue(
+          makeStripeEvent("payment_intent.succeeded", paymentIntent),
+        );
+
+        const request = makeWebhookRequest("{}", {
+          "stripe-signature": VALID_SIGNATURE,
+        });
+        const response = await POST(request);
+
+        expect(response.status).toBe(STATUS_OK);
+
+        // The audit `marketplace_purchase` row is still recorded (it is the
+        // ledger trail for the externally-settled purchase).
+        const piRows = await db
+          .select()
+          .from(walletTransactions)
+          .where(
+            eq(walletTransactions.stripePaymentIntentId, "pi_offering_connect"),
+          );
+        expect(piRows).toHaveLength(1);
+        expect(piRows[0].type).toBe("marketplace_purchase");
+        expect(piRows[0].amountCents).toBe(4242);
+
+        // The buyer still gets a receipt.
+        const receiptRows = await db
+          .select()
+          .from(resources)
+          .where(eq(resources.type, "receipt"));
+        const receipt = receiptRows.find((r) => {
+          const meta = (r.metadata ?? {}) as Record<string, unknown>;
+          return meta.originalListingId === offering.id;
+        });
+        expect(receipt).toBeDefined();
+        expect(receipt?.ownerId).toBe(buyer.id);
+
+        // CRITICAL: no internal settlement happened on the Connect rail.
+        // No payout/service-fee rows reference this offering...
+        const settlementRows = await db
+          .select()
+          .from(walletTransactions)
+          .where(eq(walletTransactions.referenceId, offering.id));
+        expect(
+          settlementRows.some(
+            (row) =>
+              row.type === "marketplace_payout" || row.type === "service_fee",
+          ),
+        ).toBe(false);
+
+        // ...the seller's and platform's internal balances are untouched...
+        const [sellerAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, sellerWallet.id))
+          .limit(1);
+        const [platformAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, platformWallet.id))
+          .limit(1);
+        expect(sellerAfter?.balanceCents).toBe(0);
+        expect(platformAfter?.balanceCents).toBe(0);
+
+        // ...and no capital (spendable in-platform funds) was minted.
+        const sellerCapital = await db
+          .select()
+          .from(capitalEntries)
+          .where(eq(capitalEntries.walletId, sellerWallet.id));
+        const platformCapital = await db
+          .select()
+          .from(capitalEntries)
+          .where(eq(capitalEntries.walletId, platformWallet.id));
+        expect(sellerCapital).toHaveLength(0);
+        expect(platformCapital).toHaveLength(0);
+      }));
+
+    it("credits internal capital on the platform-capital rail (no Connect destination)", () =>
+      withTestTransaction(async (db) => {
+        const platformOrg = await createTestGroup(db, { name: "RIVR" });
+        const platformWallet = await createTestWallet(db, platformOrg.id, {
+          type: "group",
+        });
+        const buyer = await createTestAgent(db);
+        const seller = await createTestAgent(db);
+        const sellerWallet = await createTestWallet(db, seller.id);
+        const { createTestResource } = await import("@/test/fixtures");
+        const offering = await createTestResource(db, seller.id, {
+          name: "Consulting Session",
+          type: "listing",
+        });
+
+        // No transfer_data and no settlementRail marker => RIVR collected the
+        // full charge as platform capital, so internal settlement runs.
+        const paymentIntent = {
+          id: "pi_offering_internal",
           amount: 4242,
           metadata: {
             type: "offering_purchase",
@@ -1130,19 +1259,62 @@ describe("POST /api/stripe/webhook", () => {
         const [tx] = await db
           .select()
           .from(walletTransactions)
-          .where(eq(walletTransactions.stripePaymentIntentId, "pi_offering_123"))
+          .where(
+            eq(walletTransactions.stripePaymentIntentId, "pi_offering_internal"),
+          )
           .limit(1);
-
         expect(tx?.type).toBe("marketplace_purchase");
         expect(tx?.amountCents).toBe(4242);
         expect(tx?.feeCents).toBe(242);
+
+        // Seller credited the subtotal; platform credited the surcharge net.
+        const [sellerAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, sellerWallet.id))
+          .limit(1);
+        const [platformAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, platformWallet.id))
+          .limit(1);
+        expect(sellerAfter?.balanceCents).toBe(4000);
+        expect(platformAfter?.balanceCents).toBe(242);
+
+        // Settlement payout + platform fee rows reference the offering.
+        const settlementRows = await db
+          .select()
+          .from(walletTransactions)
+          .where(eq(walletTransactions.referenceId, offering.id));
+        expect(
+          settlementRows.some(
+            (row) =>
+              row.type === "marketplace_payout" &&
+              row.toWalletId === sellerWallet.id &&
+              row.amountCents === 4000,
+          ),
+        ).toBe(true);
+        expect(
+          settlementRows.some(
+            (row) =>
+              row.type === "service_fee" &&
+              row.toWalletId === platformWallet.id &&
+              row.amountCents === 242,
+          ),
+        ).toBe(true);
+
+        // Internal capital WAS minted on this rail (backed by RIVR-held funds).
+        const sellerCapital = await db
+          .select()
+          .from(capitalEntries)
+          .where(eq(capitalEntries.walletId, sellerWallet.id));
+        expect(sellerCapital.length).toBeGreaterThan(0);
 
         const [receipt] = await db
           .select()
           .from(resources)
           .where(eq(resources.type, "receipt"))
           .limit(1);
-
         expect(receipt?.ownerId).toBe(buyer.id);
       }));
   });
