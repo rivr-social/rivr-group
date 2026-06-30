@@ -1123,6 +1123,296 @@ describe("ABAC policy evaluation", () => {
 });
 
 // =============================================================================
+// 8b. ABAC self-asserted-attribute escalation guard (GRP-SEC-002 / DBR-SEC-001)
+// =============================================================================
+
+describe("ABAC self-asserted attribute escalation guard", () => {
+  it("self-asserted metadata attribute cannot satisfy an elevated ALLOW policy (manage)", () =>
+    withTestTransaction(async (db) => {
+      // Attacker sets their own metadata.role = "admin" (self-writable).
+      const attacker = await createTestAgent(db, {
+        type: "person",
+        metadata: { role: "admin" },
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      // ALLOW policy granting the elevated verb "manage" keyed on the
+      // self-settable attribute.
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "allow",
+        allowedActions: ["manage" as VerbType],
+        conditions: [{ key: "role", operator: "equals", value: "admin" }],
+        logicalOperator: "AND",
+        label: "Self-asserted admin can manage (must be refused)",
+      };
+      await createTestResource(db, owner.id, {
+        name: "Elevated self-asserted policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(attacker.id, "manage", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("no_permission");
+    }));
+
+  it("self-asserted metadata attribute still satisfies a NON-elevated ALLOW policy (rent)", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db, {
+        type: "person",
+        metadata: { department: "engineering" },
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        allowedActions: ["rent" as VerbType],
+        conditions: [{ key: "department", operator: "equals", value: "engineering" }],
+        logicalOperator: "AND",
+      };
+      await createTestResource(db, owner.id, {
+        name: "Non-elevated self-asserted policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "rent", resource.id, "resource");
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("abac_policy");
+    }));
+
+  it("authority-provenanced attribute (type) CAN satisfy an elevated ALLOW policy", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db, { type: "person" });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "allow",
+        allowedActions: ["manage" as VerbType],
+        conditions: [{ key: "type", operator: "equals", value: "person" }],
+        logicalOperator: "AND",
+      };
+      await createTestResource(db, owner.id, {
+        name: "Elevated trusted-attribute policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "manage", resource.id, "resource");
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("abac_policy");
+    }));
+
+  it("self-asserted metadata cannot SHADOW an authority column attribute (type)", () =>
+    withTestTransaction(async (db) => {
+      // Real column type is "person"; attacker tries to spoof type=organization
+      // via the self-writable metadata bag.
+      const attacker = await createTestAgent(db, {
+        type: "person",
+        metadata: { type: "organization" },
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      // Even a NON-elevated verb must not honor the shadowed attribute.
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        allowedActions: ["rent" as VerbType],
+        conditions: [{ key: "type", operator: "equals", value: "organization" }],
+        logicalOperator: "AND",
+      };
+      await createTestResource(db, owner.id, {
+        name: "Shadow attempt policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(attacker.id, "rent", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("no_permission");
+    }));
+
+  it("self-asserted chapterTags cannot satisfy an elevated localeScope ALLOW policy", () =>
+    withTestTransaction(async (db) => {
+      const locale = await createTestPlace(db);
+      // Attacker is NOT in the locale (no pathIds) but spoofs chapterTags.
+      const attacker = await createTestAgent(db, {
+        type: "person",
+        metadata: { chapterTags: [locale.id] },
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "allow",
+        allowedActions: ["manage" as VerbType],
+        conditions: [{ key: "type", operator: "equals", value: "person" }],
+        logicalOperator: "AND",
+        localeScope: locale.id,
+      };
+      await createTestResource(db, owner.id, {
+        name: "Elevated locale-scoped policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(attacker.id, "manage", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("no_permission");
+    }));
+
+  it("DENY policy still uses self-asserted attributes (deny only restricts)", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db, {
+        type: "person",
+        metadata: { banned: "true" },
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "public" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "deny",
+        allowedActions: ["view" as VerbType],
+        conditions: [{ key: "banned", operator: "equals", value: "true" }],
+        logicalOperator: "AND",
+      };
+      await createTestResource(db, owner.id, {
+        name: "Deny banned policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "view", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("abac_deny");
+    }));
+});
+
+// =============================================================================
+// 8c. ABAC not_equals absent-attribute edge (fail-closed)
+// =============================================================================
+
+describe("ABAC not_equals operator", () => {
+  it("does NOT satisfy an allow policy when the attribute is ABSENT", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db, { type: "person", metadata: {} });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        allowedActions: ["rent" as VerbType],
+        conditions: [{ key: "department", operator: "not_equals", value: "marketing" }],
+        logicalOperator: "AND",
+      };
+      await createTestResource(db, owner.id, {
+        name: "not_equals absent policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "rent", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("no_permission");
+    }));
+
+  it("satisfies an allow policy when the attribute is PRESENT and differs", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db, {
+        type: "person",
+        metadata: { department: "engineering" },
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        allowedActions: ["rent" as VerbType],
+        conditions: [{ key: "department", operator: "not_equals", value: "marketing" }],
+        logicalOperator: "AND",
+      };
+      await createTestResource(db, owner.id, {
+        name: "not_equals present policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "rent", resource.id, "resource");
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBe("abac_policy");
+    }));
+
+  it("does NOT satisfy an allow policy when the attribute equals the value", () =>
+    withTestTransaction(async (db) => {
+      const actor = await createTestAgent(db, {
+        type: "person",
+        metadata: { department: "marketing" },
+      });
+      const owner = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "private" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        allowedActions: ["rent" as VerbType],
+        conditions: [{ key: "department", operator: "not_equals", value: "marketing" }],
+        logicalOperator: "AND",
+      };
+      await createTestResource(db, owner.id, {
+        name: "not_equals match policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(actor.id, "rent", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("no_permission");
+    }));
+});
+
+// =============================================================================
 // isGroupMember
 // =============================================================================
 

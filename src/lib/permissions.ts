@@ -103,6 +103,55 @@ export interface PermissionPolicyMetadata {
 }
 
 // =============================================================================
+// ABAC attribute provenance — defense against self-asserted escalation
+// =============================================================================
+
+/**
+ * Attribute keys that are provenanced from authority-controlled agent COLUMNS
+ * (not the self-writable `agents.metadata` bag). These are the only attributes
+ * an actor cannot set on themselves via profile edit or other metadata write
+ * paths.
+ *
+ * Two invariants depend on this set:
+ * - {@link buildActorAttributes} never lets a `metadata` key shadow one of these
+ *   authority columns, so self-asserted metadata cannot impersonate `id`/`type`
+ *   or fabricate locale membership (`pathIds`).
+ * - {@link evaluateAbacPolicies} only trusts these keys when an ALLOW policy
+ *   would confer an elevated action (see {@link ELEVATED_ABAC_ACTIONS}).
+ *
+ * Exported so any metadata writer can strip these reserved keys from any
+ * metadata a caller tries to persist (DBR-SEC-002).
+ */
+export const SYSTEM_CONTROLLED_ATTRIBUTE_KEYS: ReadonlySet<string> = new Set([
+  "id",
+  "type",
+  "pathIds",
+]);
+
+/**
+ * Verbs that confer mutating / authority-bearing power. An ALLOW policy that
+ * grants any of these is a privilege-escalation primitive if it can be satisfied
+ * by a self-asserted (self-writable `agents.metadata`) attribute. For such
+ * policies {@link evaluateAbacPolicies} evaluates conditions against ONLY the
+ * authority-provenanced attributes ({@link SYSTEM_CONTROLLED_ATTRIBUTE_KEYS}),
+ * so a user cannot grant themselves manage/grant/delete/etc. by editing their
+ * own metadata (GRP-SEC-002 / DBR-SEC-001).
+ *
+ * Read-only / consumption verbs (view, use, rent, comment, react, …) are
+ * intentionally excluded: self-asserted attributes may still satisfy those.
+ */
+const ELEVATED_ABAC_ACTIONS: ReadonlySet<VerbType> = new Set<VerbType>([
+  "own",
+  "manage",
+  "grant",
+  "delete",
+  "assign",
+  "update",
+  "transfer",
+  "revoke",
+]);
+
+// =============================================================================
 // Permission Schema — verb composition rules
 // =============================================================================
 
@@ -1064,6 +1113,17 @@ async function evaluateAbacPolicies(
   if (!actor) return null;
 
   const actorAttributes = buildActorAttributes(actor);
+
+  // Authority-provenanced subset of the actor's attributes: only those keyed on
+  // columns the actor cannot self-write. An ALLOW policy that grants an elevated
+  // action is evaluated against THIS map so a self-asserted metadata attribute
+  // can never satisfy it (GRP-SEC-002 / DBR-SEC-001).
+  const trustedAttributes = new Map<string, string | string[]>();
+  for (const key of SYSTEM_CONTROLLED_ATTRIBUTE_KEYS) {
+    const value = actorAttributes.get(key);
+    if (value !== undefined) trustedAttributes.set(key, value);
+  }
+
   let allowDecision: { effect: "allow"; via: string } | null = null;
 
   for (const row of policies as unknown as Resource[]) {
@@ -1073,16 +1133,29 @@ async function evaluateAbacPolicies(
     // Check if this policy grants the requested action
     if (!policy.allowedActions.includes(verb)) continue;
 
+    const effect = policy.effect === "deny" ? "deny" : "allow";
+
+    // For an ALLOW policy conferring an elevated (mutating/authority) action,
+    // only authority-provenanced attributes are trusted — self-asserted metadata
+    // must not satisfy the conditions OR the locale scope. DENY policies always
+    // use the full attribute set (a deny should be as easy to trigger as
+    // possible — it only ever restricts access).
+    const requiresTrustedAttributes = effect === "allow" && ELEVATED_ABAC_ACTIONS.has(verb);
+    const attributesForEvaluation = requiresTrustedAttributes ? trustedAttributes : actorAttributes;
+
     // Check locale scope if specified
     if (policy.localeScope) {
-      const actorLocales = actorAttributes.get("chapterTags") || actorAttributes.get("pathIds");
+      // chapterTags is self-asserted metadata, so it is ignored for elevated
+      // allow policies — only the authority-controlled pathIds may match.
+      const actorLocales = requiresTrustedAttributes
+        ? attributesForEvaluation.get("pathIds")
+        : attributesForEvaluation.get("chapterTags") || attributesForEvaluation.get("pathIds");
       if (!actorLocales || !actorLocales.includes(policy.localeScope)) continue;
     }
 
     // Evaluate attribute conditions
-    const conditionsMet = evaluateConditions(policy.conditions, policy.logicalOperator, actorAttributes);
+    const conditionsMet = evaluateConditions(policy.conditions, policy.logicalOperator, attributesForEvaluation);
     if (conditionsMet) {
-      const effect = policy.effect === "deny" ? "deny" : "allow";
       const via = `policy:${row.id}→${verb}:${effect} (${policy.label || "abac"})`;
       if (effect === "deny") {
         return { effect, via };
@@ -1120,6 +1193,11 @@ function buildActorAttributes(actor: {
 
   if (actor.metadata) {
     for (const [key, value] of Object.entries(actor.metadata)) {
+      // Self-writable metadata must never shadow an authority-provenanced
+      // column attribute (id/type/pathIds). Without this skip a user could set
+      // `metadata.type` / `metadata.pathIds` to impersonate a trusted attribute
+      // and defeat the elevated-action guard (GRP-SEC-002 / DBR-SEC-001).
+      if (SYSTEM_CONTROLLED_ATTRIBUTE_KEYS.has(key)) continue;
       if (typeof value === "string") {
         attrs.set(key, value);
       } else if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
@@ -1169,10 +1247,16 @@ function evaluateSingleCondition(
       return false;
 
     case "not_equals":
+      // Only a present, comparable (string) attribute that differs from the
+      // condition value satisfies not_equals. An ABSENT attribute — or a
+      // non-string value the operator cannot compare — does NOT satisfy: a
+      // missing attribute must not count as "not equal to X", otherwise an
+      // allow policy keyed on not_equals would silently widen to every actor
+      // lacking the attribute. Fails closed.
       if (typeof attrValue === "string" && typeof condition.value === "string") {
         return attrValue !== condition.value;
       }
-      return attrValue !== undefined;
+      return false;
 
     case "contains":
       // Actor's attribute is an array and contains the condition value
