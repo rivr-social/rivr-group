@@ -731,6 +731,38 @@ export const federationEvents = pgTable(
 );
 
 /**
+ * Single-use SSO assertion nonces (F3 — SSO replay protection / AUTH-SEC-002).
+ *
+ * A short-TTL dedup store burned atomically in the SSO ACCEPT paths
+ * (`/api/federation/remote-auth`, `/api/federation/sso/land`) before the
+ * `rivr_remote_viewer` cookie is minted. The signed assertion already
+ * carries a `nonce` (see `sso-assertion.ts`); single-use enforcement is the
+ * acceptor's responsibility. The first accept inserts `(issuer, nonce)`; any
+ * re-presentation collides on the unique index and is rejected.
+ *
+ * Rows are keyed by `(issuer, nonce)` so two distinct issuers can never
+ * shadow each other's nonces. `expiresAt` is the assertion's `exp` (≤5 min)
+ * so a background sweep can prune the table without affecting correctness —
+ * the unique constraint, not the TTL, is what enforces single use within the
+ * validity window. Home-authority / per-instance; never federated.
+ */
+export const ssoNonces = pgTable(
+  'sso_nonces',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    issuer: text('issuer').notNull(),
+    nonce: text('nonce').notNull(),
+    actorId: uuid('actor_id'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('sso_nonces_issuer_nonce_idx').on(table.issuer, table.nonce),
+    index('sso_nonces_expires_at_idx').on(table.expiresAt),
+  ]
+);
+
+/**
  * Manifest references - lightweight pointers to canonical remote objects.
  *
  * This is the additive Universal Manifest v0.4 index used to avoid relying on
@@ -1583,6 +1615,8 @@ export type NodeMembershipRecord = typeof nodeMemberships.$inferSelect;
 export type NewNodeMembershipRecord = typeof nodeMemberships.$inferInsert;
 export type FederationEventRecord = typeof federationEvents.$inferSelect;
 export type NewFederationEventRecord = typeof federationEvents.$inferInsert;
+export type SsoNonceRecord = typeof ssoNonces.$inferSelect;
+export type NewSsoNonceRecord = typeof ssoNonces.$inferInsert;
 export type FederationEntityMapRecord = typeof federationEntityMap.$inferSelect;
 export type NewFederationEntityMapRecord = typeof federationEntityMap.$inferInsert;
 

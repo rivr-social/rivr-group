@@ -232,6 +232,13 @@
       "when": 1782691200000,
       "tag": "0046_site_builder",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1782950400000,
+      "tag": "0048_sso_nonces",
+      "breakpoints": true
     }
   ]
 }

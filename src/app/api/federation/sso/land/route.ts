@@ -35,6 +35,7 @@ import {
   verifySsoAssertion,
   type SsoAssertionVerifyResult,
 } from "@/lib/federation/sso-assertion";
+import { burnSsoNonce } from "@/lib/federation/sso-nonce-store";
 import {
   REMOTE_VIEWER_COOKIE_NAME,
   REMOTE_VIEWER_DEFAULT_LIFETIME_SEC,
@@ -157,6 +158,33 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   const claims = result.claims;
+
+  // F3 / AUTH-SEC-002 — single-use: atomically burn the assertion nonce before
+  // minting a session. The assertion travels as a URL query param here, so a
+  // captured /sso/land link (history, referer, logs) is especially replayable;
+  // the first land wins and any re-presentation falls through unauthenticated.
+  let burn: Awaited<ReturnType<typeof burnSsoNonce>>;
+  try {
+    burn = await burnSsoNonce({
+      issuer: claims.globalIssuerBaseUrl,
+      nonce: claims.nonce,
+      expUnixSec: claims.exp,
+      actorId: claims.actorId,
+    });
+  } catch (error) {
+    console.error("[federation/sso/land] nonce burn threw:", error);
+    return NextResponse.redirect(new URL(next, localRedirectBase), {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+  if (!burn.ok) {
+    console.warn(
+      `[federation/sso/land] rejected replayed assertion nonce: reason=${burn.reason}`,
+    );
+    return NextResponse.redirect(new URL(next, localRedirectBase), {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
 
   const secret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
   if (!secret) {
