@@ -21,6 +21,7 @@
  * - `@/db/schema` for table definitions.
  */
 import { and, eq, isNull, or } from "drizzle-orm";
+import { randomBytes } from "crypto";
 import { getEnv } from "@/lib/env";
 import { db } from "@/db";
 import { agents, groupMatrixRooms, ledger, type ChatMode } from "@/db/schema";
@@ -80,7 +81,19 @@ export async function createGroupMatrixRoom(params: {
     return { matrixRoomId: existing.matrixRoomId, recordId: existing.id };
   }
 
-  // Create room via Synapse Admin API
+  // Create room via Synapse Admin API.
+  //
+  // SECURITY (EVT-SEC-007): the alias must NOT be a pure function of the public
+  // group agent id. A deterministic `group-<groupId>` alias is publicly
+  // computable, so anyone could resolve `#group-<id>:<server>` → `!roomId`
+  // through ordinary Matrix alias resolution with no membership — collapsing the
+  // "attacker must already know the private room id" precondition for room
+  // attacks. We append 64 bits of unpredictable entropy so the alias can't be
+  // derived from the group id. RIVR never resolves rooms by alias (the canonical
+  // key is `group_matrix_rooms.matrix_room_id`), so the entropy is invisible to
+  // the rest of the system; the random suffix also avoids "alias already taken"
+  // collisions when a tombstoned group room is re-provisioned.
+  const aliasEntropy = randomBytes(8).toString("hex");
   const result = await synapseAdminRequest("/_synapse/admin/v1/rooms", {
     method: "POST",
     body: JSON.stringify({
@@ -88,7 +101,7 @@ export async function createGroupMatrixRoom(params: {
       name: params.groupName,
       topic: `Group chat for ${params.groupName}`,
       preset: "private_chat",
-      room_alias_name: `group-${params.groupAgentId.replace(/-/g, "")}`,
+      room_alias_name: `group-${params.groupAgentId.replace(/-/g, "")}-${aliasEntropy}`,
     }),
   });
 
