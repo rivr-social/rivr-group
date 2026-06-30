@@ -13,7 +13,10 @@
  */
 
 import { auth } from "@/auth";
+import { db } from "@/db";
+import { agents as agentsTable } from "@/db/schema";
 import type { Agent, Resource } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { check } from "@/lib/permissions";
 import {
   serializeAgent,
@@ -130,17 +133,59 @@ async function canViewResource(actorId: string, resourceId: string): Promise<boo
 }
 
 /**
- * Batch-filter viewable agents. Public and locale-visible agents are allowed
- * client-side without per-item permission checks to avoid O(N) DB queries.
- * Only non-public/non-locale items go through the full permission check.
+ * True when the item carries explicit scope fields (scopedLocaleIds /
+ * scopedGroupIds / scopedUserIds) in its metadata. `check()` treats these as
+ * strict: an explicitly-scoped `locale` item is NOT generally locale-visible,
+ * so it must never be fast-tracked here.
+ */
+function hasExplicitScopeFields(metadata: unknown): boolean {
+  const meta = (metadata ?? {}) as Record<string, unknown>;
+  return (
+    (Array.isArray(meta.scopedLocaleIds) && meta.scopedLocaleIds.length > 0) ||
+    (Array.isArray(meta.scopedGroupIds) && meta.scopedGroupIds.length > 0) ||
+    (Array.isArray(meta.scopedUserIds) && meta.scopedUserIds.length > 0)
+  );
+}
+
+/**
+ * True when the actor is in "global" locale scope (no pathIds). This mirrors
+ * `checkLocaleOverlap` in permissions.ts: an actor with empty pathIds shares a
+ * (notional) global locale with all non-explicitly-scoped `locale` content and
+ * may see it. A located actor (non-empty pathIds) does NOT — they only see
+ * `locale` content whose locale overlaps theirs, which only the authoritative
+ * `check()` can decide. A missing actor (stale JWT) is treated as NOT global so
+ * the item is routed to `check()`, which denies it.
+ */
+async function actorIsGlobalScope(actorId: string): Promise<boolean> {
+  const [actor] = await db
+    .select({ pathIds: agentsTable.pathIds })
+    .from(agentsTable)
+    .where(eq(agentsTable.id, actorId))
+    .limit(1);
+  return !!actor && (!actor.pathIds || actor.pathIds.length === 0);
+}
+
+/**
+ * Batch-filter viewable agents. Public agents are allowed without a per-item
+ * permission check. `locale` agents are fast-tracked ONLY when the viewer is in
+ * global scope and the agent has no explicit scope fields — matching `check()`'s
+ * locale semantics. Located viewers (and explicitly-scoped agents) go through
+ * the full permission check so cross-locale agents are not disclosed
+ * (GRP-SEC-003). Remaining non-public/non-locale items go through `check()`.
  */
 async function filterViewableAgents(actorId: string, agents: Agent[]): Promise<Agent[]> {
+  const actorIsGlobal = await actorIsGlobalScope(actorId);
   const publicOrLocale: Agent[] = [];
   const needsCheck: Agent[] = [];
 
   for (const a of agents) {
     const vis = (a as { visibility?: string }).visibility;
-    if (vis === "public" || vis === "locale") {
+    if (
+      vis === "public" ||
+      (vis === "locale" &&
+        actorIsGlobal &&
+        !hasExplicitScopeFields((a as { metadata?: unknown }).metadata))
+    ) {
       publicOrLocale.push(a);
     } else {
       needsCheck.push(a);
@@ -156,17 +201,26 @@ async function filterViewableAgents(actorId: string, agents: Agent[]): Promise<A
 }
 
 /**
- * Batch-filter viewable resources. Public and locale-visible resources are allowed
- * client-side without per-item permission checks to avoid O(N) DB queries.
- * Only non-public/non-locale items go through the full permission check.
+ * Batch-filter viewable resources. Public resources are allowed without a
+ * per-item permission check. `locale` resources are fast-tracked ONLY when the
+ * viewer is in global scope and the resource has no explicit scope fields —
+ * matching `check()`'s locale semantics. Located viewers (and explicitly-scoped
+ * resources) route through the full permission check so resources owned in a
+ * non-shared locale are not disclosed (GRP-SEC-003).
  */
 async function filterViewableResources(actorId: string, resources: Resource[]): Promise<Resource[]> {
+  const actorIsGlobal = await actorIsGlobalScope(actorId);
   const publicOrLocale: Resource[] = [];
   const needsCheck: Resource[] = [];
 
   for (const r of resources) {
     const vis = (r as { visibility?: string }).visibility;
-    if (vis === "public" || vis === "locale") {
+    if (
+      vis === "public" ||
+      (vis === "locale" &&
+        actorIsGlobal &&
+        !hasExplicitScopeFields((r as { metadata?: unknown }).metadata))
+    ) {
       publicOrLocale.push(r);
     } else {
       needsCheck.push(r);
