@@ -269,13 +269,17 @@ export async function revokeGroupMembership(
     return { success: false, error: "Not authorized to revoke this membership." };
   }
 
-  // Expire every active join record to ensure no stale grant remains valid.
+  // Expire every active membership grant so no stale access remains valid.
+  // Both `join` (current) and legacy `belong` rows count as membership by every
+  // predicate (isGroupMember / member counts / isGroupAdmin), so revoke MUST
+  // expire both verbs — expiring only `join` would leave a `belong`-backed
+  // member fully active despite a "revoked" UI state (GRP-SEC-005).
   await db.execute(sql`
     UPDATE ledger
     SET is_active = false, expires_at = NOW()
     WHERE subject_id = ${memberId}
       AND object_id = ${groupId}
-      AND verb = 'join'
+      AND verb IN ('join', 'belong')
       AND is_active = true
   `);
 
