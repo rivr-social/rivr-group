@@ -15,7 +15,7 @@ import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { and, eq, sql } from "drizzle-orm";
 import { hash } from "@node-rs/bcrypt";
 import { embedAgent, scheduleEmbedding } from "@/lib/ai";
-import { createGroupMatrixRoom } from "@/lib/matrix-groups";
+import { ensureGroupMatrixRoom } from "@/lib/matrix-groups";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { type GroupJoinSettings } from "@/lib/types";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
@@ -268,20 +268,13 @@ export async function createGroupResource(input: {
       console.error("[murmurations] createGroupResource sync failed:", error);
     });
 
-    // Fire-and-forget: create a Matrix room for the group and join the creator.
+    // Fire-and-forget: every new group always gets a Matrix room.
+    // ensureGroupMatrixRoom resolves the creator/admin and lazily provisions
+    // their Matrix account if needed, so a creator without a Matrix identity no
+    // longer blocks room creation (C1).
     (async () => {
       try {
-        const creator = await db.query.agents.findFirst({
-          where: eq(agents.id, userId),
-          columns: { matrixUserId: true },
-        });
-        if (creator?.matrixUserId) {
-          await createGroupMatrixRoom({
-            groupAgentId: created.id,
-            groupName: input.name.trim(),
-            creatorMatrixUserId: creator.matrixUserId,
-          });
-        }
+        await ensureGroupMatrixRoom(created.id);
       } catch (err) {
         console.error("[createGroupResource] Matrix room creation failed:", err);
       }

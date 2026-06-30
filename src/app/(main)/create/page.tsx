@@ -121,6 +121,10 @@ export default function CreatePage() {
   const [eventTime, setEventTime] = useState("")
   const [eventLocation, setEventLocation] = useState(() => isLiveClass && urlLocation ? decodeURIComponent(urlLocation) : "")
   const [eventType, setEventType] = useState(() => isLiveClass ? "in-person" : "in-person") // "in-person" or "online"
+  // Lazy-reveal for the optional event location/meeting-link section (G2). Opens
+  // by default when a location was handed off via URL (e.g. a Live Class) so the
+  // pre-filled value stays visible.
+  const [showEventLocation, setShowEventLocation] = useState(() => Boolean(isLiveClass && urlLocation))
   const [postEventAsGroup, setPostEventAsGroup] = useState(() => Boolean(urlGroup))
   const [selectedVenue, setSelectedVenue] = useState("none")
   const [venueStartTime, setVenueStartTime] = useState("")
@@ -783,10 +787,13 @@ export default function CreatePage() {
    * @param skipMembershipGate When `true`, bypasses the subscription pre-check (used after starting trial).
    */
   const handleCreateEvent = async (skipMembershipGate = false) => {
-    if (!eventTitle || !eventDescription || !eventDate || !eventTime || !eventLocation) {
+    // Events require only a title, description, and a start date/time (G1).
+    // Location/meeting link is optional and lives behind a lazy "Add …"
+    // affordance — requiring it was a silent submit-failure trap.
+    if (!eventTitle || !eventDescription || !eventDate || !eventTime) {
       toast({
         title: "Missing information",
-        description: "Please fill in all required fields.",
+        description: "Please add a title, description, and start date/time.",
         variant: "destructive",
       })
       return
@@ -1577,31 +1584,38 @@ export default function CreatePage() {
                 Locale is set from the Visibility Scope picker below. Add one or more locales there to scope and tag this event.
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="event-location">
-                  {eventType === "online" ? "Meeting Link/Platform" : "Location"}
-                </Label>
-                <div className="relative">
-                  <MapPin className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                  {eventType === "online" ? (
-                    <Input
-                      id="event-location"
-                      placeholder="Zoom, Meet, or platform link"
-                      className="pl-10"
-                      value={eventLocation}
-                      onChange={(e) => setEventLocation(e.target.value)}
-                    />
-                  ) : (
-                    <LocationAutocompleteInput
-                      id="event-location"
-                      value={eventLocation}
-                      onValueChange={setEventLocation}
-                      placeholder="Search address or place"
-                      inputClassName="pl-10"
-                    />
-                  )}
+              {showEventLocation ? (
+                <div className="space-y-2">
+                  <Label htmlFor="event-location">
+                    {eventType === "online" ? "Meeting Link/Platform" : "Location"}
+                  </Label>
+                  <div className="relative">
+                    <MapPin className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
+                    {eventType === "online" ? (
+                      <Input
+                        id="event-location"
+                        placeholder="Zoom, Meet, or platform link"
+                        className="pl-10"
+                        value={eventLocation}
+                        onChange={(e) => setEventLocation(e.target.value)}
+                      />
+                    ) : (
+                      <LocationAutocompleteInput
+                        id="event-location"
+                        value={eventLocation}
+                        onValueChange={setEventLocation}
+                        placeholder="Search address or place"
+                        inputClassName="pl-10"
+                      />
+                    )}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowEventLocation(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  {eventType === "online" ? "Add meeting link" : "Add location"}
+                </Button>
+              )}
 
               {/* Venue Booking Section - Only show for in-person events */}
               {eventType === "in-person" && (

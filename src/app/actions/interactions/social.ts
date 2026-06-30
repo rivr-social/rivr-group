@@ -4,7 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, ledger } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { inviteToGroupRoom, removeFromGroupRoom } from "@/lib/matrix-groups";
+import { ensureGroupMatrixRoom, inviteToGroupRoom, removeFromGroupRoom } from "@/lib/matrix-groups";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
 import {
@@ -106,6 +106,10 @@ export async function toggleJoinGroup(groupId: string, type: "group" | "ring" = 
         (async () => {
           try {
             if (result.active) {
+              // Self-heal: guarantee the group has a room (older groups may
+              // never have been provisioned); inviteToGroupRoom then lazily
+              // provisions the joining member's Matrix account and force-joins (C1).
+              await ensureGroupMatrixRoom(groupId);
               await inviteToGroupRoom({ groupAgentId: groupId, targetAgentId: userId });
             } else {
               await removeFromGroupRoom({ groupAgentId: groupId, targetAgentId: userId });
