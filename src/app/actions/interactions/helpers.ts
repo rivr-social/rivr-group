@@ -6,12 +6,21 @@ import { db } from "@/db";
 import { agents, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { getFederationExecutionContext } from "@/lib/federation/execution-context";
+import { resolveLocalActorId } from "@/lib/federation/resolution";
 
 import type { ActionResult, TargetType } from "./types";
 import { isUuid } from "./types";
 
 /**
  * Resolves the authenticated user ID from the active session.
+ *
+ * The returned id is always THIS instance's local agent id:
+ * - Federation execution context (peer-secret path) is pre-normalized by
+ *   `bindAuthorizedFederationActor` before dispatch.
+ * - A federated remote-viewer cookie carries the actor's HOME id verbatim, so
+ *   it is normalized here via `resolveLocalActorId` so interactions bind to the
+ *   correct local principal instead of a dangling remote id (GRP-DSN-001).
+ * - NextAuth sessions are already local.
  */
 export async function getCurrentUserId() {
   const federationContext = getFederationExecutionContext();
@@ -20,7 +29,15 @@ export async function getCurrentUserId() {
   }
 
   const session = await auth();
-  return session?.user?.id ?? null;
+  if (!session?.user?.id) {
+    return null;
+  }
+
+  if (session.user.authMethod === "federated") {
+    return resolveLocalActorId(session.user.id);
+  }
+
+  return session.user.id;
 }
 
 /**

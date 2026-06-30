@@ -35,6 +35,7 @@ import { sendTransactionalEmail } from "@/lib/mailer";
 import { verificationEmail, loginNotificationEmail } from "@/lib/email-templates";
 import { embedAgent, scheduleEmbedding } from "@/lib/ai";
 import { provisionMatrixUser } from "@/lib/matrix-admin";
+import { encryptSecret } from "@/lib/crypto/secret-box";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { getClientIp } from "@/lib/client-ip";
 import { hashToken } from "@/lib/token-hash";
@@ -565,12 +566,14 @@ function provisionMatrixUserForAgent(
         displayName,
       });
 
-      // Store Matrix credentials on the agent record
+      // Store Matrix credentials on the agent record. The access token is a
+      // secret, so it is encrypted at rest (EVT-SEC-006); the user id stays
+      // plaintext.
       await db
         .update(agents)
         .set({
           matrixUserId: result.matrixUserId,
-          matrixAccessToken: result.accessToken,
+          matrixAccessToken: encryptSecret(result.accessToken),
         })
         .where(eq(agents.id, agentId));
 

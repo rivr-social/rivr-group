@@ -432,23 +432,42 @@ export async function POST(request: NextRequest) {
       }
 
       case 'balance.available': {
-        // Stripe cleared funds — flip matching pending capital entries to cleared
+        // Stripe reports newly-available balance. Clear ONLY the pending capital
+        // entries whose own scheduled availability date has actually passed.
+        //
+        // Each entry's `availableOn` is set at settlement from the originating
+        // charge's `balance_transaction.available_on`, so gating on
+        // `availableOn <= now()` clears exactly the entries Stripe has scheduled
+        // to be available by now and leaves entries with a future availableOn
+        // pending. The `balance.available` event payload is a Balance object and
+        // carries NO reference to a specific charge/transfer/payout, so the
+        // entries cannot be correlated by id — time-scoping on each entry's own
+        // payout schedule is the correct gate. This replaces the previous
+        // blanket clear, which flipped EVERY pending entry fleet-wide regardless
+        // of its payout schedule (premature payout-eligibility). Entries with a
+        // NULL availableOn (settlement could not read the Stripe schedule) are
+        // deliberately left pending rather than cleared by an unrelated event.
+        // `availableOn` is intentionally NOT overwritten, preserving the
+        // originating charge's settlement date for audit (COM-SEC-001).
         const cleared = await db
           .update(capitalEntries)
           .set({
             settlementStatus: 'cleared',
-            availableOn: new Date(),
             updatedAt: new Date(),
           })
           .where(
             and(
               eq(capitalEntries.settlementStatus, 'pending'),
               sql`${capitalEntries.remainingCents} > 0`,
+              sql`${capitalEntries.availableOn} IS NOT NULL`,
+              sql`${capitalEntries.availableOn} <= now()`,
             ),
           )
           .returning({ id: capitalEntries.id });
         if (cleared.length > 0) {
-          console.log(`[balance.available] Cleared ${cleared.length} pending capital entries`);
+          console.log(
+            `[balance.available] Cleared ${cleared.length} pending capital entries past their availableOn`,
+          );
         }
         break;
       }

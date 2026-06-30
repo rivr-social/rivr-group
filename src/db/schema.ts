@@ -350,6 +350,10 @@ export const agents = pgTable(
 
     // Matrix integration
     matrixUserId: text('matrix_user_id'),
+    // Per-agent Matrix access token. SECRET — encrypted at rest via the
+    // AES-256-GCM secret-box (`enc:v1:…` envelope, see @/lib/crypto/secret-box,
+    // EVT-SEC-006). Legacy plaintext rows are migrated to ciphertext lazily on
+    // the next provisioning write.
     matrixAccessToken: text('matrix_access_token'),
 
     // Social links (dedicated columns for faster queries)

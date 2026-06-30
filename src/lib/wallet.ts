@@ -30,7 +30,7 @@ import {
   type CapitalEntryRecord,
   type NewCapitalEntryRecord,
 } from '@/db/schema';
-import { eq, and, or, sql, isNull, count } from 'drizzle-orm';
+import { eq, and, or, sql, count } from 'drizzle-orm';
 import { getStripe, getOrCreateStripeCustomer } from '@/lib/billing';
 import { toDollars } from '@/lib/integrations/stripe';
 import {
@@ -43,8 +43,6 @@ import {
 import { isValidEthAddress } from '@/lib/eth-utils';
 import { GROUP_AGENT_TYPES } from '@/lib/agent-types';
 import type { WalletBalance, WalletTransactionView } from '@/types';
-
-const DEFAULT_PLATFORM_ORG_NAME = 'RIVR';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -374,32 +372,31 @@ export async function getSellerCardCapability(
   return { available, reason, connectAccountId, chargesEnabled };
 }
 
+/**
+ * Resolves the platform-fee / global-referral settlement wallet.
+ *
+ * The treasury MUST be pinned to an explicit `PLATFORM_AGENT_ID` env var. The
+ * legacy fallback that resolved the sink by matching an `organization` agent
+ * named `RIVR` was removed: it was capturable via name collision (any actor who
+ * could create/rename an org to `RIVR` could become the fee sink, since the
+ * match was `limit(1)` with no ordering or hardened flag). We now fail closed —
+ * if `PLATFORM_AGENT_ID` is unset we throw rather than route real platform
+ * revenue to an attacker-controllable, name-matched agent (COM-SEC-002).
+ *
+ * @throws {Error} When `PLATFORM_AGENT_ID` is not configured.
+ */
 export async function getPlatformWallet(): Promise<WalletRecord> {
   const configuredOwnerId = process.env.PLATFORM_AGENT_ID?.trim();
 
-  if (configuredOwnerId) {
-    return getSettlementWalletForAgent(configuredOwnerId);
-  }
-
-  const [platformOrg] = await db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(
-      and(
-        eq(agents.type, 'organization'),
-        eq(agents.name, DEFAULT_PLATFORM_ORG_NAME),
-        isNull(agents.deletedAt),
-      ),
-    )
-    .limit(1);
-
-  if (!platformOrg) {
+  if (!configuredOwnerId) {
     throw new Error(
-      'Platform fee settlement target is not configured. Set PLATFORM_AGENT_ID or create an active "RIVR" organization agent.',
+      'Platform fee settlement target is not configured. Set PLATFORM_AGENT_ID ' +
+        'to the treasury agent id. Refusing to resolve the platform-fee sink by ' +
+        'organization name (capture-via-name-collision hazard).',
     );
   }
 
-  return getOrCreateWallet(platformOrg.id, 'group');
+  return getSettlementWalletForAgent(configuredOwnerId);
 }
 
 // ---------------------------------------------------------------------------

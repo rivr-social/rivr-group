@@ -325,7 +325,14 @@ function normalizeHandle(raw: unknown): string | null {
 /**
  * Resolve the global identity authority URL. Precedence:
  *   1. explicit `GLOBAL_IDENTITY_AUTHORITY_URL` env var
- *   2. {@link DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL} (a.rivr.social)
+ *   2. in production: NONE — fail closed (see below)
+ *   3. outside production: {@link DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL}
+ *
+ * Credential verification is delegated to this authority, so silently
+ * defaulting under an env omission/misconfig could route a prod instance's
+ * password checks at the wrong (e.g. non-prod) authority. In production we
+ * therefore require it to be explicitly configured and throw otherwise
+ * (AUTH-SEC-006).
  */
 function resolveGlobalIdentityAuthorityUrl(): string {
   const envUrl = process.env.GLOBAL_IDENTITY_AUTHORITY_URL?.trim();
@@ -333,8 +340,14 @@ function resolveGlobalIdentityAuthorityUrl(): string {
     try {
       return new URL(envUrl).origin;
     } catch {
-      // Fall through to default.
+      // Configured-but-malformed falls through to the not-configured handling.
     }
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "GLOBAL_IDENTITY_AUTHORITY_URL must be set to a valid URL in production; " +
+        "refusing to fall back to a default credential authority.",
+    );
   }
   return DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL;
 }

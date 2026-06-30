@@ -8,8 +8,24 @@ import {
   type McpToolCallContext,
 } from "@/lib/federation/mcp-tools";
 import { logMcpProvenance } from "@/lib/federation/mcp-provenance";
+import { timingSafeEqual } from "crypto";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
+
+/**
+ * Constant-time string comparison (AUTH-SEC-006). Length mismatch
+ * short-circuits (the lengths of these tokens are not themselves secret), but
+ * equal-length inputs are compared with `timingSafeEqual` so a byte-by-byte
+ * timing side-channel cannot recover the high-value static AIAGENT_MCP_TOKEN.
+ */
+function secureEqualStrings(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
 
 type JsonRpcId = string | number | null;
 
@@ -86,7 +102,9 @@ async function authorizeMcpRequest(
 
   const configuredToken = process.env.AIAGENT_MCP_TOKEN?.trim() || "";
   const providedToken = getBearerToken(request) ?? getQueryToken(request);
-  if (!configuredToken || !providedToken || providedToken !== configuredToken) {
+  // Constant-time compare (AUTH-SEC-006): the high-value static
+  // AIAGENT_MCP_TOKEN must not be probed via a byte-wise timing side-channel.
+  if (!configuredToken || !providedToken || !secureEqualStrings(providedToken, configuredToken)) {
     return null;
   }
 
