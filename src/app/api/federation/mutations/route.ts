@@ -31,6 +31,7 @@ import { createPostResource } from "@/app/actions/resource-creation/posts";
 import { updateResource, deleteResource } from "@/app/actions/resource-creation/lifecycle";
 import type { UpdateResourceInput } from "@/app/actions/resource-creation/types";
 import * as kg from "@/lib/kg/autobot-kg-client";
+import { authorizeKgScope } from "@/lib/federation/kg-scope-authz";
 import {
   AUTHORITY_GUARD_REASONS,
   checkAuthorityForSession,
@@ -525,6 +526,19 @@ async function handleKgPushDoc(
     const scopeType = typeof payload?.scope_type === "string" ? payload.scope_type : "group";
     const scopeId = typeof payload?.scope_id === "string" ? payload.scope_id : targetAgentId;
 
+    // GRP-SEC-001 — verified-principal scope authorization. The caller-supplied
+    // scope_id is NOT trusted: the verified actor must be entitled to write to
+    // this scope, or it could push docs into any group's KG.
+    const scopeAuth = await authorizeKgScope(actorId, scopeType, scopeId, "write");
+    if (!scopeAuth.ok) {
+      return {
+        success: false,
+        action: "kg_push_doc",
+        error: scopeAuth.reason ?? "Not authorized for this KG scope",
+        errorCode: "KG_SCOPE_FORBIDDEN",
+      };
+    }
+
     if (!content) {
       return {
         success: false,
@@ -590,6 +604,19 @@ async function handleKgQuery(
     const entity = typeof payload?.entity === "string" ? payload.entity : undefined;
     const predicate = typeof payload?.predicate === "string" ? payload.predicate : undefined;
     const maxResults = typeof payload?.max_results === "number" ? payload.max_results : undefined;
+
+    // GRP-SEC-001 — verified-principal scope authorization. Without this, a
+    // peer-authenticated actor could exfiltrate any group's KG triples by
+    // naming an arbitrary scope_id it has no relationship to.
+    const scopeAuth = await authorizeKgScope(actorId, scopeType, scopeId, "read");
+    if (!scopeAuth.ok) {
+      return {
+        success: false,
+        action: "kg_query",
+        error: scopeAuth.reason ?? "Not authorized for this KG scope",
+        errorCode: "KG_SCOPE_FORBIDDEN",
+      };
+    }
 
     const result = await kg.queryScope(scopeType, scopeId, {
       entity,
