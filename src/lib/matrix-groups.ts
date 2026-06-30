@@ -25,6 +25,7 @@ import { getEnv } from "@/lib/env";
 import { db } from "@/db";
 import { agents, groupMatrixRooms, ledger, type ChatMode } from "@/db/schema";
 import { provisionMatrixUser } from "@/lib/matrix-admin";
+import { encryptSecret } from "@/lib/crypto/secret-box";
 
 /**
  * Makes an authenticated request to the Synapse Admin API.
@@ -257,7 +258,8 @@ async function ensureAgentMatrixUserId(agentId: string): Promise<string | null> 
         .update(agents)
         .set({
           matrixUserId: result.matrixUserId,
-          matrixAccessToken: result.accessToken,
+          // Encrypt the access token at rest (EVT-SEC-006).
+          matrixAccessToken: encryptSecret(result.accessToken),
         })
         .where(eq(agents.id, agent.id));
     } catch (dbError) {
