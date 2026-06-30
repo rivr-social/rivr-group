@@ -12,6 +12,7 @@
  * - `provisionMatrixUser` — registers a new Matrix user and obtains an access token.
  * - `deactivateMatrixUser` — deactivates a Matrix user account.
  * - `updateMatrixProfile` — updates display name and/or avatar for a Matrix user.
+ * - `getRoomMembers` — lists the canonical member Matrix user IDs of a room.
  * - `createDirectMessageRoom` — creates a DM room between two Matrix users.
  *
  * Dependencies:
@@ -159,6 +160,32 @@ export async function adminJoinRoom(params: {
       }),
     }
   );
+}
+
+/**
+ * Lists the current member Matrix user IDs of a room via the Synapse Admin API.
+ *
+ * This is the CANONICAL membership view (server-side, admin-token authority) —
+ * unlike any client-supplied or mirrored participant list. Used by the
+ * room-membership authorization gate to verify that a caller is an actual
+ * member of a direct room before letting them force-join others (EVT-SEC-001).
+ *
+ * @param roomId - The Matrix room ID (must start with `!`)
+ * @returns The list of joined/known member Matrix user IDs, or `[]` on an
+ *          unexpected response shape.
+ * @throws Error if the roomId is malformed or the admin API call fails.
+ */
+export async function getRoomMembers(roomId: string): Promise<string[]> {
+  if (!roomId.startsWith("!")) {
+    throw new Error(`Invalid Matrix roomId: ${roomId}`);
+  }
+  const result = await synapseAdminRequest(
+    `/_synapse/admin/v1/rooms/${encodeURIComponent(roomId)}/members`,
+    { method: "GET" },
+  );
+  const members = (result?.members as unknown) ?? [];
+  if (!Array.isArray(members)) return [];
+  return members.filter((m): m is string => typeof m === "string");
 }
 
 /**

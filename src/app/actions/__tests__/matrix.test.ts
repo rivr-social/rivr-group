@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { withTestTransaction } from "@/test/db";
-import { createTestAgent, createTestGroup, createTestResource, createTestLedgerEntry } from "@/test/fixtures";
+import { createTestAgent, createTestGroup, createTestResource, createTestLedgerEntry, createMembership } from "@/test/fixtures";
 import { mockAuthSession, mockUnauthenticated } from "@/test/auth-helpers";
 import { agents, groupMatrixRooms } from "@/db/schema";
 import type { VerbType, NewLedgerEntry } from "@/db/schema";
@@ -38,11 +38,12 @@ vi.mock("@/lib/matrix-admin", () => ({
     accessToken: "syt_test_token",
   }),
   adminJoinRoom: vi.fn().mockResolvedValue(undefined),
+  getRoomMembers: vi.fn().mockResolvedValue([]),
 }));
 
 // Import AFTER all mocks
 import { auth } from "@/auth";
-import { provisionMatrixUser, adminJoinRoom } from "@/lib/matrix-admin";
+import { provisionMatrixUser, adminJoinRoom, getRoomMembers } from "@/lib/matrix-admin";
 import {
   getMatrixCredentials,
   getDmRoomForUser,
@@ -218,6 +219,12 @@ describe("matrix actions", () => {
   // ===========================================================================
 
   describe("ensureUserJoinedRoom", () => {
+    beforeEach(() => {
+      // Default: caller is NOT a member of the room unless a test says so.
+      vi.mocked(getRoomMembers).mockReset().mockResolvedValue([]);
+      vi.mocked(adminJoinRoom).mockReset().mockResolvedValue(undefined);
+    });
+
     it("does nothing when not authenticated", () =>
       withTestTransaction(async () => {
         vi.mocked(auth).mockResolvedValue(mockUnauthenticated());
@@ -244,26 +251,111 @@ describe("matrix actions", () => {
         expect(vi.mocked(adminJoinRoom)).not.toHaveBeenCalled();
       }));
 
-    it("calls adminJoinRoom with valid ids", () =>
+    it("force-joins the target when the caller is a member of the (direct) room", () =>
       withTestTransaction(async (db) => {
-        const user = await createTestAgent(db);
+        const user = await createTestAgent(db, {
+          matrixUserId: "@me:matrix.local",
+          matrixAccessToken: "syt_me",
+        });
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        // Canonical Synapse membership includes the caller.
+        vi.mocked(getRoomMembers).mockResolvedValue([
+          "@me:matrix.local",
+          "@other:matrix.local",
+        ]);
 
-        await ensureUserJoinedRoom("@user:matrix.local", "!room:matrix.local");
+        await ensureUserJoinedRoom("@other:matrix.local", "!room:matrix.local");
         expect(vi.mocked(adminJoinRoom)).toHaveBeenCalledWith({
-          userId: "@user:matrix.local",
+          userId: "@other:matrix.local",
           roomId: "!room:matrix.local",
         });
       }));
 
+    it("EVT-SEC-001: does NOT force-join when the caller is not a member of the room", () =>
+      withTestTransaction(async (db) => {
+        const attacker = await createTestAgent(db, {
+          matrixUserId: "@attacker:matrix.local",
+          matrixAccessToken: "syt_attacker",
+        });
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(attacker.id));
+        // The attacker is NOT among the room's canonical members.
+        vi.mocked(getRoomMembers).mockResolvedValue([
+          "@victimA:matrix.local",
+          "@victimB:matrix.local",
+        ]);
+
+        await ensureUserJoinedRoom("@victimC:matrix.local", "!privateroom:matrix.local");
+        expect(vi.mocked(adminJoinRoom)).not.toHaveBeenCalled();
+      }));
+
+    it("EVT-SEC-001: does NOT force-join when the caller has no Matrix identity", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db); // no matrixUserId provisioned
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getRoomMembers).mockResolvedValue(["@anyone:matrix.local"]);
+
+        await ensureUserJoinedRoom("@victim:matrix.local", "!room:matrix.local");
+        expect(vi.mocked(adminJoinRoom)).not.toHaveBeenCalled();
+      }));
+
+    it("EVT-SEC-001: allows a group admin to force-join a user into the group's room", () =>
+      withTestTransaction(async (db) => {
+        const admin = await createTestAgent(db, {
+          matrixUserId: "@admin:matrix.local",
+          matrixAccessToken: "syt_admin",
+        });
+        const group = await createTestGroup(db);
+        await createMembership(db, admin.id, group.id, "admin");
+        await db.insert(groupMatrixRooms).values({
+          groupAgentId: group.id,
+          matrixRoomId: "!grouproom:matrix.local",
+          chatMode: "both",
+        });
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(admin.id));
+
+        await ensureUserJoinedRoom("@newmember:matrix.local", "!grouproom:matrix.local");
+        expect(vi.mocked(adminJoinRoom)).toHaveBeenCalledWith({
+          userId: "@newmember:matrix.local",
+          roomId: "!grouproom:matrix.local",
+        });
+        // Group authority comes from the ledger, not Synapse membership.
+        expect(vi.mocked(getRoomMembers)).not.toHaveBeenCalled();
+      }));
+
+    it("EVT-SEC-001: does NOT force-join when a non-admin targets a group room", () =>
+      withTestTransaction(async (db) => {
+        const member = await createTestAgent(db, {
+          matrixUserId: "@member:matrix.local",
+          matrixAccessToken: "syt_member",
+        });
+        const group = await createTestGroup(db);
+        await createMembership(db, member.id, group.id, "member");
+        await db.insert(groupMatrixRooms).values({
+          groupAgentId: group.id,
+          matrixRoomId: "!grouproom2:matrix.local",
+          chatMode: "both",
+        });
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(member.id));
+
+        await ensureUserJoinedRoom("@victim:matrix.local", "!grouproom2:matrix.local");
+        expect(vi.mocked(adminJoinRoom)).not.toHaveBeenCalled();
+      }));
+
     it("does not throw when adminJoinRoom fails", () =>
       withTestTransaction(async (db) => {
-        const user = await createTestAgent(db);
+        const user = await createTestAgent(db, {
+          matrixUserId: "@me:matrix.local",
+          matrixAccessToken: "syt_me",
+        });
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getRoomMembers).mockResolvedValue([
+          "@me:matrix.local",
+          "@other:matrix.local",
+        ]);
         vi.mocked(adminJoinRoom).mockRejectedValueOnce(new Error("Room not found"));
 
         // Should not throw
-        await ensureUserJoinedRoom("@user:matrix.local", "!room:matrix.local");
+        await ensureUserJoinedRoom("@other:matrix.local", "!room:matrix.local");
       }));
   });
 
