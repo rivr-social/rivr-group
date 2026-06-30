@@ -7,7 +7,6 @@ import { resolveHomeInstance } from "@/lib/federation/resolution";
 import {
   authorizeFederationRequest,
   bindAuthorizedFederationActor,
-  resolveLocalActorId,
 } from "@/lib/federation-auth";
 import { runWithFederationExecutionContext } from "@/lib/federation/execution-context";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation/domain-events";
@@ -217,7 +216,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const actorBinding = bindAuthorizedFederationActor(authorization, body.actorId);
+    // Bind the request to a verified, pre-mapped actor. For peer-secret auth
+    // this resolves the body-supplied id to THIS instance's local agent id via
+    // a pre-existing federation_entity_map row (handling both id directions) and
+    // REJECTS when no binding exists — the shared secret never authorizes acting
+    // as an arbitrary actor (F1). Downstream authority checks
+    // (e.g. hasGroupWriteAccess for post-as-group) then run against the
+    // receiver-local id.
+    const actorBinding = await bindAuthorizedFederationActor(authorization, body.actorId);
     if (!actorBinding.authorized || !actorBinding.actorId) {
       return NextResponse.json(
         { success: false, error: actorBinding.reason ?? "Actor authorization failed" },
@@ -225,16 +231,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Normalize the peer-supplied actor id to this instance's local agent id.
-    // Under peer-secret (server-to-server) trust the bound actorId is the
-    // FORWARDING instance's local id for the human; downstream authority checks
-    // (e.g. hasGroupWriteAccess for post-as-group) run against THIS instance's
-    // graph and must see the receiver-local id. The mapping comes from
-    // federation_entity_map (read-only — never minted here). Unmapped actors
-    // pass through unchanged.
-    const effectiveActorId = authorization.peerTrusted
-      ? await resolveLocalActorId(authorization.peerNodeId, actorBinding.actorId)
-      : actorBinding.actorId;
+    const effectiveActorId = actorBinding.actorId;
 
     return handleLegacyMutation(
       body,
