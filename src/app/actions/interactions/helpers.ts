@@ -1,7 +1,7 @@
 "use server";
 
 import { and, eq, sql } from "drizzle-orm";
-import { auth } from "@/auth";
+import { getSession } from "@/lib/auth/get-session";
 import { db } from "@/db";
 import { agents, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
@@ -28,7 +28,7 @@ export async function getCurrentUserId() {
     return federationContext.actorId;
   }
 
-  const session = await auth();
+  const session = await getSession();
   if (!session?.user?.id) {
     return null;
   }
