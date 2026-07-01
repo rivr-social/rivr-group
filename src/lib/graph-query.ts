@@ -12,7 +12,7 @@
  * orchestration layer over existing query functions.
  */
 
-import { auth } from "@/auth";
+import { getAuthenticatedActorId } from "@/lib/server-auth";
 import { db } from "@/db";
 import { agents as agentsTable } from "@/db/schema";
 import type { Agent, Resource } from "@/db/schema";
@@ -106,15 +106,19 @@ export interface MultiOptions {
 // ─── Auth Resolution ─────────────────────────────────────────────────────────
 
 async function resolveAuth(mode: AuthMode): Promise<string | null> {
+  // Sovereign-aware viewer resolution: honors BOTH a local NextAuth session and
+  // the federated `rivr_remote_viewer` cookie (via getAuthenticatedActor), which
+  // is how pages resolve the viewer. Using plain auth() here silently threw
+  // "Unauthorized" for federated viewers/admins on sovereign instances, so
+  // required-auth graph actions (e.g. the subgroups list) returned empty even
+  // though the viewer is authorized.
   if (mode === "required") {
-    const session = await auth();
-    const actorId = session?.user?.id;
+    const actorId = await getAuthenticatedActorId();
     if (!actorId) throw new Error("Unauthorized");
     return actorId;
   }
   try {
-    const session = await auth();
-    return session?.user?.id ?? null;
+    return await getAuthenticatedActorId();
   } catch {
     return null;
   }
