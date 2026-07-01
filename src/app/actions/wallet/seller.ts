@@ -15,6 +15,7 @@ import {
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { getCurrentUserId, resolveManagedWalletTarget } from './helpers';
 import { isPositiveInteger } from './types';
+import { getExternalBankBalance, getTreasuryFinancialAccountBalance } from '@/lib/stripe-treasury';
 
 export async function releaseTestConnectBalanceToWalletInternal(
   currentUserId: string,
@@ -438,4 +439,47 @@ export async function requestPayoutAction(
   }).catch(() => {});
 
   return result.data ?? { success: true };
+}
+
+/**
+ * Read-only balances for an owner's payments account beyond the Connect balance:
+ * the Treasury FinancialAccount cash balance and the linked EXTERNAL bank balance
+ * (Financial Connections). Both degrade gracefully — returns `null` for each when
+ * not enabled / not linked — so the treasury + wallet views can render them
+ * without breaking before Stripe Treasury/Financial-Connections are live.
+ */
+export async function getPaymentBalancesAction(ownerId?: string): Promise<{
+  success: boolean;
+  externalBank?: { current: Record<string, number>; available: Record<string, number>; asOf: number | null } | null;
+  treasury?: { cash: Record<string, number> } | null;
+  error?: string;
+}> {
+  const currentUserId = await getCurrentUserId();
+  if (!currentUserId) return { success: false, error: 'You must be logged in.' };
+  try {
+    const target = await resolveManagedWalletTarget(currentUserId, ownerId);
+    const [wallet] = await db
+      .select({ metadata: wallets.metadata })
+      .from(wallets)
+      .where(eq(wallets.id, target.walletId))
+      .limit(1);
+    const meta = (wallet?.metadata ?? {}) as Record<string, unknown>;
+    const connectAccountId = typeof meta.stripeConnectAccountId === 'string' ? meta.stripeConnectAccountId : undefined;
+    const faId = typeof meta.stripeFinancialAccountId === 'string' ? meta.stripeFinancialAccountId : undefined;
+    const fcId = typeof meta.financialConnectionsAccountId === 'string' ? meta.financialConnectionsAccountId : undefined;
+    if (!connectAccountId) return { success: true, externalBank: null, treasury: null };
+
+    const [externalBank, treasuryBalance] = await Promise.all([
+      fcId ? getExternalBankBalance(connectAccountId, fcId).catch(() => null) : Promise.resolve(null),
+      faId ? getTreasuryFinancialAccountBalance(connectAccountId, faId).catch(() => null) : Promise.resolve(null),
+    ]);
+
+    return {
+      success: true,
+      externalBank,
+      treasury: treasuryBalance ? { cash: treasuryBalance.cash } : null,
+    };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to load balances.' };
+  }
 }

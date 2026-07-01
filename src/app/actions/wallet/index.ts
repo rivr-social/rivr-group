@@ -26,6 +26,7 @@ export {
   setupConnectAccountAction,
   getConnectStatusAction,
   getConnectBalanceAction,
+  getPaymentBalancesAction,
   requestPayoutAction,
   releaseTestConnectBalanceToWalletAction,
   releaseTestConnectBalanceToWalletInternal,
