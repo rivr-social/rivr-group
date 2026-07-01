@@ -977,7 +977,11 @@ function parseTabVisibility(raw: unknown): TabVisibilitySettings {
   return normalizeTabVisibility(raw);
 }
 
-export async function isGroupAdmin(userId: string, groupId: string): Promise<boolean> {
+/**
+ * Direct admin check for a SINGLE group: an active admin/moderator ledger role,
+ * or `creatorId`/`adminIds` in metadata. Does NOT consider ancestor groups.
+ */
+async function isDirectGroupAdmin(userId: string, groupId: string): Promise<boolean> {
   const now = new Date();
   const [adminEntry] = await db
     .select({ id: ledger.id })
@@ -1012,6 +1016,33 @@ export async function isGroupAdmin(userId: string, groupId: string): Promise<boo
 
   if (Array.isArray(metadata.adminIds)) {
     return metadata.adminIds.some((id: unknown) => typeof id === "string" && id === userId);
+  }
+
+  return false;
+}
+
+/**
+ * Admin authorization on a group. Admin status CASCADES DOWN the group
+ * hierarchy: a direct admin of any ancestor group (parent, grandparent, …)
+ * administers this subgroup too. Ancestors are read from the group's
+ * `path_ids` chain (maintained on subgroup creation), so a Spirit admin
+ * automatically administers every circle nested under Spirit.
+ */
+export async function isGroupAdmin(userId: string, groupId: string): Promise<boolean> {
+  if (await isDirectGroupAdmin(userId, groupId)) return true;
+
+  // Cascade: inherit admin from any ancestor group the user directly administers.
+  const [row] = await db
+    .select({ pathIds: agents.pathIds })
+    .from(agents)
+    .where(and(eq(agents.id, groupId), isNull(agents.deletedAt)))
+    .limit(1);
+
+  const ancestors = Array.isArray(row?.pathIds) ? row.pathIds : [];
+  for (const ancestorId of ancestors) {
+    if (typeof ancestorId === "string" && ancestorId && ancestorId !== groupId) {
+      if (await isDirectGroupAdmin(userId, ancestorId)) return true;
+    }
   }
 
   return false;
