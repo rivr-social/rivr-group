@@ -42,6 +42,9 @@ interface ProjectDisplay {
   priority: string
   deadline: string | null
   groupId: string
+  /** The subgroup/circle that owns this project, when it belongs to one (vs. the parent group directly). */
+  subgroupId?: string
+  subgroupName?: string
 }
 
 interface JobTask {
@@ -167,6 +170,10 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
+  // Subgroup (circle) filter: "all" shows this group's projects plus every
+  // subgroup's; a specific id narrows to that subgroup's projects.
+  const [subgroupFilter, setSubgroupFilter] = useState<string>("all")
+  const [subgroups, setSubgroups] = useState<Array<{ id: string; name: string }>>([])
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
 
   // ---------- Fetch projects & applied jobs on mount ----------
@@ -199,6 +206,36 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
         for (const r of projectResources) {
           if (!seen.has(r.id)) { seen.add(r.id); allProjects.push(mapResourceToProject(r, groupId)) }
         }
+
+        // Aggregate projects owned by this group's subgroups (circles), tagged
+        // with their owning subgroup so the Jobs tab can filter by all/each.
+        const subgroupAgents = children.filter((a) => a.type === "organization")
+        setSubgroups(subgroupAgents.map((s) => ({ id: s.id, name: s.name })))
+        const perSubgroup = await Promise.all(
+          subgroupAgents.map(async (sg) => {
+            const [sgChildren, sgResources] = await Promise.all([
+              fetchAgentChildren(sg.id).catch(() => []),
+              fetchResourcesByOwner(sg.id).catch(() => []),
+            ])
+            const list: ProjectDisplay[] = []
+            for (const a of sgChildren.filter((x) => x.type === "project")) {
+              list.push({ ...mapAgentToProject(a, sg.id), subgroupId: sg.id, subgroupName: sg.name })
+            }
+            for (const r of sgResources.filter(
+              (x) => x.type === "project" || (x.metadata as Record<string, unknown>)?.resourceKind === "project",
+            )) {
+              list.push({ ...mapResourceToProject(r, sg.id), subgroupId: sg.id, subgroupName: sg.name })
+            }
+            return list
+          }),
+        )
+        for (const list of perSubgroup) {
+          for (const p of list) {
+            if (!seen.has(p.id)) { seen.add(p.id); allProjects.push(p) }
+          }
+        }
+
+        if (cancelled) return
         setProjects(allProjects)
         setAppliedJobIds(new Set(appliedIds))
       } catch (err) {
@@ -306,7 +343,8 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
       project.description.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesStatus = statusFilter === "all" || project.status === statusFilter
     const matchesCategory = categoryFilter === "all" || project.category === categoryFilter
-    return matchesSearch && matchesStatus && matchesCategory
+    const matchesSubgroup = subgroupFilter === "all" || project.subgroupId === subgroupFilter
+    return matchesSearch && matchesStatus && matchesCategory && matchesSubgroup
   })
 
   const categories = [...new Set(projects.map((p) => p.category))]
@@ -408,6 +446,21 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
             ))}
           </SelectContent>
         </Select>
+        {subgroups.length > 0 && (
+          <Select value={subgroupFilter} onValueChange={setSubgroupFilter}>
+            <SelectTrigger className="w-full sm:w-[200px]">
+              <SelectValue placeholder="Filter by subgroup" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All subgroups</SelectItem>
+              {subgroups.map((sg) => (
+                <SelectItem key={sg.id} value={sg.id}>
+                  {sg.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       {/* Loading state */}
@@ -466,6 +519,11 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
                               <Badge className={getStatusColor(project.status)}>
                                 {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
                               </Badge>
+                              {project.subgroupName && (
+                                <Badge variant="outline" className="text-xs">
+                                  {project.subgroupName}
+                                </Badge>
+                              )}
                             </div>
                             <CardDescription className="mt-1 line-clamp-2">{project.description}</CardDescription>
                           </div>
