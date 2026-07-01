@@ -73,6 +73,9 @@ export function GroupSubgroups({ parentGroupId, isCreator, isAdmin }: GroupSubgr
       tab: "group",
       parent: parentGroupId,
     })
+    if (parentGroup?.type === "organization") {
+      params.set("groupType", "org")
+    }
     if (newGroupName.trim()) params.set("name", newGroupName.trim())
     if (newGroupDescription.trim()) params.set("description", newGroupDescription.trim())
     setIsAddingGroup(false)
