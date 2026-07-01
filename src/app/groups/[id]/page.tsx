@@ -24,6 +24,7 @@ import { GroupTabsClient } from "@/components/group-tabs-client"
 import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
+import { isGroupAdmin as isGroupAdminCascade } from "@/app/actions/group-admin"
 import { calculateTotalStakes, getMemberStakesForGroup } from "@/lib/queries/stakes"
 import { getRecordedContributions } from "@/app/actions/interactions"
 import { getGroupMembersByClass } from "@/app/actions/wallet/net-allocation"
@@ -62,10 +63,10 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const canonicalGroupType = rawGroupType === "org" ? "organization" : (rawGroupType || "basic")
   const ownerId = typeof groupMeta.creatorId === "string" ? groupMeta.creatorId : undefined
   const currentUserId = session ?? null
-  const isGroupAdmin = !!(currentUserId && (
-    groupMeta.creatorId === currentUserId ||
-    (Array.isArray(groupMeta.adminIds) && (groupMeta.adminIds as unknown[]).includes(currentUserId))
-  ))
+  // Use the canonical admin gate so parent-group admin status cascades to
+  // subgroups (a Spirit admin administers its circles) rather than an inline
+  // per-group creatorId/adminIds check.
+  const isGroupAdmin = currentUserId ? await isGroupAdminCascade(currentUserId, id) : false
   const isMember = !!(currentUserId && members.some((m) => m.id === currentUserId))
   const membershipPlans = readGroupMembershipPlans(groupMeta)
   // Resolve the viewer's current group-subscription plan (if any) so the About
