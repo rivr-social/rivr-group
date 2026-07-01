@@ -20,6 +20,8 @@ describe("route-access", () => {
       "/search",
       "/calendar",
       "/manifest.webmanifest",
+      "/llms.html",
+      "/llms.txt",
     ];
 
     it.each(EXACT_PATHS)("marks %s as public page route", (path) => {
@@ -268,6 +270,9 @@ describe("route-access", () => {
       const EXPECTED_API_PREFIXES = [
         "/api/auth",
         "/api/billing/trial-reminders",
+        "/api/cron/federation-deliver",
+        "/api/cron/federation-sync",
+        "/api/cron/google-calendar-sync",
         "/api/health",
         "/api/federation",
         "/api/murmurations",
@@ -282,7 +287,10 @@ describe("route-access", () => {
         "/api/map-diagnostics",
         "/api/locations/suggest",
         "/.well-known/matrix",
+        "/.well-known/openid-configuration",
         "/.well-known/universal-manifest.json",
+        "/.well-known/mcp",
+        "/api/mcp",
       ];
       expect(PUBLIC_API_PREFIXES).toEqual(EXPECTED_API_PREFIXES);
     });
