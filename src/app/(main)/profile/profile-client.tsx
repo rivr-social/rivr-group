@@ -33,6 +33,7 @@ import {
   getMyWalletsAction,
   getTransactionHistoryAction,
   getConnectBalanceAction,
+  getPaymentBalancesAction,
   getConnectStatusAction,
   releaseTestConnectBalanceToWalletAction,
   requestPayoutAction,
@@ -84,6 +85,7 @@ function ConnectBalanceSection() {
     typeof process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY === "string" &&
     process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.startsWith("pk_test_");
   const [connectBalance, setConnectBalance] = useState<{ availableCents: number; pendingCents: number } | null>(null);
+  const [extraBalances, setExtraBalances] = useState<{ treasuryUsdCents: number | null; externalBankUsdCents: number | null } | null>(null);
   const [connectStatus, setConnectStatus] = useState<{
     hasAccount: boolean;
     chargesEnabled: boolean;
@@ -111,6 +113,13 @@ function ConnectBalanceSection() {
         getConnectBalanceAction().then((balRes) => {
           if (cancelled || !balRes.success || !balRes.balance) return;
           setConnectBalance(balRes.balance);
+        });
+        getPaymentBalancesAction().then((extra) => {
+          if (cancelled || !extra.success) return;
+          setExtraBalances({
+            treasuryUsdCents: extra.treasury?.cash?.usd ?? null,
+            externalBankUsdCents: extra.externalBank?.available?.usd ?? extra.externalBank?.current?.usd ?? null,
+          });
         });
       }
     });
@@ -255,6 +264,22 @@ function ConnectBalanceSection() {
             <p className="text-2xl font-semibold">${pendingDollars.toFixed(2)}</p>
           </CardContent>
         </Card>
+        {extraBalances?.treasuryUsdCents != null && (
+          <Card>
+            <CardContent className="py-4">
+              <p className="text-xs text-muted-foreground">Treasury</p>
+              <p className="text-2xl font-semibold">${(extraBalances.treasuryUsdCents / 100).toFixed(2)}</p>
+            </CardContent>
+          </Card>
+        )}
+        {extraBalances?.externalBankUsdCents != null && (
+          <Card>
+            <CardContent className="py-4">
+              <p className="text-xs text-muted-foreground">Linked bank</p>
+              <p className="text-2xl font-semibold">${(extraBalances.externalBankUsdCents / 100).toFixed(2)}</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
       <Card>
         <CardContent className="py-4 space-y-1 text-sm">
