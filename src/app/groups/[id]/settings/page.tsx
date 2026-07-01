@@ -19,7 +19,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Camera, Loader2, Pencil, Plus, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug, Eye } from "lucide-react";
+import { ArrowLeft, Bot, Camera, Loader2, Pencil, Plus, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -57,6 +57,8 @@ import type { Group as LegacyGroup } from "@/lib/types";
 import { ConnectionsForm, type GroupGoogleConnectionSummary } from "./connections/connections-form";
 import { fetchGroupGoogleConnectionAction } from "./connections/actions";
 import { ConnectorsSettingsPanel } from "@/components/connectors-settings-panel";
+import { GroupAssistantConfigCard } from "@/components/group-assistant-config-card";
+import { GroupAssistantChat } from "@/components/group-assistant-chat";
 
 /** Stable tab identifiers used in the `?tab=` query param. */
 const TAB_VALUES = {
@@ -66,6 +68,7 @@ const TAB_VALUES = {
   REQUESTS: "requests",
   TAB_VISIBILITY: "tab-visibility",
   CHAT: "chat",
+  ASSISTANT: "assistant",
   ANNOUNCEMENTS: "announcements",
   CONNECTIONS: "connections",
   MAP_MARKER: "map-marker",
@@ -782,6 +785,10 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
             <MessageSquare className="h-4 w-4" />
             Chat
           </TabsTrigger>
+          <TabsTrigger value={TAB_VALUES.ASSISTANT} className="inline-flex items-center gap-2">
+            <Bot className="h-4 w-4" />
+            Assistant
+          </TabsTrigger>
           <TabsTrigger value={TAB_VALUES.ANNOUNCEMENTS} className="inline-flex items-center gap-2">
             <Mail className="h-4 w-4" />
             Announcements
@@ -1281,6 +1288,14 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Assistant tab: configure the group's AI assistant and chat with it
+            at full admin scope. Both surfaces target the group's resolved
+            direct agent via admin-gated server actions / the chat endpoint. */}
+        <TabsContent value={TAB_VALUES.ASSISTANT} className="space-y-4">
+          <GroupAssistantConfigCard groupId={groupId} />
+          <GroupAssistantChat groupId={groupId} />
         </TabsContent>
 
         <TabsContent value="announcements" className="space-y-4">

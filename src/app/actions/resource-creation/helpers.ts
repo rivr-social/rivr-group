@@ -98,7 +98,25 @@ export async function hasGroupManageAccess(userId: string, groupId: string): Pro
     .limit(1);
 
   if (!group) return false;
-  return isGroupAdmin(userId, groupId);
+  if (await isGroupAdmin(userId, groupId)) return true;
+
+  // Delegated authority: an agent acting under an MCP delegation inherits its
+  // controller's group-admin rights. This is how a group's own agent (or an
+  // agent an admin has delegated to) manages the group on that admin's behalf —
+  // the controller is the verified human principal, the actor is who the work
+  // is attributed to. Only MCP sessions carry a controllerId, so a normal web
+  // request (no execution context) never takes this branch.
+  const context = getExecutionContext();
+  if (
+    context?.source === "mcp" &&
+    context.controllerId &&
+    context.controllerId !== userId &&
+    (await isGroupAdmin(context.controllerId, groupId))
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**

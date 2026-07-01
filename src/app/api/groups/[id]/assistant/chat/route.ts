@@ -32,6 +32,7 @@ import {
   type HistoryMessage,
 } from "@/lib/ai/native-chat";
 import { buildGroupConnectorTools } from "@/lib/connectors/assistant-tools";
+import { buildGroupActionToolset } from "@/lib/federation/group-action-tools";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -265,9 +266,34 @@ export async function POST(
   // enforces with `isGroupAdmin`. Lower tiers get a plain, tool-less completion.
   const canAct = tier === "owner" || tier === "admin";
   const connectorTools = buildGroupConnectorTools({ groupId, canAct });
+  const actionTools = buildGroupActionToolset({ groupId, canAct });
+
+  // Merge the connector toolset and the group-action toolset into one dispatch
+  // surface for the model. Both are owner/admin-only; lower tiers get neither.
+  const combinedTools = [
+    ...(connectorTools?.tools ?? []),
+    ...(actionTools?.tools ?? []),
+  ];
+  const actionToolNames = new Set((actionTools?.tools ?? []).map((tool) => tool.name));
+  const executeCombinedTool =
+    combinedTools.length > 0
+      ? async (name: string, input: Record<string, unknown>): Promise<unknown> => {
+          if (actionTools && actionToolNames.has(name)) {
+            return actionTools.executeTool(name, input);
+          }
+          if (connectorTools) {
+            return connectorTools.executeTool(name, input);
+          }
+          throw new Error(`Unknown tool "${name}".`);
+        }
+      : undefined;
 
   if (connectorTools) {
     systemPrompt += `\n\n## Connector Actions\nThis group has connectors you can operate on the operator's behalf. Use list_group_connectors first to see what is connected and which actions each provider supports. Only sync, save, publish, or send when the operator clearly asks for it; confirm recipients and content before sending email.\n`;
+  }
+
+  if (actionTools) {
+    systemPrompt += `\n\n## Group Actions\nYou can create and manage things in this group on the operator's behalf: projects (with jobs/tasks), events, offerings, and documents, plus claiming/advancing jobs and tasks. Create resources only when the operator clearly asks; confirm the key details (title, date, price) before creating anything public-facing.\n`;
   }
 
   // ---- Answer natively ----------------------------------------------------
@@ -277,8 +303,8 @@ export async function POST(
       systemPrompt,
       history: sanitizedHistory,
       message,
-      tools: connectorTools?.tools,
-      executeTool: connectorTools?.executeTool,
+      tools: combinedTools.length > 0 ? combinedTools : undefined,
+      executeTool: executeCombinedTool,
     });
 
     return NextResponse.json({

@@ -1,6 +1,8 @@
 import { auth } from "@/auth";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
 import { isPersonaOf } from "@/lib/persona";
+import { isGroupAdmin } from "@/app/actions/group-admin";
+import { verifyPackedPayload } from "@/lib/federation-remote-session";
 import { runWithMcpExecutionContext } from "@/lib/federation/execution-context";
 import {
   getMcpToolDefinition,
@@ -25,6 +27,24 @@ function secureEqualStrings(a: string, b: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Shape of a personal scoped MCP token (a signed `rivr_mcp_token` payload). */
+interface ScopedMcpTokenPayload {
+  type?: string;
+  actorId?: string;
+  controllerId?: string;
+  actorType?: string;
+  expiresAt?: string;
+  scopes?: string[];
+}
+
+/** A scoped token is expired when it has no valid future `expiresAt`. */
+function isScopedTokenExpired(expiresAt?: string): boolean {
+  if (!expiresAt) return true;
+  const parsed = Date.parse(expiresAt);
+  if (!Number.isFinite(parsed)) return true;
+  return parsed <= Date.now();
 }
 
 type JsonRpcId = string | number | null;
@@ -100,40 +120,80 @@ async function authorizeMcpRequest(
     return null;
   }
 
-  const configuredToken = process.env.AIAGENT_MCP_TOKEN?.trim() || "";
   const providedToken = getBearerToken(request) ?? getQueryToken(request);
-  // Constant-time compare (AUTH-SEC-006): the high-value static
-  // AIAGENT_MCP_TOKEN must not be probed via a byte-wise timing side-channel.
-  if (!configuredToken || !providedToken || !secureEqualStrings(providedToken, configuredToken)) {
-    return null;
-  }
+  if (!providedToken) return null;
 
   const config = getInstanceConfig();
   const primaryAgentId = config.primaryAgentId;
-  if (!primaryAgentId) {
-    return null;
-  }
 
-  if (!requestedActorId || requestedActorId === primaryAgentId) {
+  // (1) Static instance token → act as the primary group agent (autobot).
+  // Constant-time compare (AUTH-SEC-006): the high-value static
+  // AIAGENT_MCP_TOKEN must not be probed via a byte-wise timing side-channel.
+  const configuredToken = process.env.AIAGENT_MCP_TOKEN?.trim() || "";
+  if (configuredToken && secureEqualStrings(providedToken, configuredToken)) {
+    if (!primaryAgentId) return null;
+    if (!requestedActorId || requestedActorId === primaryAgentId) {
+      return {
+        actorId: primaryAgentId,
+        controllerId: primaryAgentId,
+        actorType: "autobot",
+        authMode: "token",
+      };
+    }
+    if (!(await isPersonaOf(requestedActorId, primaryAgentId))) return null;
     return {
-      actorId: primaryAgentId,
+      actorId: requestedActorId,
       controllerId: primaryAgentId,
       actorType: "autobot",
       authMode: "token",
     };
   }
 
-  const ownedPersona = await isPersonaOf(requestedActorId, primaryAgentId);
-  if (!ownedPersona) {
-    return null;
+  // (2) Personal scoped token (delegation). The token names a verified
+  // controller (a human principal). We let that controller act AS an agent they
+  // are authorized over: a persona they own, OR a group they administer. With
+  // no explicit target we default to the instance's primary group when the
+  // controller administers it — so a group's delegated agent acts as the group,
+  // attributed to the group, carrying the controller as its authority.
+  const scoped = verifyPackedPayload<ScopedMcpTokenPayload>(providedToken);
+  if (scoped && scoped.type === "rivr_mcp_token" && !isScopedTokenExpired(scoped.expiresAt)) {
+    const controllerId = (scoped.controllerId || scoped.actorId || "").trim();
+    if (!controllerId) return null;
+
+    if (requestedActorId && requestedActorId !== controllerId) {
+      const ownsPersona = await isPersonaOf(requestedActorId, controllerId);
+      const adminsGroup = ownsPersona ? false : await isGroupAdmin(controllerId, requestedActorId);
+      if (!ownsPersona && !adminsGroup) return null;
+      return {
+        actorId: requestedActorId,
+        controllerId,
+        actorType: "autobot",
+        authMode: "token",
+      };
+    }
+
+    if (
+      primaryAgentId &&
+      primaryAgentId !== controllerId &&
+      (await isGroupAdmin(controllerId, primaryAgentId))
+    ) {
+      return {
+        actorId: primaryAgentId,
+        controllerId,
+        actorType: "autobot",
+        authMode: "token",
+      };
+    }
+
+    return {
+      actorId: controllerId,
+      controllerId,
+      actorType: "human",
+      authMode: "token",
+    };
   }
 
-  return {
-    actorId: requestedActorId,
-    controllerId: primaryAgentId,
-    actorType: "autobot",
-    authMode: "token",
-  };
+  return null;
 }
 
 function asObject(value: unknown): Record<string, unknown> {

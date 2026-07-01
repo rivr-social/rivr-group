@@ -12,6 +12,9 @@ import { AppProvider } from "@/contexts/app-context";
 import { UserProvider } from "@/contexts/user-context";
 import { RemoteViewerProvider } from "@/contexts/remote-viewer-context";
 import { auth } from "@/auth";
+import { getInstanceConfig } from "@/lib/federation/instance-config";
+import { isGroupAdmin } from "@/app/actions/group-admin";
+import { GroupAssistantBubble } from "@/components/group-assistant-bubble";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -32,6 +35,15 @@ export default async function RootLayout({
 }>) {
   const session = await auth();
 
+  // The admin assistant bubble is rendered app-wide, but only for the primary
+  // group's owner/admins. The chat route re-checks the tier server-side; this
+  // gate just avoids showing the launcher to members/visitors/anonymous.
+  const primaryAgentId = getInstanceConfig().primaryAgentId;
+  const viewerId = session?.user?.id ?? null;
+  const showAssistantBubble = Boolean(
+    viewerId && primaryAgentId && (await isGroupAdmin(viewerId, primaryAgentId)),
+  );
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background">
@@ -46,6 +58,9 @@ export default async function RootLayout({
                     <main className="pt-16 pb-16 md:pb-0">{children}</main>
                   </AuthGuard>
                   <Toaster />
+                  {showAssistantBubble && primaryAgentId ? (
+                    <GroupAssistantBubble groupId={primaryAgentId} />
+                  ) : null}
                 </AppProvider>
               </UserProvider>
             </RemoteViewerProvider>

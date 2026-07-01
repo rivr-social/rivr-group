@@ -8,6 +8,7 @@ import * as kg from "@/lib/kg/autobot-kg-client";
 import { resolveHomeInstance } from "@/lib/federation/resolution";
 import { getProvenanceLog } from "@/lib/federation/mcp-provenance";
 import { serializeAgent } from "@/lib/graph-serializers";
+import { GROUP_ACTION_TOOLS } from "@/lib/federation/group-action-tools";
 import { and, eq, isNull } from "drizzle-orm";
 
 export type McpToolCallContext = {
@@ -445,6 +446,22 @@ export const MCP_TOOL_DEFINITIONS: McpToolDefinition[] = [
       return { success: true, entries, count: entries.length };
     },
   },
+  // Group action tools (create projects/events/offerings/documents, manage
+  // tasks/jobs) shared with the admin assistant. Each resolves the acting
+  // principal from the MCP execution context and targets the primary group.
+  ...GROUP_ACTION_TOOLS.map(
+    (tool): McpToolDefinition => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      enabledFor: ["session", "token"],
+      handler: (args) => {
+        const groupId = getInstanceConfig().primaryAgentId;
+        if (!groupId) throw new Error("This instance has no primary group configured.");
+        return tool.run(args, { groupId });
+      },
+    }),
+  ),
 ];
 
 export function listMcpToolsForMode(mode: "session" | "token") {

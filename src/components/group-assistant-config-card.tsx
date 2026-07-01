@@ -1,0 +1,327 @@
+"use client";
+
+/**
+ * GroupAssistantConfigCard — the admin-facing configuration surface for a
+ * sovereign group's AI assistant.
+ *
+ * This is the group-app analogue of the person app's AssistantSettingsPanel,
+ * trimmed to what the group assistant backend actually exposes:
+ *   - which model the assistant runs (selectedModel),
+ *   - an operator-authored persona/"soul" prompt (customSoulMd),
+ *   - the KG scope ids the assistant may draw context from (includedKgScopeIds),
+ *   - and whether the assistant is exposed to non-admin visitors
+ *     (publicChatEnabled).
+ *
+ * It loads via `fetchGroupAssistantConfig` and persists via
+ * `updateGroupAssistantConfig` — both admin-gated server actions that target
+ * the group's resolved direct agent, so the settings always attach to whichever
+ * agent actually runs the assistant (a persona or the group agent itself).
+ *
+ * This card is only ever rendered inside `/groups/[id]/settings`, which
+ * redirects non-admins before mount, so it inherits that admin gate.
+ */
+
+import { useCallback, useEffect, useState } from "react";
+import { Bot, Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/use-toast";
+import {
+  fetchGroupAssistantConfig,
+  updateGroupAssistantConfig,
+  type AssistantConfigFetchResult,
+} from "@/app/actions/group-assistant-config";
+import { ALLOWED_ASSISTANT_MODELS } from "@/app/actions/group-assistant-config-types";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Human-readable labels for the allowed model selectors. */
+const MODEL_LABELS: Record<string, string> = {
+  "anthropic/claude-sonnet-4-6": "Claude Sonnet 4.6 (recommended)",
+  "anthropic/claude-opus-4-6": "Claude Opus 4.6 (most capable)",
+  "openai/gpt-4o": "GPT-4o",
+  "gemini/gemini-2.0-flash": "Gemini 2.0 Flash",
+  "local/ollama": "Local (Ollama)",
+};
+
+/** Mirrors the server-side cap in `updateGroupAssistantConfig`. */
+const MAX_SOUL_MD_LENGTH = 8000;
+
+type AssistantConfig = NonNullable<AssistantConfigFetchResult["config"]>;
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
+  const { toast } = useToast();
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Resolved-agent facts (read-only in this UI).
+  const [isPersona, setIsPersona] = useState(false);
+  const [hasAutobotPersona, setHasAutobotPersona] = useState(false);
+
+  // Editable settings.
+  const [selectedModel, setSelectedModel] = useState<string>(
+    ALLOWED_ASSISTANT_MODELS[0],
+  );
+  const [customSoulMd, setCustomSoulMd] = useState("");
+  const [scopeIdsText, setScopeIdsText] = useState("");
+  const [publicChatEnabled, setPublicChatEnabled] = useState(false);
+
+  const applyConfig = useCallback((config: AssistantConfig) => {
+    setIsPersona(config.isPersona);
+    setHasAutobotPersona(config.hasAutobotPersona);
+    setSelectedModel(config.selectedModel);
+    setCustomSoulMd(config.customSoulMd);
+    setScopeIdsText(config.includedKgScopeIds.join("\n"));
+    setPublicChatEnabled(config.publicChatEnabled);
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const result = await fetchGroupAssistantConfig(groupId);
+    if (!result.success || !result.config) {
+      setError(result.error ?? "Unable to load assistant configuration.");
+      setLoading(false);
+      return;
+    }
+    applyConfig(result.config);
+    setLoading(false);
+  }, [groupId, applyConfig]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const onSave = useCallback(async () => {
+    if (customSoulMd.length > MAX_SOUL_MD_LENGTH) {
+      toast({
+        title: "Instructions too long",
+        description: `Operator instructions must be under ${MAX_SOUL_MD_LENGTH} characters.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Parse the KG-scope editor: one id per line, trimmed, de-duplicated.
+    const includedKgScopeIds = Array.from(
+      new Set(
+        scopeIdsText
+          .split(/[\n,]/)
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    );
+
+    setSaving(true);
+    const result = await updateGroupAssistantConfig({
+      groupId,
+      selectedModel,
+      customSoulMd: customSoulMd.trim(),
+      includedKgScopeIds,
+      publicChatEnabled,
+    });
+    setSaving(false);
+
+    if (!result.success) {
+      toast({
+        title: "Could not save assistant settings",
+        description: result.error,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({ title: "Assistant settings saved" });
+  }, [
+    groupId,
+    selectedModel,
+    customSoulMd,
+    scopeIdsText,
+    publicChatEnabled,
+    toast,
+  ]);
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Assistant unavailable</CardTitle>
+          <CardDescription>{error}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant="outline" onClick={() => void load()}>
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center gap-2">
+            <div className="rounded-full bg-primary/10 p-1.5">
+              <Bot className="h-4 w-4 text-primary" />
+            </div>
+            <div>
+              <CardTitle className="text-sm font-medium">
+                Group AI assistant
+              </CardTitle>
+              <CardDescription>
+                Configure the AI assistant that represents this group in chat.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary" className="text-[10px]">
+              {isPersona ? "Persona-backed" : "Runs as the group agent"}
+            </Badge>
+            {!hasAutobotPersona && (
+              <Badge variant="outline" className="text-[10px]">
+                No dedicated persona — using the group agent identity
+              </Badge>
+            )}
+          </div>
+
+          {/* Model selector */}
+          <div className="grid gap-2">
+            <Label htmlFor="assistant-model">Model</Label>
+            <Select value={selectedModel} onValueChange={setSelectedModel}>
+              <SelectTrigger id="assistant-model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ALLOWED_ASSISTANT_MODELS.map((model) => (
+                  <SelectItem key={model} value={model}>
+                    {MODEL_LABELS[model] ?? model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              The model powering assistant replies. Anthropic models use this
+              instance&apos;s Claude credential.
+            </p>
+          </div>
+
+          {/* Operator soul prompt */}
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="assistant-soul">Operator instructions</Label>
+              <span className="text-[10px] text-muted-foreground">
+                {customSoulMd.length}/{MAX_SOUL_MD_LENGTH}
+              </span>
+            </div>
+            <Textarea
+              id="assistant-soul"
+              value={customSoulMd}
+              onChange={(event) => setCustomSoulMd(event.target.value)}
+              maxLength={MAX_SOUL_MD_LENGTH}
+              rows={6}
+              placeholder="Describe the assistant's persona, tone, and any group-specific guidance. This is prepended to the assistant's system prompt."
+            />
+            <p className="text-xs text-muted-foreground">
+              Persona and tone guidance layered on top of the built-in group
+              assistant behavior. Leave blank to use the default persona.
+            </p>
+          </div>
+
+          {/* KG scope ids */}
+          <div className="grid gap-2">
+            <Label htmlFor="assistant-kg-scopes">Knowledge graph scopes</Label>
+            <Textarea
+              id="assistant-kg-scopes"
+              value={scopeIdsText}
+              onChange={(event) => setScopeIdsText(event.target.value)}
+              rows={3}
+              placeholder="One KG scope id per line. Leave blank to use the group's default scope."
+              className="font-mono text-xs"
+            />
+            <p className="text-xs text-muted-foreground">
+              Extra knowledge-graph scope ids the assistant may pull context
+              from, one per line. Visitor-facing chat is always limited to the
+              group&apos;s public scope regardless of this list.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Public exposure */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium">Public chat</CardTitle>
+          <CardDescription>
+            When enabled, non-admin visitors can chat with the assistant. Their
+            replies are rate-limited and scoped to public knowledge only — admin
+            and member-only information is never surfaced to visitors.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="assistant-public"
+              checked={publicChatEnabled}
+              onCheckedChange={setPublicChatEnabled}
+            />
+            <Label htmlFor="assistant-public" className="cursor-pointer">
+              Allow visitors to chat with the assistant
+            </Label>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Button type="button" onClick={() => void onSave()} disabled={saving}>
+        {saving ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Saving...
+          </>
+        ) : (
+          "Save Assistant Settings"
+        )}
+      </Button>
+    </div>
+  );
+}
+
+export default GroupAssistantConfigCard;
