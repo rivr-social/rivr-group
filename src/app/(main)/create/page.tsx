@@ -219,6 +219,10 @@ export default function CreatePage() {
   const [groupPassword, setGroupPassword] = useState("")
 
   const liveGroups = useMemo(() => homeData.groups, [homeData.groups])
+  const selectedParentGroup = useMemo(
+    () => (groupParent !== "none" ? liveGroups.find((group) => group.id === groupParent) ?? null : null),
+    [groupParent, liveGroups]
+  )
   const liveRings = useMemo(
     () => liveGroups.filter((group) => group.type === GroupType.Ring),
     [liveGroups]
@@ -3170,7 +3174,7 @@ export default function CreatePage() {
                   />
                 </div>
 
-                {/* Show Parent Group for types that can nest. Organization subgroups inherit org-grade capabilities. */}
+                {/* Show Parent Group for types that can nest. Organization parents promote subgroups to org-grade. */}
                 {(groupType === "basic" || groupType === "family" || groupType === "org") && (
                   /* Conditional rendering: parent group options are limited to compatible group types. */
                   <div className="space-y-2 col-span-2">
@@ -3218,9 +3222,9 @@ export default function CreatePage() {
                         }
                       </SelectContent>
                     </Select>
-                    {groupType === "org" && (
+                    {selectedParentGroup?.type === GroupType.Organization && (
                       <p className="text-xs text-muted-foreground">
-                        Subgroups nested under an organization keep the organization feature set.
+                        This parent is an organization, so the subgroup will keep the organization feature set.
                       </p>
                     )}
                   </div>
