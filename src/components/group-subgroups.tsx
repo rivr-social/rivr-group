@@ -45,11 +45,14 @@ export function GroupSubgroups({ parentGroupId, isCreator, isAdmin }: GroupSubgr
   const [childGroups, setChildGroups] = useState<Group[]>([])
 
   useEffect(() => {
+    let cancelled = false
+
     async function loadData() {
       const [parentAgent, childAgents] = await Promise.all([
         fetchAgent(parentGroupId),
         fetchAgentChildren(parentGroupId),
       ])
+      if (cancelled) return
       if (parentAgent) {
         setParentGroup(agentToGroup(parentAgent))
       }
@@ -58,7 +61,11 @@ export function GroupSubgroups({ parentGroupId, isCreator, isAdmin }: GroupSubgr
         .map(agentToGroup)
       setChildGroups(orgChildren)
     }
+
     loadData()
+    return () => {
+      cancelled = true
+    }
   }, [parentGroupId])
 
   const handleAddGroup = () => {
