@@ -94,9 +94,11 @@ export function GroupSubgroups({ parentGroupId, isCreator, isAdmin }: GroupSubgr
                 <DialogTitle>Create a New Subgroup</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-4">
-                <p className="text-sm text-muted-foreground">
-                  Subgroups under an organization keep the organization feature set.
-                </p>
+                {parentGroup?.type === "organization" && (
+                  <p className="text-sm text-muted-foreground">
+                    Subgroups under an organization keep the organization feature set.
+                  </p>
+                )}
                 <div>
                   <label htmlFor="groupName" className="block text-sm font-medium text-foreground mb-1">
                     Subgroup Name
