@@ -27,6 +27,8 @@ import {
   createOfferingResource,
   createDocumentResourceAction,
   createGroupResource,
+  updateGroupResource,
+  deleteGroupResource,
 } from "@/app/actions/resource-creation";
 import { updateTaskStatus, claimTasksAction } from "@/app/actions/interactions/tasks";
 import {
@@ -317,6 +319,45 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         parentGroupId,
       });
     },
+  },
+  {
+    name: "rivr.groups.update",
+    description:
+      "Update a group or subgroup's name and/or description. Defaults to the acting group; " +
+      "pass groupId to target a subgroup you administer. Requires admin authority.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        groupId: {
+          type: "string",
+          description: "Group/subgroup to update. Defaults to the primary/acting group.",
+        },
+        name: { type: "string" },
+        description: { type: "string" },
+      },
+    },
+    run: (args, ctx) =>
+      updateGroupResource({
+        groupId: str(args.groupId) ?? ctx.groupId,
+        name: str(args.name),
+        description: str(args.description),
+      }),
+  },
+  {
+    name: "rivr.groups.delete",
+    description:
+      "Delete (soft-delete) a group or subgroup. groupId is REQUIRED — there is no default, " +
+      "to avoid accidentally deleting the primary group. Requires admin authority.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["groupId"],
+      properties: {
+        groupId: { type: "string", description: "The group/subgroup id to delete." },
+      },
+    },
+    run: (args) => deleteGroupResource(requireStr(args, "groupId")),
   },
   {
     name: "rivr.tasks.update_status",
