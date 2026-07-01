@@ -10,3 +10,4 @@ tmp
 
 # build artifact — local typecheck output
 tsconfig.tsbuildinfo
+.understand-anything/
