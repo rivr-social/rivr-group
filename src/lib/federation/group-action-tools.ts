@@ -26,6 +26,7 @@ import {
   createEventResource,
   createOfferingResource,
   createDocumentResourceAction,
+  createGroupResource,
 } from "@/app/actions/resource-creation";
 import { updateTaskStatus, claimTasksAction } from "@/app/actions/interactions/tasks";
 import {
@@ -56,6 +57,25 @@ function strArray(value: unknown): string[] {
     ? value.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim())
     : [];
 }
+
+/**
+ * The group a create should be owned by: an explicit `groupId` arg (a subgroup /
+ * "circle" the actor administers) when given, otherwise the surface's default
+ * group (the primary group for MCP, the chat's group for the assistant). The
+ * underlying server action enforces write access to whichever group is chosen.
+ */
+function pickGroup(args: Record<string, unknown>, ctx: { groupId: string }): string {
+  return str(args.groupId) ?? ctx.groupId;
+}
+
+/** Reusable schema fragment: optionally target a subgroup/circle. */
+const GROUP_ID_PROP = {
+  groupId: {
+    type: "string",
+    description:
+      "Optional: own this by a specific subgroup/circle the actor administers. Defaults to the primary group.",
+  },
+} as const;
 
 const TASK_STATUSES = [
   "not_started",
@@ -93,6 +113,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       additionalProperties: false,
       required: ["title", "description", "category"],
       properties: {
+        ...GROUP_ID_PROP,
         title: { type: "string" },
         description: { type: "string" },
         category: { type: "string", description: "Project category, e.g. 'events', 'operations'." },
@@ -132,12 +153,12 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         },
       },
     },
-    run: (args, { groupId }) =>
+    run: (args, ctx) =>
       createProjectResource({
         title: requireStr(args, "title"),
         description: requireStr(args, "description"),
         category: requireStr(args, "category"),
-        groupId,
+        groupId: pickGroup(args, ctx),
         deadline: str(args.deadline),
         budget: num(args.budget) ?? null,
         jobs: Array.isArray(args.jobs) ? (args.jobs as unknown[]) : undefined,
@@ -153,6 +174,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       additionalProperties: false,
       required: ["title", "description", "date", "time", "location", "eventType"],
       properties: {
+        ...GROUP_ID_PROP,
         title: { type: "string" },
         description: { type: "string" },
         date: { type: "string", description: "Event date, e.g. '2026-08-15'." },
@@ -163,7 +185,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         imageUrl: { type: "string" },
       },
     },
-    run: (args, { groupId }) =>
+    run: (args, ctx) =>
       createEventResource({
         title: requireStr(args, "title"),
         description: requireStr(args, "description"),
@@ -175,7 +197,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
           | "online",
         price: num(args.price) ?? null,
         imageUrl: str(args.imageUrl),
-        ownerId: groupId,
+        ownerId: pickGroup(args, ctx),
       }),
   },
   {
@@ -189,6 +211,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       additionalProperties: false,
       required: ["title", "description", "offeringType"],
       properties: {
+        ...GROUP_ID_PROP,
         title: { type: "string" },
         description: { type: "string" },
         offeringType: {
@@ -203,7 +226,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         tags: { type: "array", items: { type: "string" } },
       },
     },
-    run: (args, { groupId }) =>
+    run: (args, ctx) =>
       createOfferingResource({
         title: requireStr(args, "title"),
         description: requireStr(args, "description"),
@@ -215,7 +238,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         imageUrl: str(args.imageUrl),
         tags: strArray(args.tags),
         targetAgentTypes: ["person"],
-        ownerId: groupId,
+        ownerId: pickGroup(args, ctx),
       }),
   },
   {
@@ -228,6 +251,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       additionalProperties: false,
       required: ["title"],
       properties: {
+        ...GROUP_ID_PROP,
         title: { type: "string" },
         content: { type: "string", description: "Markdown body of the document." },
         description: { type: "string" },
@@ -236,9 +260,9 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         showOnAbout: { type: "boolean" },
       },
     },
-    run: (args, { groupId }) =>
+    run: (args, ctx) =>
       createDocumentResourceAction({
-        groupId,
+        groupId: pickGroup(args, ctx),
         title: requireStr(args, "title"),
         content: str(args.content),
         description: str(args.description),
@@ -246,6 +270,52 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         tags: strArray(args.tags),
         showOnAbout: args.showOnAbout === true,
       }),
+  },
+  {
+    name: "rivr.groups.create",
+    description:
+      "Create a group, or a nested subgroup (a 'circle') under a parent group. " +
+      "By default the new group is nested under the acting group (so you can build circles under it); " +
+      "pass parentGroupId to nest elsewhere, or set standalone=true for a top-level group. " +
+      "Creating a subgroup requires admin authority on the parent. The new group is owned/administered by the acting agent, " +
+      "so you can then create projects, events, and offerings owned by it (pass its id as groupId on those tools).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "description"],
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        groupType: {
+          type: "string",
+          description: "Group type, e.g. 'basic' (default) or 'organization'.",
+        },
+        parentGroupId: {
+          type: "string",
+          description:
+            "Parent group to nest under. Defaults to the acting group. Ignored when standalone=true.",
+        },
+        standalone: {
+          type: "boolean",
+          description: "Create a top-level group with no parent instead of nesting. Default false.",
+        },
+        chapter: {
+          type: "string",
+          description: "Locale/chapter scope tag, or 'all' (default) for unscoped.",
+        },
+      },
+    },
+    run: (args, ctx) => {
+      const standalone = args.standalone === true;
+      const parentGroupId = standalone ? null : (str(args.parentGroupId) ?? ctx.groupId);
+      return createGroupResource({
+        name: requireStr(args, "name"),
+        description: requireStr(args, "description"),
+        groupType: str(args.groupType) ?? "basic",
+        chapter: str(args.chapter) ?? "all",
+        parentGroupId,
+      });
+    },
   },
   {
     name: "rivr.tasks.update_status",
