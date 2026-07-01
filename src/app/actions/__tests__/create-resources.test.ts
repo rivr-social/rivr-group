@@ -534,7 +534,7 @@ describe("create-resources actions", () => {
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         const parentGroup = await createTestGroup(db, {
-          metadata: { creatorId: user.id },
+          metadata: { creatorId: user.id, groupType: "organization" },
         });
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
 
@@ -554,6 +554,9 @@ describe("create-resources actions", () => {
           .from(agents)
           .where(eq(agents.id, result.resourceId!));
 
+        expect(subgroup.type).toBe("organization");
+        const meta = subgroup.metadata as Record<string, unknown>;
+        expect(meta.groupType).toBe("organization");
         expect(subgroup.parentId).toBe(parentGroup.id);
         expect(subgroup.depth).toBe(1);
         expect(subgroup.pathIds).toContain(parentGroup.id);

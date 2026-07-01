@@ -159,15 +159,24 @@ export async function createGroupResource(input: {
     const created = await db.transaction(async (tx) => {
       let parentDepth = 0;
       let parentPathIds: string[] = [];
+      // A subgroup of an organization is itself org-grade: it inherits the full
+      // org capability set (jobs, treasury, governance, badges, stake, mart, …)
+      // rather than the basic tab set. Default to the requested type otherwise.
+      let resolvedGroupType = input.groupType;
       if (input.parentGroupId) {
         // Parent depth/path are inherited to preserve hierarchy traversal efficiency.
         const parent = await tx.query.agents.findFirst({
           where: (a, { eq }) => eq(a.id, input.parentGroupId!),
-          columns: { id: true, depth: true, pathIds: true },
+          columns: { id: true, depth: true, pathIds: true, metadata: true },
         });
         if (parent) {
           parentDepth = parent.depth;
           parentPathIds = parent.pathIds ?? [];
+          const parentMeta = (parent.metadata ?? {}) as Record<string, unknown>;
+          const parentType = String(parentMeta.groupType ?? "").toLowerCase();
+          if (parentType === "organization" || parentType === "org") {
+            resolvedGroupType = "organization";
+          }
         }
       }
 
@@ -183,7 +192,7 @@ export async function createGroupResource(input: {
           pathIds: input.parentGroupId ? [...parentPathIds, input.parentGroupId] : [],
           groupPasswordHash: passwordHash,
           metadata: {
-            groupType: input.groupType,
+            groupType: resolvedGroupType,
             legalWrapper: input.legalWrapper ?? null,
             chapter: input.chapter,
             chapterTags: scopedLocaleIds,
