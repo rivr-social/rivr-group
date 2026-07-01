@@ -277,6 +277,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       "Create a group, or a nested subgroup (a 'circle') under a parent group. " +
       "By default the new group is nested under the acting group (so you can build circles under it); " +
       "pass parentGroupId to nest elsewhere, or set standalone=true for a top-level group. " +
+      "If the parent group is an organization, the new subgroup inherits organization-grade capabilities. " +
       "Creating a subgroup requires admin authority on the parent. The new group is owned/administered by the acting agent, " +
       "so you can then create projects, events, and offerings owned by it (pass its id as groupId on those tools).",
     inputSchema: {
@@ -288,7 +289,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         description: { type: "string" },
         groupType: {
           type: "string",
-          description: "Group type, e.g. 'basic' (default) or 'organization'.",
+          description: "Group type, e.g. 'basic' (default) or 'organization'. Organization parents keep subgroups org-grade.",
         },
         parentGroupId: {
           type: "string",

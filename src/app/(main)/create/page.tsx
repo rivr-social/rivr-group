@@ -3170,7 +3170,7 @@ export default function CreatePage() {
                   />
                 </div>
 
-                {/* Only show Parent Group for Basic and Family types */}
+                {/* Show Parent Group for types that can nest. Organization subgroups inherit org-grade capabilities. */}
                 {(groupType === "basic" || groupType === "family" || groupType === "org") && (
                   /* Conditional rendering: parent group options are limited to compatible group types. */
                   <div className="space-y-2 col-span-2">
@@ -3218,6 +3218,11 @@ export default function CreatePage() {
                         }
                       </SelectContent>
                     </Select>
+                    {groupType === "org" && (
+                      <p className="text-xs text-muted-foreground">
+                        Subgroups nested under an organization keep the organization feature set.
+                      </p>
+                    )}
                   </div>
                 )}
                 
