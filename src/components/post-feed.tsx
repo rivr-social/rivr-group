@@ -8,6 +8,7 @@ import { ThankModule } from "@/components/thank-module"
 import { Button } from "@/components/ui/button"
 import Image from "next/image"
 import Link from "next/link"
+import { getGlobalUrl } from "@/lib/federation/global-url"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import type { MarketplaceListing, Post, User, Group, Event } from "@/lib/types"
@@ -884,7 +885,7 @@ function EventPostCard({ event, getGroup, getEventCreator, rsvpStatus, onRsvp, g
             return resolved.length > 0 ? (
               <div className="flex flex-wrap gap-1 mb-3">
                 {resolved.slice(0, 2).map((tag: { id: string; name: string }) => (
-                  <Link key={tag.id} href={`/search?chapter=${tag.id}`} onClick={(e) => e.stopPropagation()}>
+                  <Link key={tag.id} href={getGlobalUrl(`/explore?chapter=${encodeURIComponent(tag.id)}`)} onClick={(e) => e.stopPropagation()}>
                     <Badge variant="outline" className="bg-blue-50 text-blue-700 hover:bg-blue-100">
                       {tag.name}
                     </Badge>
@@ -999,7 +1000,7 @@ function GroupPostCard({ group, onJoin, getChapterName }: GroupPostCardProps) {
           return resolved.length > 0 ? (
             <div className="flex flex-wrap gap-1 mb-3">
               {resolved.slice(0, 2).map((tag: { id: string; name: string }) => (
-                <Link key={tag.id} href={`/search?chapter=${tag.id}`} onClick={(e) => e.stopPropagation()}>
+                <Link key={tag.id} href={getGlobalUrl(`/explore?chapter=${encodeURIComponent(tag.id)}`)} onClick={(e) => e.stopPropagation()}>
                   <Badge variant="outline" className="bg-blue-50 text-blue-700 hover:bg-blue-100">
                     {tag.name}
                   </Badge>
