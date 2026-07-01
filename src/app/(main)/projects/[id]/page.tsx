@@ -565,6 +565,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             projectName={project.name}
             projectDescription={project.description}
             ownerId={ownerId}
+            timeframeStart={typeof (projectMeta2.timeframe as { start?: string } | undefined)?.start === "string" ? (projectMeta2.timeframe as { start?: string }).start : null}
+            timeframeEnd={typeof (projectMeta2.timeframe as { end?: string } | undefined)?.end === "string" ? (projectMeta2.timeframe as { end?: string }).end : null}
           />
         </CardContent>
       </Card>

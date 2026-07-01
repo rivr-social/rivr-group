@@ -160,6 +160,9 @@ export async function createEventResource(input: {
   description: string;
   date: string;
   time: string;
+  /** Optional event END date/time — gives the event a real date-time range. */
+  endDate?: string | null;
+  endTime?: string | null;
   location: string;
   eventType: "in-person" | "online";
   price?: number | null;
@@ -319,6 +322,8 @@ export async function createEventResource(input: {
           resourceKind: "event",
           date: input.date,
           time: input.time,
+          endDate: input.endDate ?? null,
+          endTime: input.endTime ?? null,
           location: input.location,
           imageUrl: input.imageUrl ?? null,
           images: input.imageUrl ? [input.imageUrl] : [],

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { DateTimeRangePicker } from "@/components/ui/date-time-range-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -76,6 +77,8 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
   const [description, setDescription] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [endTime, setEndTime] = useState("");
   const [location, setLocation] = useState("");
   const [price, setPrice] = useState("");
   const [isGlobal, setIsGlobal] = useState(true);
@@ -214,6 +217,8 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
         const metadata = (agent.metadata ?? {}) as Record<string, unknown>;
         const sourceDate = typeof metadata.date === "string" ? metadata.date : event.timeframe.start;
         const sourceTime = typeof metadata.time === "string" ? metadata.time : "";
+        setEndDate(typeof metadata.endDate === "string" ? metadata.endDate : "");
+        setEndTime(typeof metadata.endTime === "string" ? metadata.endTime : "");
         const sourceLocation =
           typeof metadata.location === "string"
             ? metadata.location
@@ -407,10 +412,11 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
           resourceKind: "event",
           date,
           time,
+          endDate: endDate || null,
+          endTime: endTime || null,
           location: location.trim(),
           price: Number.isFinite(priceValue) ? priceValue : null,
-          startDate: date,
-          endDate: date,
+          startDate: time ? `${date}T${time}` : date,
           isGlobal,
           eventType,
           localeId: primaryLocaleId,
@@ -564,21 +570,24 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
               <Textarea id="description" placeholder="Describe your event" className="min-h-[100px]" value={description} onChange={(e) => setDescription(e.target.value)} rows={5} required />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="date">Date</Label>
-                <div className="relative">
-                  <Calendar className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                  <Input id="date" type="date" className="pl-10" value={date} onChange={(e) => setDate(e.target.value)} required />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="time">Time</Label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                  <Input id="time" type="time" className="pl-10" value={time} onChange={(e) => setTime(e.target.value)} required />
-                </div>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="event-when">When</Label>
+              <DateTimeRangePicker
+                id="event-when"
+                start={date ? `${date}T${time || "00:00"}` : ""}
+                end={endDate ? `${endDate}T${endTime || "00:00"}` : ""}
+                onChange={(s, e) => {
+                  const [sd, st = ""] = s ? s.split("T") : ["", ""];
+                  const [ed, et = ""] = e ? e.split("T") : ["", ""];
+                  setDate(sd);
+                  setTime(st);
+                  setEndDate(ed);
+                  setEndTime(et);
+                }}
+                startLabel="Start time"
+                endLabel="End time"
+                placeholder="Select the event start & end"
+              />
             </div>
 
             <div className="space-y-2">

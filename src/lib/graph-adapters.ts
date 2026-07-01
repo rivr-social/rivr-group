@@ -900,6 +900,16 @@ export function resourceToGroupAgent(resource: SerializedResource): SerializedAg
  */
 export function resourceToEventAgent(resource: SerializedResource): SerializedAgent {
   const meta = resource.metadata ?? {};
+  // Compose start/end datetimes from the stored date + time (and optional
+  // end date/time), so events carry a real date-time range and keep their
+  // time-of-day (previously both start and end collapsed to the date-only
+  // value — see issue #6).
+  const startDate = meta.date
+    ? (meta.time ? `${meta.date as string}T${meta.time as string}` : (meta.date as string))
+    : resource.createdAt;
+  const endDate = meta.endDate
+    ? (meta.endTime ? `${meta.endDate as string}T${meta.endTime as string}` : (meta.endDate as string))
+    : startDate;
   return {
     id: resource.id,
     name: resource.name,
@@ -908,8 +918,8 @@ export function resourceToEventAgent(resource: SerializedResource): SerializedAg
     email: null,
     image: null,
     metadata: {
-      startDate: (meta.date as string) ?? resource.createdAt,
-      endDate: (meta.date as string) ?? resource.createdAt,
+      startDate,
+      endDate,
       location: (meta.location as string) ?? "",
       creatorId: resource.ownerId,
       price: (meta.price as string) ?? null,

@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { Calendar, Clock, MapPin, DollarSign, ImageIcon, Users, Building2, Plus, X, AlertCircle, Briefcase, Eye, Globe, Loader2 } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
+import { DateTimeRangePicker } from "@/components/ui/date-time-range-picker"
 import { useToast } from "@/components/ui/use-toast"
 import { useHomeFeed, useLocalesAndBasins } from "@/lib/hooks/use-graph-data"
 import { useAppContext } from "@/contexts/app-context"
@@ -119,6 +120,9 @@ export default function CreatePage() {
   const [eventDescription, setEventDescription] = useState(() => isLiveClass && urlDescription ? decodeURIComponent(urlDescription) : "")
   const [eventDate, setEventDate] = useState("")
   const [eventTime, setEventTime] = useState("")
+  // Optional event END date/time (a real date-time range for the event itself).
+  const [eventEndDate, setEventEndDate] = useState("")
+  const [eventEndTime, setEventEndTime] = useState("")
   const [eventLocation, setEventLocation] = useState(() => isLiveClass && urlLocation ? decodeURIComponent(urlLocation) : "")
   const [eventType, setEventType] = useState(() => isLiveClass ? "in-person" : "in-person") // "in-person" or "online"
   // Lazy-reveal for the optional event location/meeting-link section (G2). Opens
@@ -842,6 +846,8 @@ export default function CreatePage() {
         description: eventDescription,
         date: eventDate,
         time: eventTime,
+        endDate: eventEndDate || null,
+        endTime: eventEndTime || null,
         location: eventLocation,
         eventType: eventType as "in-person" | "online",
         price: normalizedTickets[0] && Number.isFinite(normalizedTickets[0].price) ? normalizedTickets[0].price : null,
@@ -1541,34 +1547,25 @@ export default function CreatePage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="event-date">Date</Label>
-                  <div className="relative">
-                    <Calendar className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                    <Input
-                      id="event-date"
-                      type="date"
-                      className="pl-10"
-                      value={eventDate}
-                      onChange={(e) => setEventDate(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="event-time">Time</Label>
-                  <div className="relative">
-                    <Clock className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                    <Input
-                      id="event-time"
-                      type="time"
-                      className="pl-10"
-                      value={eventTime}
-                      onChange={(e) => setEventTime(e.target.value)}
-                    />
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="event-when">When</Label>
+                <DateTimeRangePicker
+                  id="event-when"
+                  start={eventDate ? `${eventDate}T${eventTime || "00:00"}` : ""}
+                  end={eventEndDate ? `${eventEndDate}T${eventEndTime || "00:00"}` : ""}
+                  onChange={(s, e) => {
+                    const [sd, st = ""] = s ? s.split("T") : ["", ""]
+                    const [ed, et = ""] = e ? e.split("T") : ["", ""]
+                    setEventDate(sd)
+                    setEventTime(st)
+                    setEventEndDate(ed)
+                    setEventEndTime(et)
+                  }}
+                  startLabel="Start time"
+                  endLabel="End time"
+                  placeholder="Select the event start & end"
+                  disablePast
+                />
               </div>
 
               <div className="space-y-2">
@@ -2032,33 +2029,21 @@ export default function CreatePage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="project-timeframe-start">Timeframe start</Label>
-                  <div className="relative">
-                    <Calendar className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                    <Input
-                      id="project-timeframe-start"
-                      type="datetime-local"
-                      className="pl-10"
-                      value={projectTimeframeStart}
-                      onChange={(e) => setProjectTimeframeStart(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="project-timeframe-end">Timeframe end</Label>
-                  <div className="relative">
-                    <Clock className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                    <Input
-                      id="project-timeframe-end"
-                      type="datetime-local"
-                      className="pl-10"
-                      value={projectTimeframeEnd}
-                      onChange={(e) => setProjectTimeframeEnd(e.target.value)}
-                    />
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="project-timeframe">Timeframe</Label>
+                <DateTimeRangePicker
+                  id="project-timeframe"
+                  start={projectTimeframeStart}
+                  end={projectTimeframeEnd}
+                  onChange={(s, e) => {
+                    setProjectTimeframeStart(s)
+                    setProjectTimeframeEnd(e)
+                  }}
+                  startLabel="Start time"
+                  endLabel="End time"
+                  placeholder="Select the project start & end"
+                  disablePast
+                />
               </div>
 
               <div className="space-y-2">

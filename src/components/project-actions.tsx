@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { DateTimeRangePicker } from "@/components/ui/date-time-range-picker"
 import { useToast } from "@/components/ui/use-toast"
 import { useUser } from "@/contexts/user-context"
 import {
@@ -44,6 +45,9 @@ interface ProjectActionsProps {
   projectName: string
   projectDescription?: string | null
   ownerId?: string | null
+  /** Current project timeframe (datetime-local strings), for the range editor. */
+  timeframeStart?: string | null
+  timeframeEnd?: string | null
 }
 
 /**
@@ -52,7 +56,7 @@ interface ProjectActionsProps {
  * @param props - Project identifiers and existing editable values.
  * @returns Edit/delete controls when current user owns the project; otherwise null.
  */
-export function ProjectActions({ projectId, projectName, projectDescription, ownerId }: ProjectActionsProps) {
+export function ProjectActions({ projectId, projectName, projectDescription, ownerId, timeframeStart, timeframeEnd }: ProjectActionsProps) {
   const router = useRouter()
   const { toast } = useToast()
   const { currentUser } = useUser()
@@ -62,6 +66,8 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
   const [isDeleting, setIsDeleting] = useState(false)
   const [draftName, setDraftName] = useState(projectName)
   const [draftDescription, setDraftDescription] = useState(projectDescription ?? "")
+  const [draftStart, setDraftStart] = useState(timeframeStart ?? "")
+  const [draftEnd, setDraftEnd] = useState(timeframeEnd ?? "")
 
   /**
    * Syncs draft fields from latest server values when edit dialog opens.
@@ -70,7 +76,9 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
     if (!isEditOpen) return
     setDraftName(projectName)
     setDraftDescription(projectDescription ?? "")
-  }, [isEditOpen, projectName, projectDescription])
+    setDraftStart(timeframeStart ?? "")
+    setDraftEnd(timeframeEnd ?? "")
+  }, [isEditOpen, projectName, projectDescription, timeframeStart, timeframeEnd])
 
   /**
    * Updates project name/description through shared resource action.
@@ -95,6 +103,10 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
         name: trimmedName,
         description: trimmedDescription || null,
         content: trimmedDescription || null,
+        metadataPatch: {
+          timeframe: draftStart || draftEnd ? { start: draftStart || null, end: draftEnd || null } : null,
+          deadline: draftEnd || null,
+        },
       })
 
       if (!result.success) {
@@ -188,6 +200,21 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
                 onChange={(event) => setDraftDescription(event.target.value)}
                 placeholder="Describe your project..."
                 className="min-h-[140px]"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`project-timeframe-${projectId}`}>Timeframe</Label>
+              <DateTimeRangePicker
+                id={`project-timeframe-${projectId}`}
+                start={draftStart}
+                end={draftEnd}
+                onChange={(s, e) => {
+                  setDraftStart(s)
+                  setDraftEnd(e)
+                }}
+                startLabel="Start time"
+                endLabel="End time"
+                placeholder="Set the project start & end"
               />
             </div>
           </div>
