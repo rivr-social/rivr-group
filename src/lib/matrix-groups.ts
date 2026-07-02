@@ -327,6 +327,19 @@ async function resolveGroupRoomActorMatrixId(
 }
 
 async function resolveGroupRoomCreatorAgentId(groupAgentId: string): Promise<string | null> {
+  // Each candidate must be validated against a LIVE agents row before use:
+  // ledger edges and especially `metadata.creatorId` can reference agents that
+  // were since deleted (e.g. seeded/pared-down environments). Returning a
+  // dangling id makes downstream provisioning fail noisily for every backfill
+  // pass and leaves the group without a working room actor.
+  const isLiveAgent = async (agentId: string): Promise<boolean> => {
+    const row = await db.query.agents.findFirst({
+      where: and(eq(agents.id, agentId), isNull(agents.deletedAt)),
+      columns: { id: true },
+    });
+    return Boolean(row);
+  };
+
   const ownerEdge = await db.query.ledger.findFirst({
     where: and(
       eq(ledger.objectId, groupAgentId),
@@ -335,7 +348,9 @@ async function resolveGroupRoomCreatorAgentId(groupAgentId: string): Promise<str
     ),
     columns: { subjectId: true },
   });
-  if (ownerEdge?.subjectId) return ownerEdge.subjectId;
+  if (ownerEdge?.subjectId && (await isLiveAgent(ownerEdge.subjectId))) {
+    return ownerEdge.subjectId;
+  }
 
   const adminEdge = await db.query.ledger.findFirst({
     where: and(
@@ -346,14 +361,20 @@ async function resolveGroupRoomCreatorAgentId(groupAgentId: string): Promise<str
     ),
     columns: { subjectId: true },
   });
-  if (adminEdge?.subjectId) return adminEdge.subjectId;
+  if (adminEdge?.subjectId && (await isLiveAgent(adminEdge.subjectId))) {
+    return adminEdge.subjectId;
+  }
 
   const group = await db.query.agents.findFirst({
     where: eq(agents.id, groupAgentId),
     columns: { metadata: true },
   });
   const metadata = (group?.metadata ?? {}) as Record<string, unknown>;
-  if (typeof metadata.creatorId === "string" && metadata.creatorId.length > 0) {
+  if (
+    typeof metadata.creatorId === "string" &&
+    metadata.creatorId.length > 0 &&
+    (await isLiveAgent(metadata.creatorId))
+  ) {
     return metadata.creatorId;
   }
 

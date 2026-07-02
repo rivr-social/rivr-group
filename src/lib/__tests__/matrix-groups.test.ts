@@ -200,8 +200,10 @@ describe("matrix-groups", () => {
         updatedAt: new Date(),
       });
       // 1st agents lookup = the invite target; 2nd = the room actor (creator).
+      // Lookups: target → live-agent probe (resolver validation) → actor.
       vi.mocked(db.query.agents.findFirst)
         .mockResolvedValueOnce({ matrixUserId: "@invited:test.local" } as AgentRow)
+        .mockResolvedValueOnce({ id: "creator-agent-1" } as never)
         .mockResolvedValueOnce({ matrixUserId: "@creator:test.local" } as AgentRow);
       vi.mocked(db.query.ledger.findFirst).mockResolvedValue({
         subjectId: "creator-agent-1",
@@ -278,8 +280,10 @@ describe("matrix-groups", () => {
         updatedAt: new Date(),
       });
       // 1st agents lookup = the kick target; 2nd = the room actor (creator).
+      // Lookups: target → live-agent probe (resolver validation) → actor.
       vi.mocked(db.query.agents.findFirst)
         .mockResolvedValueOnce({ matrixUserId: "@kicked:test.local" } as AgentRow)
+        .mockResolvedValueOnce({ id: "creator-agent-1" } as never)
         .mockResolvedValueOnce({ matrixUserId: "@creator:test.local" } as AgentRow);
       vi.mocked(db.query.ledger.findFirst).mockResolvedValue({
         subjectId: "creator-agent-1",
