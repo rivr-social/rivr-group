@@ -14,6 +14,7 @@ import { ArrowUpRight, Award, Calendar, Camera, Clock, CreditCard, Globe, Histor
 import { getSocialIcon, getSocialHref, getSocialDisplayLabel } from "@/lib/social-platform-icon";
 import { useToast } from "@/components/ui/use-toast";
 import { MetaMaskConnectButton } from "@/components/metamask-connect-button";
+import { LinkBankAccountButton } from "@/components/link-bank-account-button";
 import {
   fetchMySavedListingIds,
   fetchMyReceipts,
@@ -85,7 +86,12 @@ function ConnectBalanceSection() {
     typeof process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY === "string" &&
     process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.startsWith("pk_test_");
   const [connectBalance, setConnectBalance] = useState<{ availableCents: number; pendingCents: number } | null>(null);
-  const [extraBalances, setExtraBalances] = useState<{ treasuryUsdCents: number | null; externalBankUsdCents: number | null } | null>(null);
+  const [extraBalances, setExtraBalances] = useState<{
+    treasuryUsdCents: number | null;
+    externalBankUsdCents: number | null;
+    canLinkBank: boolean;
+    bankLinked: boolean;
+  } | null>(null);
   const [connectStatus, setConnectStatus] = useState<{
     hasAccount: boolean;
     chargesEnabled: boolean;
@@ -119,6 +125,8 @@ function ConnectBalanceSection() {
           setExtraBalances({
             treasuryUsdCents: extra.treasury?.cash?.usd ?? null,
             externalBankUsdCents: extra.externalBank?.available?.usd ?? extra.externalBank?.current?.usd ?? null,
+            canLinkBank: extra.canLinkBank ?? false,
+            bankLinked: extra.bankLinked ?? false,
           });
         });
       }
@@ -281,6 +289,20 @@ function ConnectBalanceSection() {
           </Card>
         )}
       </div>
+      {extraBalances?.canLinkBank && !extraBalances.bankLinked && (
+        <LinkBankAccountButton
+          onLinked={async () => {
+            const extra = await getPaymentBalancesAction();
+            if (!extra.success) return;
+            setExtraBalances({
+              treasuryUsdCents: extra.treasury?.cash?.usd ?? null,
+              externalBankUsdCents: extra.externalBank?.available?.usd ?? extra.externalBank?.current?.usd ?? null,
+              canLinkBank: extra.canLinkBank ?? false,
+              bankLinked: extra.bankLinked ?? false,
+            });
+          }}
+        />
+      )}
       <Card>
         <CardContent className="py-4 space-y-1 text-sm">
           <div className="flex flex-wrap items-center gap-2">

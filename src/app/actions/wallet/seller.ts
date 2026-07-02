@@ -15,7 +15,17 @@ import {
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { getCurrentUserId, resolveManagedWalletTarget } from './helpers';
 import { isPositiveInteger } from './types';
-import { getExternalBankBalance, getTreasuryFinancialAccountBalance } from '@/lib/stripe-treasury';
+import {
+  createCustomConnectAccount,
+  createFinancialConnectionsSession,
+  createTreasuryFinancialAccount,
+  getExternalBankBalance,
+  getTreasuryFinancialAccountBalance,
+  isCustomConnectEnabled,
+  isFinancialConnectionsEnabled,
+  isTreasuryEnabled,
+  retrieveFinancialConnectionsAccount,
+} from '@/lib/stripe-treasury';
 
 export async function releaseTestConnectBalanceToWalletInternal(
   currentUserId: string,
@@ -143,12 +153,22 @@ export async function setupConnectAccountAction(
       let connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
 
       if (!connectAccountId) {
-        const account = await createConnectAccount(target.ownerId, target.email ?? undefined, {
+        const accountMetadata = {
           walletId: wallet.id,
           ownerId: target.ownerId,
           walletType: target.walletType,
           returnPath: ownerId ? `/groups/${ownerId}?tab=treasury` : '/settings',
-        });
+        };
+        // Default account type: Custom (controller-based) when enabled — the only
+        // type that can host Treasury/Issuing + platform bank-balance reads.
+        // Hosted Account-Links onboarding works for both, so the flow below is shared.
+        const account = isCustomConnectEnabled()
+          ? await createCustomConnectAccount({
+              agentId: target.ownerId,
+              email: target.email ?? undefined,
+              metadata: accountMetadata,
+            })
+          : await createConnectAccount(target.ownerId, target.email ?? undefined, accountMetadata);
         connectAccountId = account.id;
 
         await db
@@ -452,6 +472,12 @@ export async function getPaymentBalancesAction(ownerId?: string): Promise<{
   success: boolean;
   externalBank?: { current: Record<string, number>; available: Record<string, number>; asOf: number | null } | null;
   treasury?: { cash: Record<string, number> } | null;
+  /** True when the FC flag is on and a Connect account exists — the UI may offer bank linking. */
+  canLinkBank?: boolean;
+  /** True when a Financial Connections account id is already saved on the wallet. */
+  bankLinked?: boolean;
+  /** True when the Treasury flag is on, a Connect account exists, and no FA is provisioned yet. */
+  canProvisionTreasury?: boolean;
   error?: string;
 }> {
   const currentUserId = await getCurrentUserId();
@@ -467,7 +493,9 @@ export async function getPaymentBalancesAction(ownerId?: string): Promise<{
     const connectAccountId = typeof meta.stripeConnectAccountId === 'string' ? meta.stripeConnectAccountId : undefined;
     const faId = typeof meta.stripeFinancialAccountId === 'string' ? meta.stripeFinancialAccountId : undefined;
     const fcId = typeof meta.financialConnectionsAccountId === 'string' ? meta.financialConnectionsAccountId : undefined;
-    if (!connectAccountId) return { success: true, externalBank: null, treasury: null };
+    if (!connectAccountId) {
+      return { success: true, externalBank: null, treasury: null, canLinkBank: false, bankLinked: false, canProvisionTreasury: false };
+    }
 
     const [externalBank, treasuryBalance] = await Promise.all([
       fcId ? getExternalBankBalance(connectAccountId, fcId).catch(() => null) : Promise.resolve(null),
@@ -478,8 +506,228 @@ export async function getPaymentBalancesAction(ownerId?: string): Promise<{
       success: true,
       externalBank,
       treasury: treasuryBalance ? { cash: treasuryBalance.cash } : null,
+      canLinkBank: isFinancialConnectionsEnabled(),
+      bankLinked: Boolean(fcId),
+      canProvisionTreasury: isTreasuryEnabled() && !faId,
     };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Failed to load balances.' };
   }
+}
+
+/**
+ * Provision the Stripe Treasury FinancialAccount for an owner's treasury and
+ * persist its id on the wallet (`metadata.stripeFinancialAccountId`). Idempotent —
+ * returns the existing id when one is already stored. Requires the platform to be
+ * Treasury-approved + STRIPE_TREASURY_ENABLED (see stripe-treasury.ts).
+ */
+export async function provisionTreasuryFinancialAccountAction(ownerId?: string): Promise<{
+  success: boolean;
+  financialAccountId?: string;
+  error?: string;
+}> {
+  const currentUserId = await getCurrentUserId();
+  if (!currentUserId) {
+    return { success: false, error: 'You must be logged in.' };
+  }
+  if (!isTreasuryEnabled()) {
+    return { success: false, error: 'Stripe Treasury is not enabled on this platform yet.' };
+  }
+
+  const result = await updateFacade.execute(
+    {
+      type: 'provisionTreasuryFinancialAccountAction',
+      actorId: currentUserId,
+      targetAgentId: currentUserId,
+      payload: { ownerId },
+    },
+    async () => {
+      const target = await resolveManagedWalletTarget(currentUserId, ownerId);
+      const [wallet] = await db
+        .select({ id: wallets.id, metadata: wallets.metadata })
+        .from(wallets)
+        .where(eq(wallets.id, target.walletId))
+        .limit(1);
+
+      if (!wallet) {
+        throw new Error('Treasury wallet not found.');
+      }
+
+      const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
+      const connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
+      if (!connectAccountId) {
+        throw new Error('No payment account found. Set up payments first.');
+      }
+
+      const existingFaId = walletMeta.stripeFinancialAccountId as string | undefined;
+      if (existingFaId) {
+        return { success: true, financialAccountId: existingFaId } as {
+          success: boolean;
+          financialAccountId?: string;
+          error?: string;
+        };
+      }
+
+      const financialAccount = await createTreasuryFinancialAccount({
+        connectedAccountId: connectAccountId,
+        metadata: {
+          walletId: wallet.id,
+          ownerId: target.ownerId,
+          treasuryKind: target.walletType,
+        },
+      });
+
+      await db
+        .update(wallets)
+        .set({
+          metadata: { ...walletMeta, stripeFinancialAccountId: financialAccount.id },
+          updatedAt: new Date(),
+        })
+        .where(eq(wallets.id, wallet.id));
+
+      return { success: true, financialAccountId: financialAccount.id } as {
+        success: boolean;
+        financialAccountId?: string;
+        error?: string;
+      };
+    },
+  );
+
+  if (!result.success) {
+    console.error('provisionTreasuryFinancialAccountAction failed:', result.error);
+    return { success: false, error: result.error ?? 'Unable to provision the treasury account.' };
+  }
+
+  emitDomainEvent({
+    eventType: EVENT_TYPES.WALLET_PAYOUT,
+    entityType: 'wallet',
+    entityId: currentUserId,
+    actorId: currentUserId,
+    payload: { action: 'provision_financial_account', ownerId, financialAccountId: result.data?.financialAccountId },
+  }).catch(() => {});
+
+  return result.data ?? { success: true };
+}
+
+/**
+ * Mint a Financial Connections session for the owner's connected account so the
+ * frontend can open the secure bank-link modal (`collectFinancialConnectionsAccounts`).
+ * Returns the session client_secret plus the connected-account id the Stripe.js
+ * instance must be scoped to. No persistence — pair with saveLinkedBankAccountAction.
+ */
+export async function createBankLinkSessionAction(ownerId?: string): Promise<{
+  success: boolean;
+  clientSecret?: string;
+  connectAccountId?: string;
+  error?: string;
+}> {
+  const currentUserId = await getCurrentUserId();
+  if (!currentUserId) {
+    return { success: false, error: 'You must be logged in.' };
+  }
+  if (!isFinancialConnectionsEnabled()) {
+    return { success: false, error: 'Bank linking is not enabled on this platform yet.' };
+  }
+
+  try {
+    const target = await resolveManagedWalletTarget(currentUserId, ownerId);
+    const [wallet] = await db
+      .select({ metadata: wallets.metadata })
+      .from(wallets)
+      .where(eq(wallets.id, target.walletId))
+      .limit(1);
+
+    const walletMeta = (wallet?.metadata ?? {}) as Record<string, unknown>;
+    const connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
+    if (!connectAccountId) {
+      return { success: false, error: 'No payment account found. Set up payments first.' };
+    }
+
+    const session = await createFinancialConnectionsSession(connectAccountId);
+    if (!session.client_secret) {
+      return { success: false, error: 'Stripe did not return a session secret.' };
+    }
+
+    return { success: true, clientSecret: session.client_secret, connectAccountId };
+  } catch (error) {
+    console.error('createBankLinkSessionAction failed:', error);
+    return { success: false, error: 'Unable to start bank linking. Please try again.' };
+  }
+}
+
+/**
+ * Persist the Financial Connections account id returned by the bank-link modal
+ * onto the owner's wallet (`metadata.financialConnectionsAccountId`). Validates
+ * the id against Stripe under the connected account before saving — an id that
+ * does not belong to this connected account fails retrieval and is rejected.
+ */
+export async function saveLinkedBankAccountAction(
+  financialConnectionsAccountId: string,
+  ownerId?: string,
+): Promise<{ success: boolean; error?: string }> {
+  const currentUserId = await getCurrentUserId();
+  if (!currentUserId) {
+    return { success: false, error: 'You must be logged in.' };
+  }
+  if (!isFinancialConnectionsEnabled()) {
+    return { success: false, error: 'Bank linking is not enabled on this platform yet.' };
+  }
+  if (typeof financialConnectionsAccountId !== 'string' || !financialConnectionsAccountId.startsWith('fca_')) {
+    return { success: false, error: 'Invalid linked bank account reference.' };
+  }
+
+  const result = await updateFacade.execute(
+    {
+      type: 'saveLinkedBankAccountAction',
+      actorId: currentUserId,
+      targetAgentId: currentUserId,
+      payload: { ownerId, financialConnectionsAccountId },
+    },
+    async () => {
+      const target = await resolveManagedWalletTarget(currentUserId, ownerId);
+      const [wallet] = await db
+        .select({ id: wallets.id, metadata: wallets.metadata })
+        .from(wallets)
+        .where(eq(wallets.id, target.walletId))
+        .limit(1);
+
+      if (!wallet) {
+        throw new Error('Treasury wallet not found.');
+      }
+
+      const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
+      const connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
+      if (!connectAccountId) {
+        throw new Error('No payment account found. Set up payments first.');
+      }
+
+      // Throws when the fca_ id is not accessible under this connected account.
+      await retrieveFinancialConnectionsAccount(connectAccountId, financialConnectionsAccountId);
+
+      await db
+        .update(wallets)
+        .set({
+          metadata: { ...walletMeta, financialConnectionsAccountId },
+          updatedAt: new Date(),
+        })
+        .where(eq(wallets.id, wallet.id));
+
+      return { success: true } as { success: boolean; error?: string };
+    },
+  );
+
+  if (!result.success) {
+    console.error('saveLinkedBankAccountAction failed:', result.error);
+    return { success: false, error: result.error ?? 'Unable to save the linked bank account.' };
+  }
+
+  emitDomainEvent({
+    eventType: EVENT_TYPES.WALLET_PAYOUT,
+    entityType: 'wallet',
+    entityId: currentUserId,
+    actorId: currentUserId,
+    payload: { action: 'link_bank_account', ownerId },
+  }).catch(() => {});
+
+  return result.data ?? { success: true };
 }

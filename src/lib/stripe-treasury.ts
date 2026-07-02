@@ -34,6 +34,16 @@ export function isFinancialConnectionsEnabled(): boolean {
   return process.env.STRIPE_FINANCIAL_CONNECTIONS_ENABLED === "true";
 }
 
+/**
+ * Whether NEW payment setups create Custom (controller-based) connected accounts
+ * instead of Express. Verified 2026-07-01: hosted Account-Links onboarding works
+ * for controller accounts with requirement_collection=application, so flipping
+ * this needs no bespoke KYC UI. Existing Express accounts are unaffected.
+ */
+export function isCustomConnectEnabled(): boolean {
+  return process.env.STRIPE_CUSTOM_ACCOUNTS_ENABLED === "true";
+}
+
 // ---------------------------------------------------------------------------
 // Custom Connect account (controller-based)
 // ---------------------------------------------------------------------------
@@ -171,6 +181,21 @@ export async function createFinancialConnectionsSession(
     },
     { stripeAccount: connectedAccountId },
   );
+}
+
+/**
+ * Retrieve a linked Financial Connections account (under the connected account's
+ * Stripe-Account header). Used to VALIDATE an fca_ id belongs to this connected
+ * account before persisting it — retrieval throws when it does not.
+ */
+export async function retrieveFinancialConnectionsAccount(
+  connectedAccountId: string,
+  financialConnectionsAccountId: string,
+): Promise<Stripe.FinancialConnections.Account> {
+  const stripe = getStripe();
+  return stripe.financialConnections.accounts.retrieve(financialConnectionsAccountId, {
+    stripeAccount: connectedAccountId,
+  });
 }
 
 export interface ExternalBankBalance {

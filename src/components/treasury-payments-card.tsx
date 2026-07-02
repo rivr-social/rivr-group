@@ -6,10 +6,12 @@ import {
   getConnectBalanceAction,
   getConnectStatusAction,
   getPaymentBalancesAction,
+  provisionTreasuryFinancialAccountAction,
   releaseTestConnectBalanceToWalletAction,
   requestPayoutAction,
   setupConnectAccountAction,
 } from "@/app/actions/wallet"
+import { LinkBankAccountButton } from "@/components/link-bank-account-button"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -45,6 +47,9 @@ export function TreasuryPaymentsCard({
   const [extraBalances, setExtraBalances] = useState<{
     treasuryUsdCents: number | null
     externalBankUsdCents: number | null
+    canLinkBank: boolean
+    bankLinked: boolean
+    canProvisionTreasury: boolean
   } | null>(null)
   const [payoutAmount, setPayoutAmount] = useState("")
   const [initializing, setInitializing] = useState(true)
@@ -79,6 +84,9 @@ export function TreasuryPaymentsCard({
           setExtraBalances({
             treasuryUsdCents: extraResult.treasury?.cash?.usd ?? null,
             externalBankUsdCents: extraResult.externalBank?.available?.usd ?? extraResult.externalBank?.current?.usd ?? null,
+            canLinkBank: extraResult.canLinkBank ?? false,
+            bankLinked: extraResult.bankLinked ?? false,
+            canProvisionTreasury: extraResult.canProvisionTreasury ?? false,
           })
         }
       } catch {
@@ -174,6 +182,36 @@ export function TreasuryPaymentsCard({
     })
   }
 
+  const refreshExtraBalances = async () => {
+    const extraResult = await getPaymentBalancesAction(ownerId)
+    if (extraResult.success) {
+      setExtraBalances({
+        treasuryUsdCents: extraResult.treasury?.cash?.usd ?? null,
+        externalBankUsdCents: extraResult.externalBank?.available?.usd ?? extraResult.externalBank?.current?.usd ?? null,
+        canLinkBank: extraResult.canLinkBank ?? false,
+        bankLinked: extraResult.bankLinked ?? false,
+        canProvisionTreasury: extraResult.canProvisionTreasury ?? false,
+      })
+    }
+  }
+
+  const handleProvisionTreasury = () => {
+    startLoading(async () => {
+      const result = await provisionTreasuryFinancialAccountAction(ownerId)
+      if (!result.success) {
+        toast({
+          title: "Unable to set up treasury account",
+          description: result.error ?? "Please try again.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      toast({ title: "Treasury account ready", description: "Its Stripe balance now shows here." })
+      await refreshExtraBalances()
+    })
+  }
+
   if (!canManage) return null
 
   return (
@@ -218,6 +256,17 @@ export function TreasuryPaymentsCard({
             {!status.chargesEnabled || !status.payoutsEnabled ? (
               <Button variant="outline" onClick={handleSetup} disabled={isLoading}>
                 Finish onboarding
+              </Button>
+            ) : null}
+
+            {extraBalances?.canLinkBank && !extraBalances.bankLinked ? (
+              <LinkBankAccountButton ownerId={ownerId} onLinked={refreshExtraBalances} disabled={isLoading} />
+            ) : null}
+
+            {extraBalances?.canProvisionTreasury ? (
+              <Button variant="outline" onClick={handleProvisionTreasury} disabled={isLoading}>
+                {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wallet className="mr-2 h-4 w-4" />}
+                Set up treasury account
               </Button>
             ) : null}
 
