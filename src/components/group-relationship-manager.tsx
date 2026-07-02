@@ -21,8 +21,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Search, Plus, X, ExternalLink } from "lucide-react"
 import { fetchAgent, fetchGroups, fetchGroupRelationships } from "@/app/actions/graph"
 import type { SerializedGroupRelationship } from "@/app/actions/graph"
+import { addGroupRelationshipAction, removeGroupRelationshipAction } from "@/app/actions/resource-creation/groups"
 import { agentToGroup } from "@/lib/graph-adapters"
 import type { Group } from "@/lib/types"
+import { useToast } from "@/components/ui/use-toast"
 
 interface GroupRelationshipManagerProps {
   groupId: string
@@ -48,21 +50,25 @@ export function GroupRelationshipManager({ groupId, isCreator, isAdmin }: GroupR
   const [currentGroup, setCurrentGroup] = useState<Group | null>(null)
   const [allGroups, setAllGroups] = useState<Group[]>([])
   const [relationships, setRelationships] = useState<SerializedGroupRelationship[]>([])
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const { toast } = useToast()
+
+  async function loadData() {
+    const [agentData, groupsData, relsData] = await Promise.all([
+      fetchAgent(groupId),
+      fetchGroups(200),
+      fetchGroupRelationships(groupId),
+    ])
+    if (agentData) {
+      setCurrentGroup(agentToGroup(agentData))
+    }
+    setAllGroups(groupsData.map(agentToGroup))
+    setRelationships(relsData)
+  }
 
   useEffect(() => {
-    async function loadData() {
-      const [agentData, groupsData, relsData] = await Promise.all([
-        fetchAgent(groupId),
-        fetchGroups(200),
-        fetchGroupRelationships(groupId),
-      ])
-      if (agentData) {
-        setCurrentGroup(agentToGroup(agentData))
-      }
-      setAllGroups(groupsData.map(agentToGroup))
-      setRelationships(relsData)
-    }
     loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId])
 
   if (!currentGroup) return null
@@ -133,26 +139,55 @@ export function GroupRelationshipManager({ groupId, isCreator, isAdmin }: GroupR
     }
   }
 
-  const handleAddRelationship = () => {
-    if (!selectedGroupId) return
-
-    // In a real app, this would create a new relationship in the database
-    alert(
-      `New ${selectedRelationshipType} relationship would be created between ${currentGroup.name} and ${
-        allGroups.find((g) => g.id === selectedGroupId)?.name
-      }`,
-    )
-
-    setShowAddRelationship(false)
-    setSelectedGroupId(null)
-    setRelationshipDescription("")
+  const handleAddRelationship = async () => {
+    if (!selectedGroupId || isSubmitting) return
+    const targetName = allGroups.find((g) => g.id === selectedGroupId)?.name ?? "the group"
+    setIsSubmitting(true)
+    try {
+      // The data model tracks lateral ties as a flat affiliatedGroups array, so
+      // every UI sub-type (affiliate/partner/coalition) persists as "affiliated".
+      const result = await addGroupRelationshipAction({
+        relationshipType: "affiliated",
+        parentGroupId: groupId,
+        childGroupId: selectedGroupId,
+      })
+      if (!result.success) {
+        toast({ title: "Couldn't add relationship", description: result.message, variant: "destructive" })
+        return
+      }
+      toast({ title: "Affiliation added", description: `${currentGroup.name} is now affiliated with ${targetName}.` })
+      setShowAddRelationship(false)
+      setSelectedGroupId(null)
+      setRelationshipDescription("")
+      await loadData()
+    } catch {
+      toast({ title: "Couldn't add relationship", description: "An unexpected error occurred.", variant: "destructive" })
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
-  const handleRemoveRelationship = (relatedGroupId: string) => {
-    // In a real app, this would remove the relationship from the database
-    alert(
-      `Relationship would be removed between ${currentGroup.name} and ${allGroups.find((g) => g.id === relatedGroupId)?.name}`,
-    )
+  const handleRemoveRelationship = async (relatedGroupId: string) => {
+    if (isSubmitting) return
+    const targetName = allGroups.find((g) => g.id === relatedGroupId)?.name ?? "the group"
+    setIsSubmitting(true)
+    try {
+      const result = await removeGroupRelationshipAction({
+        relationshipType: "affiliated",
+        parentGroupId: groupId,
+        childGroupId: relatedGroupId,
+      })
+      if (!result.success) {
+        toast({ title: "Couldn't remove relationship", description: result.message, variant: "destructive" })
+        return
+      }
+      toast({ title: "Affiliation removed", description: `${currentGroup.name} is no longer affiliated with ${targetName}.` })
+      await loadData()
+    } catch {
+      toast({ title: "Couldn't remove relationship", description: "An unexpected error occurred.", variant: "destructive" })
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (

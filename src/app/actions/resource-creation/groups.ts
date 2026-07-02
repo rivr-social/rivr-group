@@ -715,6 +715,143 @@ export async function removeGroupRelationshipAction(input: {
   };
 }
 
+/**
+ * Adds a LATERAL affiliation between two groups by appending `childGroupId` to
+ * the parent group's `metadata.affiliatedGroups` array — the exact inverse of
+ * {@link removeGroupRelationshipAction}'s affiliated branch. This is the real
+ * write path behind the group About tab's "Add Relationship" control, which was
+ * previously a client-side `alert()` stub (no persistence).
+ *
+ * Subgroup (parent-child) creation is intentionally NOT handled here — that has
+ * its own flow (Create Subgroup / group-create with a parentId). Passing
+ * `relationshipType: "subgroup"` returns a directive error rather than silently
+ * re-homing a group.
+ *
+ * Owner-routed via updateFacade, gated by hasGroupWriteAccess + rate limit,
+ * mirroring the remove action so authority is derived server-side only.
+ */
+export async function addGroupRelationshipAction(input: {
+  relationshipType: "subgroup" | "affiliated";
+  parentGroupId: string;
+  childGroupId: string;
+}): Promise<ActionResult> {
+  const { relationshipType, parentGroupId, childGroupId } = input;
+
+  if (!parentGroupId?.trim() || !childGroupId?.trim()) {
+    return { success: false, message: "parentGroupId and childGroupId are required", error: { code: "INVALID_INPUT" } };
+  }
+  if (parentGroupId === childGroupId) {
+    return { success: false, message: "A group cannot be affiliated with itself.", error: { code: "INVALID_INPUT" } };
+  }
+  if (relationshipType === "subgroup") {
+    return { success: false, message: "Use Create Subgroup to nest a group; this control creates lateral affiliations.", error: { code: "INVALID_INPUT" } };
+  }
+
+  const userId = await resolveAuthenticatedUserId();
+  if (!userId) {
+    return { success: false, message: "You must be logged in to manage group relationships", error: { code: "UNAUTHENTICATED" } };
+  }
+
+  const facadeResult = await updateFacade.execute(
+    {
+      type: "addGroupRelationship",
+      actorId: userId,
+      targetAgentId: parentGroupId,
+      payload: input,
+    },
+    async () => {
+      const canWrite = await hasGroupWriteAccess(userId, parentGroupId);
+      if (!canWrite) {
+        return { success: false, message: "You do not have permission to manage relationships for this group.", error: { code: "FORBIDDEN" } };
+      }
+
+      const check = await rateLimit(`groups-update:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
+      if (!check.success) {
+        return { success: false, message: "Rate limit exceeded. Please try again later.", error: { code: "RATE_LIMITED" } };
+      }
+
+      try {
+        // The affiliated target must be a real, live group.
+        const [child] = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.id, childGroupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`))
+          .limit(1);
+        if (!child) {
+          return { success: false, message: "The group you tried to affiliate was not found.", error: { code: "NOT_FOUND" } };
+        }
+
+        const [parent] = await db
+          .select({ metadata: agents.metadata })
+          .from(agents)
+          .where(and(eq(agents.id, parentGroupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`))
+          .limit(1);
+        if (!parent) {
+          return { success: false, message: "Group not found.", error: { code: "NOT_FOUND" } };
+        }
+
+        const parentMeta = parent.metadata && typeof parent.metadata === "object"
+          ? (parent.metadata as Record<string, unknown>)
+          : {};
+        const existingAffiliations = Array.isArray(parentMeta.affiliatedGroups)
+          ? (parentMeta.affiliatedGroups as string[])
+          : [];
+        if (existingAffiliations.includes(childGroupId)) {
+          return { success: true, message: "These groups are already affiliated." } as ActionResult;
+        }
+        const updatedMeta = { ...parentMeta, affiliatedGroups: [...existingAffiliations, childGroupId] };
+
+        await db.transaction(async (tx) => {
+          await tx
+            .update(agents)
+            .set({ metadata: updatedMeta, updatedAt: new Date() })
+            .where(and(eq(agents.id, parentGroupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`));
+
+          await tx.insert(ledger).values({
+            verb: "update",
+            subjectId: userId,
+            objectId: parentGroupId,
+            objectType: "agent",
+            metadata: {
+              source: "add-group-relationship",
+              relationshipType: "affiliated",
+              addedAffiliatedGroupId: childGroupId,
+            },
+          } as NewLedgerEntry);
+        });
+
+        revalidatePath("/groups");
+        revalidatePath(`/groups/${parentGroupId}`);
+        revalidatePath(`/groups/${childGroupId}`);
+        return { success: true, message: "Affiliation created successfully" } as ActionResult;
+      } catch (error) {
+        console.error("[addGroupRelationshipAction] failed:", error);
+        return { success: false, message: "Failed to create affiliation", error: { code: "SERVER_ERROR" } } as ActionResult;
+      }
+    }
+  );
+
+  if (facadeResult.success && facadeResult.data) {
+    const data = facadeResult.data as ActionResult;
+    if (data.success) {
+      await emitDomainEvent({
+        eventType: EVENT_TYPES.GROUP_UPDATED,
+        entityType: "agent",
+        entityId: parentGroupId,
+        actorId: userId,
+        payload: { relationshipType, childGroupId, action: "add" },
+      }).catch(() => {});
+    }
+    return data;
+  }
+
+  return {
+    success: false,
+    message: facadeResult.error ?? "Failed to create affiliation",
+    error: { code: facadeResult.errorCode ?? "SERVER_ERROR" },
+  };
+}
+
 export async function castGovernanceVoteAction(input: {
   groupId: string;
   targetId: string;
