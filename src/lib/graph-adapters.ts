@@ -281,6 +281,18 @@ export function agentToEvent(agent: SerializedAgent) {
     toStringArray(meta.tags, agent.pathIds ?? [])
   );
 
+  // Compose the datetime range from the stored date + time (issue #6): the
+  // create flow writes `metadata.date`/`metadata.time`, NOT `metadata.startDate`,
+  // so reading only `startDate` here collapsed every event's start/end to its
+  // creation time. Mirror the resourceToEvent fix below; keep `startDate` as an
+  // alternate for any records that carry an explicit ISO value.
+  const startDate = meta.date
+    ? (meta.time ? `${meta.date as string}T${meta.time as string}` : (meta.date as string))
+    : (meta.startDate as string) ?? agent.createdAt;
+  const endDate = meta.endDate
+    ? (meta.endTime ? `${meta.endDate as string}T${meta.endTime as string}` : (meta.endDate as string))
+    : startDate;
+
   return {
     id: agent.id,
     name: agent.name,
@@ -289,8 +301,8 @@ export function agentToEvent(agent: SerializedAgent) {
     type: "event" as const,
     image: agent.image ?? "/placeholder-event.jpg",
     timeframe: {
-      start: (meta.startDate as string) ?? agent.createdAt,
-      end: (meta.endDate as string) ?? agent.createdAt,
+      start: startDate,
+      end: endDate,
     },
     organizer: (meta.organizerId as string) ?? agent.parentId ?? "",
     creator: (meta.creatorId as string) ?? "",
