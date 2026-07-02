@@ -90,9 +90,13 @@ own structure, NOT copied from the person app):
 
 ### Other Known Issues
 
-- [#6](https://github.com/rivr-social/rivr-group/issues/6): Event dates render
-  as creation time — `graph-adapters.ts` reads `metadata.startDate` but create
-  flow writes `metadata.date`
+- [#6](https://github.com/rivr-social/rivr-group/issues/6): RESOLVED
+  2026-07-02 — `graph-adapters.ts` `agentToEvent` read only `metadata.startDate`
+  (falling back to `createdAt`), but the create flow writes
+  `metadata.date`/`time`, so events rendered at their creation time. Now
+  composes the datetime range from `metadata.date` + `metadata.time` (matching
+  the already-fixed `resourceToEvent` path), keeping `startDate` as an alternate
+  for explicit-ISO records. Same latent bug fixed in locale + region.
 - [#8](https://github.com/rivr-social/rivr-group/issues/8): RESOLVED 2026-06-01
   — jobs detail page now resolves the real `auth()` session user and threads it
   (or `null` for anonymous) through `JobDetailClient` and its tabs; no more
