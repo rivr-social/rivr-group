@@ -35,7 +35,11 @@ export function MessageBubble({
           <p className="text-xs font-medium mb-1 opacity-80">{senderName}</p>
         )}
         <p className="whitespace-pre-wrap break-words">{body}</p>
-        <p className="text-xs mt-1 opacity-70">{formatMessageTime(timestamp)}</p>
+        {/* Rendered in UTC on the server, viewer-TZ on the client — expected
+            drift; suppress the React #418 text hydration mismatch. */}
+        <p className="text-xs mt-1 opacity-70" suppressHydrationWarning>
+          {formatMessageTime(timestamp)}
+        </p>
       </div>
     </div>
   );

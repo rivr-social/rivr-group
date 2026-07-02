@@ -377,7 +377,11 @@ export async function getUserGroupRooms(): Promise<
   const session = await auth();
   if (!session?.user?.id) return null;
 
-  // 1. Find all groups the user has actively joined
+  // 1. Find all groups the user is an active member of. Match ALL canonical
+  //    membership verbs (own/join/belong), not just "join" — a group's OWNER
+  //    holds an `own`/`belong` edge and would otherwise be locked out of their
+  //    own group chat ("not available on this account") despite being
+  //    server-side joined to the room.
   const memberships = await db
     .select({
       objectId: ledger.objectId,
@@ -386,7 +390,7 @@ export async function getUserGroupRooms(): Promise<
     .where(
       and(
         eq(ledger.subjectId, session.user.id),
-        eq(ledger.verb, "join"),
+        inArray(ledger.verb, ["own", "join", "belong"]),
         eq(ledger.isActive, true)
       )
     );

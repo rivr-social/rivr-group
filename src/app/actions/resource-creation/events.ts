@@ -185,10 +185,24 @@ export async function createEventResource(input: {
   auditValues?: Record<string, number>;
   ticketTypes?: EventTicketInput[];
 }): Promise<ActionResult> {
-  if (!input.title?.trim() || !input.description?.trim() || !input.date || !input.time || !input.location?.trim()) {
+  // Location is OPTIONAL, matching the create form's intent (the location
+  // section is collapsed by default and treated as optional). Requiring it
+  // server-side blocked basic + virtual/online events with an opaque "all
+  // required fields" message for an invisible field. Require only the surfaced
+  // fields and name the specific missing one(s).
+  const missingFields = [
+    !input.title?.trim() && "Title",
+    !input.description?.trim() && "Description",
+    !input.date && "Date",
+    !input.time && "Time",
+  ].filter((f): f is string => Boolean(f));
+  if (missingFields.length > 0) {
     return {
       success: false,
-      message: "Please fill in all required event fields",
+      message:
+        missingFields.length === 1
+          ? `${missingFields[0]} is required to create an event.`
+          : `These fields are required to create an event: ${missingFields.join(", ")}.`,
       error: {
         code: "INVALID_INPUT",
       },
