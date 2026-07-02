@@ -19,7 +19,6 @@ import {
   PieChart,
   Calendar,
   Download,
-  Plus,
   Wallet,
   Receipt,
   Target,
@@ -128,18 +127,50 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
     })
   }
 
+  // Export the loaded treasury transactions as a CSV the browser downloads.
+  // Treasury transactions are auto-derived from real wallet/settlement flows
+  // (there is no manual-entry model), so this simply serializes what's shown.
+  const handleExportCsv = () => {
+    const rows = [
+      ["Date", "Type", "Description", "Amount (USD)", "Fee (USD)", "Status", "From", "To"],
+      ...walletTransactions.map((tx) => [
+        new Date(tx.createdAt).toISOString(),
+        tx.type,
+        tx.description ?? "",
+        (tx.amountCents / 100).toFixed(2),
+        (tx.feeCents / 100).toFixed(2),
+        tx.status,
+        tx.fromWalletOwnerName ?? "",
+        tx.toWalletOwnerName ?? "",
+      ]),
+    ]
+    const csv = rows
+      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\n")
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `treasury-${groupId}-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold">Treasury</h2>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCsv}
+            disabled={walletTransactions.length === 0}
+          >
             <Download className="mr-2 h-4 w-4" />
             Export
-          </Button>
-          <Button size="sm">
-            <Plus className="mr-2 h-4 w-4" />
-            Add Transaction
           </Button>
         </div>
       </div>
