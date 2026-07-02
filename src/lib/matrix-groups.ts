@@ -25,7 +25,7 @@ import { randomBytes } from "crypto";
 import { getEnv } from "@/lib/env";
 import { db } from "@/db";
 import { agents, groupMatrixRooms, ledger, type ChatMode } from "@/db/schema";
-import { provisionMatrixUser } from "@/lib/matrix-admin";
+import { createRoomAsUser, provisionMatrixUser } from "@/lib/matrix-admin";
 import { encryptSecret } from "@/lib/crypto/secret-box";
 
 /**
@@ -81,7 +81,11 @@ export async function createGroupMatrixRoom(params: {
     return { matrixRoomId: existing.matrixRoomId, recordId: existing.id };
   }
 
-  // Create room via Synapse Admin API.
+  // Create the room ON BEHALF OF the creator via the client-server API.
+  // Synapse has no admin room-creation endpoint (`POST /_synapse/admin/v1/rooms`
+  // returns 405 M_UNRECOGNIZED) — createRoomAsUser mints a short-lived token
+  // for the creator through the admin login endpoint and calls
+  // `/_matrix/client/v3/createRoom` as them, so the creator is the room admin.
   //
   // SECURITY (EVT-SEC-007): the alias must NOT be a pure function of the public
   // group agent id. A deterministic `group-<groupId>` alias is publicly
@@ -94,18 +98,13 @@ export async function createGroupMatrixRoom(params: {
   // the rest of the system; the random suffix also avoids "alias already taken"
   // collisions when a tombstoned group room is re-provisioned.
   const aliasEntropy = randomBytes(8).toString("hex");
-  const result = await synapseAdminRequest("/_synapse/admin/v1/rooms", {
-    method: "POST",
-    body: JSON.stringify({
-      creator: params.creatorMatrixUserId,
-      name: params.groupName,
-      topic: `Group chat for ${params.groupName}`,
-      preset: "private_chat",
-      room_alias_name: `group-${params.groupAgentId.replace(/-/g, "")}-${aliasEntropy}`,
-    }),
+  const { roomId: matrixRoomId } = await createRoomAsUser({
+    creatorUserId: params.creatorMatrixUserId,
+    name: params.groupName,
+    topic: `Group chat for ${params.groupName}`,
+    preset: "private_chat",
+    roomAliasName: `group-${params.groupAgentId.replace(/-/g, "")}-${aliasEntropy}`,
   });
-
-  const matrixRoomId: string = result.room_id;
 
   // Store the mapping
   const [record] = await db

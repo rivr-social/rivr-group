@@ -95,16 +95,24 @@ describe("matrix-groups", () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("creates new room via Synapse Admin API when none exists", async () => {
+    it("creates new room as the creator via the client-server API when none exists", async () => {
       vi.mocked(db.query.groupMatrixRooms.findFirst).mockResolvedValue(
         undefined
       );
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({ room_id: "!newgroup:test.local" }),
-      });
+      // 1st fetch = short-lived admin login token for the creator;
+      // 2nd fetch = client-server createRoom AS the creator. Room creation
+      // must NOT go through the nonexistent Synapse admin endpoint
+      // (POST /_synapse/admin/v1/rooms -> 405 M_UNRECOGNIZED).
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ access_token: "syt_test_token" }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ room_id: "!newgroup:test.local" }),
+        });
 
       const result = await createGroupMatrixRoom({
         groupAgentId: "group-2",
@@ -114,14 +122,19 @@ describe("matrix-groups", () => {
       });
 
       expect(result.matrixRoomId).toBe("!newgroup:test.local");
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
 
-      const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toContain("/_synapse/admin/v1/rooms");
-      expect(opts.method).toBe("POST");
+      const [loginUrl, loginOpts] = mockFetch.mock.calls[0];
+      expect(loginUrl).toContain("/_synapse/admin/v1/users/");
+      expect(loginUrl).toContain("/login");
+      expect(loginOpts.method).toBe("POST");
 
-      const body = JSON.parse(opts.body);
-      expect(body.creator).toBe("@creator:test.local");
+      const [createUrl, createOpts] = mockFetch.mock.calls[1];
+      expect(createUrl).toContain("/_matrix/client/v3/createRoom");
+      expect(createOpts.method).toBe("POST");
+      expect(createOpts.headers.Authorization).toBe("Bearer syt_test_token");
+
+      const body = JSON.parse(createOpts.body);
       expect(body.name).toBe("New Group");
       expect(body.preset).toBe("private_chat");
     });
@@ -159,7 +172,7 @@ describe("matrix-groups", () => {
           groupAgentId: "group-1",
           targetAgentId: "user-no-matrix",
         })
-      ).rejects.toThrow("has no Matrix account");
+      ).rejects.toThrow("Could not resolve or provision a Matrix account");
     });
 
     it("invites user when both room and Matrix account exist", async () => {

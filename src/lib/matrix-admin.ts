@@ -189,6 +189,82 @@ export async function getRoomMembers(roomId: string): Promise<string[]> {
 }
 
 /**
+ * Obtains a short-lived access token for a Matrix user via the Synapse admin
+ * login endpoint (`POST /_synapse/admin/v1/users/{userId}/login`). Used to
+ * perform client-server API calls ON BEHALF OF a user when we don't hold
+ * their persisted token — e.g. server-side room creation.
+ */
+async function obtainUserAccessToken(matrixUserId: string): Promise<string> {
+  const loginResult = await synapseAdminRequest(
+    `/_synapse/admin/v1/users/${encodeURIComponent(matrixUserId)}/login`,
+    {
+      method: "POST",
+      // Expire the impersonation token quickly — it exists only for this call.
+      body: JSON.stringify({ valid_until_ms: Date.now() + 5 * 60_000 }),
+    },
+  );
+  const accessToken = loginResult?.access_token;
+  if (typeof accessToken !== "string" || accessToken.length === 0) {
+    throw new Error(`Synapse admin /login returned no access_token for ${matrixUserId}`);
+  }
+  return accessToken;
+}
+
+/**
+ * Creates a Matrix room ON BEHALF OF a user via the client-server API.
+ *
+ * Synapse has NO admin endpoint for room creation — `POST /_synapse/admin/v1/rooms`
+ * does not exist and returns `405 M_UNRECOGNIZED` (the admin rooms API is
+ * list/detail/delete only). The correct server-side pattern is: mint a
+ * short-lived token for the creator via the admin login endpoint, then call
+ * `POST /_matrix/client/v3/createRoom` as that user.
+ *
+ * @returns The newly created Matrix room ID
+ */
+export async function createRoomAsUser(params: {
+  creatorUserId: string;
+  name?: string;
+  topic?: string;
+  preset?: "private_chat" | "trusted_private_chat" | "public_chat";
+  roomAliasName?: string;
+  invite?: string[];
+  isDirect?: boolean;
+}): Promise<{ roomId: string }> {
+  const homeserverUrl = getEnv("MATRIX_HOMESERVER_URL");
+  const accessToken = await obtainUserAccessToken(params.creatorUserId);
+
+  const response = await fetch(`${homeserverUrl}/_matrix/client/v3/createRoom`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      preset: params.preset ?? "private_chat",
+      is_direct: params.isDirect ?? false,
+      ...(params.name ? { name: params.name } : {}),
+      ...(params.topic ? { topic: params.topic } : {}),
+      ...(params.roomAliasName ? { room_alias_name: params.roomAliasName } : {}),
+      ...(params.invite && params.invite.length > 0 ? { invite: params.invite } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(
+      `Matrix createRoom error: ${response.status} - ${JSON.stringify(error)}`,
+    );
+  }
+
+  const result = await response.json();
+  const roomId = result?.room_id;
+  if (typeof roomId !== "string" || !roomId.startsWith("!")) {
+    throw new Error(`Matrix createRoom returned no room_id for ${params.creatorUserId}`);
+  }
+  return { roomId };
+}
+
+/**
  * Creates a direct message room between two Matrix users via Synapse Admin API.
  *
  * @param params.inviterUserId - Full Matrix user ID of the room creator
@@ -199,18 +275,10 @@ export async function createDirectMessageRoom(params: {
   inviterUserId: string;
   inviteeUserId: string;
 }): Promise<{ roomId: string }> {
-  const result = await synapseAdminRequest(
-    `/_synapse/admin/v1/rooms`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        creator: params.inviterUserId,
-        invite: [params.inviteeUserId],
-        is_direct: true,
-        preset: "trusted_private_chat",
-      }),
-    }
-  );
-
-  return { roomId: result.room_id };
+  return createRoomAsUser({
+    creatorUserId: params.inviterUserId,
+    invite: [params.inviteeUserId],
+    isDirect: true,
+    preset: "trusted_private_chat",
+  });
 }
