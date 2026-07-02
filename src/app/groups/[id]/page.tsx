@@ -154,10 +154,20 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     if (agentRow?.id && agentRow.name) tagLabels[agentRow.id] = agentRow.name
   }
 
+  // Tag each item with its governance `type` on merge — the client
+  // (group-tabs-client) filters governanceItems by `rec.type === "proposal"|
+  // "poll"|"issue"`, but the create actions store these objects WITHOUT a type
+  // field, so an untagged merge made every proposal/poll/issue invisible in the
+  // Governance tab even though they persist in group metadata.
+  const tagType = (items: unknown, type: string): Record<string, unknown>[] =>
+    (Array.isArray(items) ? items : []).map((it) => ({
+      ...(it as Record<string, unknown>),
+      type,
+    }))
   const governanceItems = [
-    ...(((groupMeta.proposals as unknown[]) ?? []) as unknown[]),
-    ...(((groupMeta.polls as unknown[]) ?? []) as unknown[]),
-    ...(((groupMeta.issues as unknown[]) ?? []) as unknown[]),
+    ...tagType(groupMeta.proposals, "proposal"),
+    ...tagType(groupMeta.polls, "poll"),
+    ...tagType(groupMeta.issues, "issue"),
   ]
   const documentResources = detail.resources.filter((r) => {
     const meta = (r.metadata ?? {}) as Record<string, unknown>

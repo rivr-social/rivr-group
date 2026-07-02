@@ -410,11 +410,16 @@ export function GroupTabsClient({
           title: String(rec.title ?? rec.question ?? "Untitled"),
           description: String(rec.description ?? ""),
           status: (ProposalStatus[(String(rec.status ?? "Active").charAt(0).toUpperCase() + String(rec.status ?? "Active").slice(1)) as keyof typeof ProposalStatus] ?? ProposalStatus.Active),
-          votes: {
-            yes: Number(rec.votesFor ?? rec.votesYes ?? 0),
-            no: Number(rec.votesAgainst ?? rec.votesNo ?? 0),
-            abstain: Number(rec.votesAbstain ?? 0),
-          },
+          votes: (() => {
+            // createGovernanceProposalAction stores a nested `votes: {yes,no,abstain}`;
+            // older/other shapes use flat votesFor/votesYes. Read both.
+            const nested = (rec.votes && typeof rec.votes === "object" ? rec.votes : {}) as Record<string, unknown>
+            return {
+              yes: Number(rec.votesFor ?? rec.votesYes ?? nested.yes ?? 0),
+              no: Number(rec.votesAgainst ?? rec.votesNo ?? nested.no ?? 0),
+              abstain: Number(rec.votesAbstain ?? nested.abstain ?? 0),
+            }
+          })(),
           quorum: Number(rec.quorum ?? 0),
           threshold: Number(rec.threshold ?? 50),
           endDate: String(rec.deadline ?? rec.endDate ?? ""),
