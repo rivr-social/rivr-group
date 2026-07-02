@@ -27,6 +27,9 @@ vi.mock("@/db", () => ({
       agents: {
         findFirst: vi.fn(),
       },
+      ledger: {
+        findFirst: vi.fn(),
+      },
     },
     insert: vi.fn(() => ({
       values: vi.fn(() => ({
@@ -43,6 +46,13 @@ vi.mock("@/db", () => ({
 
 vi.mock("@/db/schema", async () => {
   return {
+    ledger: {
+      subjectId: "subject_id",
+      objectId: "object_id",
+      verb: "verb",
+      isActive: "is_active",
+      role: "role",
+    },
     agents: { id: "id" },
     groupMatrixRooms: {
       groupAgentId: "group_agent_id",
@@ -52,7 +62,12 @@ vi.mock("@/db/schema", async () => {
 });
 
 vi.mock("drizzle-orm", () => ({
-  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  eq: vi.fn((a, b) => ({ op: "eq", field: a, value: b })),
+  and: vi.fn((...conds) => ({ op: "and", conds })),
+  or: vi.fn((...conds) => ({ op: "or", conds })),
+  inArray: vi.fn((field, values) => ({ op: "inArray", field, values })),
+  isNull: vi.fn((field) => ({ op: "isNull", field })),
+  sql: vi.fn((strings, ...values) => ({ op: "sql", strings, values })),
 }));
 
 const mockFetch = vi.fn();
@@ -184,24 +199,37 @@ describe("matrix-groups", () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       });
-      vi.mocked(db.query.agents.findFirst).mockResolvedValue({
-        matrixUserId: "@invited:test.local",
-      } as AgentRow);
+      // 1st agents lookup = the invite target; 2nd = the room actor (creator).
+      vi.mocked(db.query.agents.findFirst)
+        .mockResolvedValueOnce({ matrixUserId: "@invited:test.local" } as AgentRow)
+        .mockResolvedValueOnce({ matrixUserId: "@creator:test.local" } as AgentRow);
+      vi.mocked(db.query.ledger.findFirst).mockResolvedValue({
+        subjectId: "creator-agent-1",
+      } as never);
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({}),
-      });
+      // Private rooms cannot be admin-force-joined. The flow is: mint creator
+      // token (admin login) -> invite as creator -> mint target token -> join
+      // as target.
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: "syt_creator" }) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: "syt_invited" }) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
 
       await inviteToGroupRoom({
         groupAgentId: "group-1",
         targetAgentId: "user-1",
       });
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toContain("/_synapse/admin/v1/join/");
-      expect(JSON.parse(opts.body).user_id).toBe("@invited:test.local");
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      const inviteCall = mockFetch.mock.calls[1];
+      expect(inviteCall[0]).toContain("/_matrix/client/v3/rooms/");
+      expect(inviteCall[0]).toContain("/invite");
+      expect(JSON.parse(inviteCall[1].body).user_id).toBe("@invited:test.local");
+      expect(inviteCall[1].headers.Authorization).toBe("Bearer syt_creator");
+      const joinCall = mockFetch.mock.calls[3];
+      expect(joinCall[0]).toContain("/join");
+      expect(joinCall[1].headers.Authorization).toBe("Bearer syt_invited");
     });
   });
 
@@ -249,21 +277,29 @@ describe("matrix-groups", () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       });
-      vi.mocked(db.query.agents.findFirst).mockResolvedValue({
-        matrixUserId: "@kicked:test.local",
-      } as AgentRow);
+      // 1st agents lookup = the kick target; 2nd = the room actor (creator).
+      vi.mocked(db.query.agents.findFirst)
+        .mockResolvedValueOnce({ matrixUserId: "@kicked:test.local" } as AgentRow)
+        .mockResolvedValueOnce({ matrixUserId: "@creator:test.local" } as AgentRow);
+      vi.mocked(db.query.ledger.findFirst).mockResolvedValue({
+        subjectId: "creator-agent-1",
+      } as never);
 
-      mockFetch.mockResolvedValueOnce({ ok: true });
+      // Kick runs AS the room creator: mint creator token (admin login) -> kick.
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ access_token: "syt_creator" }) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
 
       await removeFromGroupRoom({
         groupAgentId: "group-1",
         targetAgentId: "user-1",
       });
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toContain("/kick");
-      expect(JSON.parse(opts.body).user_id).toBe("@kicked:test.local");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const kickCall = mockFetch.mock.calls[1];
+      expect(kickCall[0]).toContain("/kick");
+      expect(JSON.parse(kickCall[1].body).user_id).toBe("@kicked:test.local");
+      expect(kickCall[1].headers.Authorization).toBe("Bearer syt_creator");
     });
   });
 });

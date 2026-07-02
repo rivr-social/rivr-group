@@ -25,7 +25,7 @@ import { randomBytes } from "crypto";
 import { getEnv } from "@/lib/env";
 import { db } from "@/db";
 import { agents, groupMatrixRooms, ledger, type ChatMode } from "@/db/schema";
-import { createRoomAsUser, provisionMatrixUser } from "@/lib/matrix-admin";
+import { createRoomAsUser, inviteToRoomAsUser, joinRoomAsUser, kickFromRoomAsUser, provisionMatrixUser } from "@/lib/matrix-admin";
 import { encryptSecret } from "@/lib/crypto/secret-box";
 
 /**
@@ -149,16 +149,24 @@ export async function inviteToGroupRoom(params: {
     );
   }
 
-  // Invite via Synapse Admin API
-  await synapseAdminRequest(
-    `/_synapse/admin/v1/join/${encodeURIComponent(groupRoom.matrixRoomId)}`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        user_id: targetMatrixUserId,
-      }),
-    }
-  );
+  // Private rooms cannot be admin-force-joined (the admin user is not a room
+  // member, so Synapse 403s). Instead: a room member with invite power (the
+  // room creator) invites the target, then the target joins as themselves.
+  const inviterMatrixUserId = await resolveGroupRoomActorMatrixId(params.groupAgentId);
+  if (!inviterMatrixUserId) {
+    throw new Error(
+      `No room actor (creator/admin) resolvable for group ${params.groupAgentId}`,
+    );
+  }
+  await inviteToRoomAsUser({
+    inviterUserId: inviterMatrixUserId,
+    roomId: groupRoom.matrixRoomId,
+    userId: targetMatrixUserId,
+  });
+  await joinRoomAsUser({
+    userId: targetMatrixUserId,
+    roomId: groupRoom.matrixRoomId,
+  });
 }
 
 /**
@@ -184,24 +192,17 @@ export async function removeFromGroupRoom(params: {
 
   if (!targetAgent?.matrixUserId) return; // No Matrix account to remove
 
-  const homeserverUrl = getEnv("MATRIX_HOMESERVER_URL");
-  const adminToken = getEnv("MATRIX_ADMIN_TOKEN");
+  // Kick as the room creator (PL 100) — the server-admin token has no power in
+  // private rooms the admin never joined (same gap as admin force-join).
+  const actorMatrixUserId = await resolveGroupRoomActorMatrixId(params.groupAgentId);
+  if (!actorMatrixUserId) return; // No actor to kick with
 
-  // Use the standard Matrix API with admin token to kick the user
-  await fetch(
-    `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(groupRoom.matrixRoomId)}/kick`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${adminToken}`,
-      },
-      body: JSON.stringify({
-        user_id: targetAgent.matrixUserId,
-        reason: "Removed from group",
-      }),
-    }
-  );
+  await kickFromRoomAsUser({
+    actorUserId: actorMatrixUserId,
+    roomId: groupRoom.matrixRoomId,
+    userId: targetAgent.matrixUserId,
+    reason: "Removed from group",
+  });
 }
 
 /**
@@ -311,6 +312,20 @@ async function ensureAgentMatrixUserId(agentId: string): Promise<string | null> 
  * membership edge, then the legacy `metadata.creatorId`. Returns null when no
  * responsible agent can be found.
  */
+/**
+ * Resolves the Matrix user id that acts FOR a group's room in server-side
+ * membership operations (inviting new members, kicking departed ones). This is
+ * the group's creator/admin — the identity the room was created as, which
+ * holds power level 100 in the room. Lazily provisions their Matrix account.
+ */
+async function resolveGroupRoomActorMatrixId(
+  groupAgentId: string,
+): Promise<string | null> {
+  const actorAgentId = await resolveGroupRoomCreatorAgentId(groupAgentId);
+  if (!actorAgentId) return null;
+  return ensureAgentMatrixUserId(actorAgentId);
+}
+
 async function resolveGroupRoomCreatorAgentId(groupAgentId: string): Promise<string | null> {
   const ownerEdge = await db.query.ledger.findFirst({
     where: and(

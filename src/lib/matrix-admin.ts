@@ -265,6 +265,126 @@ export async function createRoomAsUser(params: {
 }
 
 /**
+ * Invites a user into a room ON BEHALF OF a current room member.
+ *
+ * The Synapse admin join endpoint (`/_synapse/admin/v1/join/{roomId}`) only
+ * works when the room is public or the admin user is itself a member — our
+ * group rooms are `private_chat`, so admin force-join always 403s
+ * ("@admin not in room"). The working server-side pattern for private rooms is
+ * a two-step: a member INVITES (this helper), then the target user JOINS with
+ * their own token ({@link joinRoomAsUser}).
+ *
+ * Idempotent: "already in the room" / "already invited" responses are success.
+ */
+export async function inviteToRoomAsUser(params: {
+  inviterUserId: string;
+  roomId: string;
+  userId: string;
+}): Promise<void> {
+  const homeserverUrl = getEnv("MATRIX_HOMESERVER_URL");
+  const accessToken = await obtainUserAccessToken(params.inviterUserId);
+
+  const response = await fetch(
+    `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(params.roomId)}/invite`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ user_id: params.userId }),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    const message = typeof error?.error === "string" ? error.error : "";
+    // Already a member / already invited → the desired end state holds.
+    if (/already in the room|already invited|already joined/i.test(message)) {
+      return;
+    }
+    throw new Error(
+      `Matrix invite error: ${response.status} - ${JSON.stringify(error)}`,
+    );
+  }
+}
+
+/**
+ * Joins a room AS the target user (their own short-lived token), accepting a
+ * pending invite. Idempotent — joining an already-joined room succeeds.
+ */
+export async function joinRoomAsUser(params: {
+  userId: string;
+  roomId: string;
+}): Promise<void> {
+  const homeserverUrl = getEnv("MATRIX_HOMESERVER_URL");
+  const accessToken = await obtainUserAccessToken(params.userId);
+
+  const response = await fetch(
+    `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(params.roomId)}/join`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({}),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(
+      `Matrix join error: ${response.status} - ${JSON.stringify(error)}`,
+    );
+  }
+}
+
+/**
+ * Kicks a user from a room ON BEHALF OF a room member with kick power (the
+ * room creator holds PL 100). The previous implementation kicked with the
+ * server-admin token, which has no power in rooms the admin never joined —
+ * the same private-room gap as the admin join endpoint.
+ *
+ * Idempotent: kicking a user who already left is treated as success.
+ */
+export async function kickFromRoomAsUser(params: {
+  actorUserId: string;
+  roomId: string;
+  userId: string;
+  reason?: string;
+}): Promise<void> {
+  const homeserverUrl = getEnv("MATRIX_HOMESERVER_URL");
+  const accessToken = await obtainUserAccessToken(params.actorUserId);
+
+  const response = await fetch(
+    `${homeserverUrl}/_matrix/client/v3/rooms/${encodeURIComponent(params.roomId)}/kick`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        user_id: params.userId,
+        reason: params.reason ?? "No longer a group member",
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    const message = typeof error?.error === "string" ? error.error : "";
+    if (/not in the room|not a member/i.test(message)) {
+      return;
+    }
+    throw new Error(
+      `Matrix kick error: ${response.status} - ${JSON.stringify(error)}`,
+    );
+  }
+}
+
+/**
  * Creates a direct message room between two Matrix users via Synapse Admin API.
  *
  * @param params.inviterUserId - Full Matrix user ID of the room creator
