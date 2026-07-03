@@ -241,12 +241,14 @@
     linear-gradient(180deg, #0c2a2c 0%, #14474a 45%, #0e3032 100%);
 }
 
+html.crystalline-bg #rivr-crystalline-bg,
 body.crystalline-bg #rivr-crystalline-bg {
   display: block;
 }
 
 /* Exactly one background layer is ever visible: crystalline on global lanes,
    the water photo everywhere else. */
+html.crystalline-bg #rivr-water-bg,
 body.crystalline-bg #rivr-water-bg {
   display: none;
 }
