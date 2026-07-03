@@ -234,7 +234,7 @@ export function BasinProfile({ basin, chapters, bioregionalCouncil }: BasinProfi
               <div className="grid gap-4">
                 {basinChapters.map((chapter) => (
                   <Link key={chapter.id} href={`/locales/${chapter.id}`}>
-                    <div className="flex items-center gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors">
+                    <div className="flex items-center gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors">
                       {chapter.image && (
                         <Image
                           src={chapter.image}

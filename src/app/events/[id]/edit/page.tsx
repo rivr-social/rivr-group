@@ -877,7 +877,7 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
 
             <div className="space-y-2">
               <Label>Event Image</Label>
-              <div className="border-2 border-dashed rounded-md p-6 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50">
+              <div className="border-2 border-dashed rounded-md p-6 flex flex-col items-center justify-center cursor-pointer hover:bg-muted/50">
                 <ImageIcon className="h-8 w-8 text-gray-400 mb-2" />
                 <p className="text-sm text-gray-500">Click to upload an image</p>
                 <p className="text-xs text-gray-400 mt-1">PNG, JPG up to 5MB</p>

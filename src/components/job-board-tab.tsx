@@ -529,7 +529,7 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
                     className={`border border-black/10 dark:border-white/15 border-l-4 ${getPriorityColor(project.priority)} shadow-md hover:shadow-lg transition-shadow`}
                   >
                     <CollapsibleTrigger asChild>
-                      <CardHeader className="cursor-pointer hover:bg-gray-50">
+                      <CardHeader className="cursor-pointer hover:bg-muted/50">
                         <div className="flex justify-between items-start">
                           <div className="flex-1">
                             <div className="flex items-center gap-2">

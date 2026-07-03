@@ -128,7 +128,7 @@ export function GroupAffiliates({ groupId }: GroupAffiliatesProps) {
             const relationshipType = getRelationshipType(group)
             return (
               <Link href={`/groups/${group.id}`} key={group.id} className="block">
-                <div className="flex items-center justify-between p-3 rounded-md border hover:bg-gray-50 cursor-pointer">
+                <div className="flex items-center justify-between p-3 rounded-md border hover:bg-muted/50 cursor-pointer">
                   <div className="flex items-center">
                     <Avatar className="h-10 w-10 mr-3">
                       <AvatarImage src={group.avatar || "/placeholder.svg"} alt={group.name} />
