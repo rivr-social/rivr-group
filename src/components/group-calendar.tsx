@@ -7,6 +7,13 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   ChevronLeft,
   ChevronRight,
   Calendar,
@@ -36,6 +43,16 @@ const TYPE_COLORS = {
 
 type CalendarItemType = keyof typeof TYPE_COLORS
 
+const KIND_LABELS: Record<CalendarItemType, string> = {
+  event: "Events",
+  project: "Projects",
+  job: "Jobs",
+}
+
+// Filter sentinel for "no narrowing" — kept as a constant so the Select value,
+// default state, and reset all reference the same token.
+const ALL_FILTER = "all"
+
 interface CalendarItem {
   id: string
   title: string
@@ -45,6 +62,12 @@ interface CalendarItem {
   link: string
   time?: string
   location?: string
+  /** Owning agent (group) id — drives the per-group filter when the calendar
+   *  aggregates items from more than one owner. */
+  ownerId?: string
+  /** Distinct member ids this item is attributed to (creator + assignees).
+   *  Drives the per-member filter; empty when creation persisted no such field. */
+  memberIds: string[]
 }
 
 interface GroupCalendarProps {
@@ -59,6 +82,14 @@ interface GroupCalendarProps {
    * extraction when an id is absent.
    */
   eventWindows?: Record<string, { start: string; end: string }>
+  /**
+   * Optional id→display-name maps for the owner-group and member filter labels.
+   * The calendar only carries ids on resources, so when a map is absent the
+   * filter falls back to a shortened id. Call sites may plumb these in once they
+   * aggregate multi-owner data; not required for correctness.
+   */
+  ownerNames?: Record<string, string>
+  memberNames?: Record<string, string>
 }
 
 /**
@@ -96,6 +127,48 @@ const extractDate = (resource: SerializedResource, ...metaKeys: string[]): strin
   return null
 }
 
+/**
+ * Resolves a resource's schedule date the way projects store it: the nested
+ * `metadata.timeframe.start` (create form's datetime-range) first, then the
+ * legacy flat keys. Returned raw (un-normalized) so callers can decide the
+ * createdAt fallback. Shared by the project loop and the job parent-project
+ * fallback so both read the identical contract.
+ */
+const extractScheduleDate = (resource: SerializedResource): string | null => {
+  const meta = (resource.metadata ?? {}) as Record<string, unknown>
+  const tf = (meta.timeframe ?? {}) as Record<string, unknown>
+  const tfStart = typeof tf.start === "string" && tf.start.trim() ? tf.start : null
+  return tfStart ?? extractDate(resource, "startDate", "deadline", "date")
+}
+
+/**
+ * Normalizes an item's attributed member ids from metadata — the creator plus
+ * any assignees. Jobs/projects created today persist neither field on the
+ * resource (the creator lives on the ledger), so this is usually empty; the
+ * member filter self-hides when it can't derive >1 distinct member.
+ */
+const extractMemberIds = (resource: SerializedResource): string[] => {
+  const meta = (resource.metadata ?? {}) as Record<string, unknown>
+  const ids = new Set<string>()
+  for (const key of ["creatorId", "createdBy", "authorId"]) {
+    const value = meta[key]
+    if (typeof value === "string" && value.trim()) ids.add(value)
+  }
+  const assignees = meta.assignees ?? meta.assignedTo
+  if (Array.isArray(assignees)) {
+    for (const entry of assignees) {
+      if (typeof entry === "string" && entry.trim()) {
+        ids.add(entry)
+      } else if (entry && typeof entry === "object") {
+        const record = entry as Record<string, unknown>
+        const id = record.agentId ?? record.id ?? record.userId
+        if (typeof id === "string" && id.trim()) ids.add(id)
+      }
+    }
+  }
+  return Array.from(ids)
+}
+
 const toCalendarItem = (
   resource: SerializedResource,
   type: CalendarItemType,
@@ -113,6 +186,8 @@ const toCalendarItem = (
     link: `/${linkPrefix}/${resource.id}`,
     time: formatTime(dateStr),
     location: locationValue,
+    ownerId: typeof resource.ownerId === "string" ? resource.ownerId : undefined,
+    memberIds: extractMemberIds(resource),
   }
 }
 
@@ -124,6 +199,8 @@ export function GroupCalendar({
   jobResources,
   groupName,
   eventWindows = {},
+  ownerNames = {},
+  memberNames = {},
 }: GroupCalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
@@ -136,6 +213,19 @@ export function GroupCalendar({
   useEffect(() => {
     setToday(new Date())
   }, [])
+
+  // ── Filters (all client-side) ──
+  // Kind toggles start all-on; a kind is shown when its flag is true.
+  const [kindFilter, setKindFilter] = useState<Record<CalendarItemType, boolean>>({
+    event: true,
+    project: true,
+    job: true,
+  })
+  const [ownerFilter, setOwnerFilter] = useState<string>(ALL_FILTER)
+  const [memberFilter, setMemberFilter] = useState<string>(ALL_FILTER)
+
+  const toggleKind = (kind: CalendarItemType) =>
+    setKindFilter((prev) => ({ ...prev, [kind]: !prev[kind] }))
 
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth()
@@ -155,28 +245,74 @@ export function GroupCalendar({
       if (dateStr) items.push(toCalendarItem(r, "event", dateStr, "events"))
     }
 
+    // Index projects by id so jobs can inherit their parent project's schedule
+    // date (jobs carry metadata.projectId but persist no date of their own).
+    const projectById = new Map<string, SerializedResource>()
+    for (const r of projectResources) projectById.set(r.id, r)
+
     for (const r of projectResources) {
       // Projects store their schedule in metadata.timeframe.{start,end} (the
       // create form's datetime-range) — NOT metadata.startDate. Reading only the
       // flat keys missed it and fell back to createdAt, so every project landed
       // on its creation day in the calendar. Read the nested timeframe.start
       // first, then the legacy flat keys, then createdAt.
-      const pmeta = (r.metadata ?? {}) as Record<string, unknown>
-      const tf = (pmeta.timeframe ?? {}) as Record<string, unknown>
-      const tfStart = typeof tf.start === "string" && tf.start.trim() ? tf.start : null
-      const raw = tfStart ?? extractDate(r, "startDate", "deadline", "date") ?? r.createdAt
+      const raw = extractScheduleDate(r) ?? r.createdAt
       const dateStr = utcInstantToLocalWallClock(raw) ?? raw
       if (dateStr) items.push(toCalendarItem(r, "project", dateStr, "projects"))
     }
 
     for (const r of jobResources) {
-      const raw = extractDate(r, "deadline", "startDate", "date") ?? r.createdAt
+      // Jobs have the same class of bug projects had: creation persists no date
+      // field on the job resource, so they all stacked on createdAt. Place each
+      // job on its REAL date: an explicit job date first (future-proofs if one
+      // is ever persisted), then the parent project's schedule date (looked up
+      // via metadata.projectId in the same fetched set), and only then createdAt.
+      const jmeta = (r.metadata ?? {}) as Record<string, unknown>
+      const explicit = extractScheduleDate(r)
+      const projectId = typeof jmeta.projectId === "string" ? jmeta.projectId : null
+      const parent = projectId ? projectById.get(projectId) : undefined
+      const parentDate = parent ? extractScheduleDate(parent) : null
+      const raw = explicit ?? parentDate ?? r.createdAt
       const dateStr = utcInstantToLocalWallClock(raw) ?? raw
       if (dateStr) items.push(toCalendarItem(r, "job", dateStr, "jobs"))
     }
 
     return items
   }, [eventResources, projectResources, jobResources, eventWindows])
+
+  // Distinct owner groups present in the data. The per-group filter only makes
+  // sense (and only renders) when the calendar aggregates >1 owner; a single
+  // group's own calendar has exactly one owner, so the control stays hidden.
+  const ownerOptions = useMemo(() => {
+    const ids = new Set<string>()
+    for (const item of allCalendarItems) if (item.ownerId) ids.add(item.ownerId)
+    return Array.from(ids).map((id) => ({ id, name: ownerNames[id] ?? `${id.slice(0, 8)}…` }))
+  }, [allCalendarItems, ownerNames])
+
+  // Distinct attributed members (creators/assignees) across the items. Renders
+  // only when >1 distinct member is derivable — otherwise creation persisted no
+  // usable attribution and the filter would be a no-op.
+  const memberOptions = useMemo(() => {
+    const ids = new Set<string>()
+    for (const item of allCalendarItems) for (const id of item.memberIds) ids.add(id)
+    return Array.from(ids).map((id) => ({ id, name: memberNames[id] ?? `${id.slice(0, 8)}…` }))
+  }, [allCalendarItems, memberNames])
+
+  const showOwnerFilter = ownerOptions.length > 1
+  const showMemberFilter = memberOptions.length > 1
+
+  // Apply the kind/owner/member filters once; every view (month grid, week,
+  // selected-day, stats) derives from this so the controls stay consistent.
+  const filteredItems = useMemo(
+    () =>
+      allCalendarItems.filter((item) => {
+        if (!kindFilter[item.type]) return false
+        if (showOwnerFilter && ownerFilter !== ALL_FILTER && item.ownerId !== ownerFilter) return false
+        if (showMemberFilter && memberFilter !== ALL_FILTER && !item.memberIds.includes(memberFilter)) return false
+        return true
+      }),
+    [allCalendarItems, kindFilter, ownerFilter, memberFilter, showOwnerFilter, showMemberFilter],
+  )
 
   // Calendar grid calculation
   const firstDayOfMonth = new Date(year, month, 1)
@@ -185,16 +321,16 @@ export function GroupCalendar({
   const startingDayOfWeek = firstDayOfMonth.getDay()
 
   const monthItems = useMemo(
-    () => allCalendarItems.filter((item) => item.date.getFullYear() === year && item.date.getMonth() === month),
-    [allCalendarItems, year, month],
+    () => filteredItems.filter((item) => item.date.getFullYear() === year && item.date.getMonth() === month),
+    [filteredItems, year, month],
   )
 
   const selectedDateItems = useMemo(
     () =>
       selectedDate
-        ? allCalendarItems.filter((item) => item.date.toDateString() === selectedDate.toDateString())
+        ? filteredItems.filter((item) => item.date.toDateString() === selectedDate.toDateString())
         : [],
-    [allCalendarItems, selectedDate],
+    [filteredItems, selectedDate],
   )
 
   // Generate calendar day cells
@@ -229,8 +365,8 @@ export function GroupCalendar({
     const weekStart = getWeekStart(currentDate)
     const weekEnd = new Date(weekStart)
     weekEnd.setDate(weekStart.getDate() + 6)
-    return allCalendarItems.filter((item) => item.date >= weekStart && item.date <= weekEnd)
-  }, [allCalendarItems, currentDate])
+    return filteredItems.filter((item) => item.date >= weekStart && item.date <= weekEnd)
+  }, [filteredItems, currentDate])
 
   // Navigation
   const navigateMonth = (direction: "prev" | "next") => {
@@ -302,6 +438,59 @@ export function GroupCalendar({
             </div>
           </CardHeader>
           <CardContent>
+            {/* ── Filters ── */}
+            <div className="flex flex-wrap items-center gap-2 mb-4 pb-4 border-b">
+              <span className="text-xs font-medium text-muted-foreground mr-1">Show:</span>
+              {(Object.keys(KIND_LABELS) as CalendarItemType[]).map((kind) => {
+                const active = kindFilter[kind]
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => toggleKind(kind)}
+                    aria-pressed={active}
+                    className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                      active
+                        ? "bg-muted/50 border-border text-foreground"
+                        : "bg-transparent border-dashed border-border text-muted-foreground opacity-60 hover:opacity-100"
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${TYPE_COLORS[kind]} ${active ? "" : "opacity-40"}`} />
+                    {KIND_LABELS[kind]}
+                  </button>
+                )
+              })}
+              {showOwnerFilter && (
+                <Select value={ownerFilter} onValueChange={setOwnerFilter}>
+                  <SelectTrigger className="h-7 w-[140px] text-xs">
+                    <SelectValue placeholder="All groups" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_FILTER}>All groups</SelectItem>
+                    {ownerOptions.map((owner) => (
+                      <SelectItem key={owner.id} value={owner.id}>
+                        {owner.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {showMemberFilter && (
+                <Select value={memberFilter} onValueChange={setMemberFilter}>
+                  <SelectTrigger className="h-7 w-[140px] text-xs">
+                    <SelectValue placeholder="All members" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_FILTER}>All members</SelectItem>
+                    {memberOptions.map((member) => (
+                      <SelectItem key={member.id} value={member.id}>
+                        {member.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
             {viewMode === "month" ? (
               <>
                 <div className="grid grid-cols-7 gap-1 mb-2">
