@@ -8,8 +8,9 @@
 
 import { useState, useRef, useCallback } from "react"
 import Image from "next/image"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Camera, MapPin, Users } from "lucide-react"
+import { Camera, ChevronRight, MapPin, Users } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { updateGroupImageAction } from "@/app/actions/settings"
@@ -25,6 +26,8 @@ interface GroupProfileHeaderProps {
   coverImage: string
   location: string
   memberCount: number
+  /** Parent lineage, root-first — renders as a breadcrumb under the name for subgroups. */
+  lineage?: Array<{ id: string; name: string }>
   /**
    * Raw chapter/locale association tags. These are persisted verbatim (often
    * place-agent UUIDs) and are passed unchanged to the edit modal so saves
@@ -50,6 +53,7 @@ export function GroupProfileHeader({
   coverImage,
   location,
   memberCount,
+  lineage,
   tags,
   tagLabels,
   isAdmin,
@@ -192,6 +196,20 @@ export function GroupProfileHeader({
 
         <div className="mt-3 space-y-2">
           <h1 className="text-2xl font-bold leading-tight">{name}</h1>
+          {lineage && lineage.length > 0 && (
+            <nav aria-label="Group lineage" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
+              {lineage.map((ancestor, i) => (
+                <span key={ancestor.id} className="inline-flex items-center gap-1">
+                  {i > 0 && <ChevronRight className="h-3.5 w-3.5 opacity-60" />}
+                  <Link href={`/groups/${ancestor.id}`} className="hover:text-foreground hover:underline">
+                    {ancestor.name}
+                  </Link>
+                </span>
+              ))}
+              <ChevronRight className="h-3.5 w-3.5 opacity-60" />
+              <span className="text-foreground/80">{name}</span>
+            </nav>
+          )}
           {description && <p className="text-muted-foreground">{description}</p>}
 
           <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">

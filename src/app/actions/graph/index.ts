@@ -63,6 +63,7 @@ export {
   fetchPeopleMemberList,
   fetchGroupRelationships,
   fetchGroupBadges,
+  fetchGroupLineage,
 } from "./groups";
 export type { SerializedGroupRelationship, MemberInfo } from "./types";
 

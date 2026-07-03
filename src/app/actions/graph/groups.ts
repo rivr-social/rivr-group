@@ -214,3 +214,45 @@ export async function fetchGroupBadges(groupId: string): Promise<SerializedResou
     postFilter: (items) => (items as Resource[]).filter((r) => r.type === "badge"),
   });
 }
+
+/**
+ * Resolves a group's ancestor lineage (root-first, excluding the group itself)
+ * by walking `parentId` upward. Used for the subgroup breadcrumb under the
+ * group name and for org-tab inheritance (a subgroup of an organization gets
+ * the full org tab set even when its own `metadata.groupType` is unset/basic).
+ *
+ * Bounded to 8 hops to guarantee termination on cyclic/corrupt hierarchies.
+ */
+export async function fetchGroupLineage(
+  groupId: string,
+): Promise<Array<{ id: string; name: string; type: string; groupType: string | null }>> {
+  if (!isUuid(groupId)) return [];
+  const lineage: Array<{ id: string; name: string; type: string; groupType: string | null }> = [];
+  const seen = new Set<string>([groupId]);
+  let cursor: string | null = null;
+
+  const self = await q<Agent | null>("optional", { table: "agents", fn: "getAgent", id: groupId }, {
+    serialize: "raw",
+    permissions: "skip",
+  });
+  cursor = self?.parentId ?? null;
+
+  for (let hop = 0; cursor && hop < 8; hop++) {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    const parent = await q<Agent | null>("optional", { table: "agents", fn: "getAgent", id: cursor }, {
+      serialize: "raw",
+      permissions: "skip",
+    });
+    if (!parent || parent.deletedAt) break;
+    const meta = (parent.metadata ?? {}) as Record<string, unknown>;
+    lineage.unshift({
+      id: parent.id,
+      name: parent.name,
+      type: String(parent.type ?? ""),
+      groupType: typeof meta.groupType === "string" ? meta.groupType : null,
+    });
+    cursor = parent.parentId ?? null;
+  }
+  return lineage;
+}
