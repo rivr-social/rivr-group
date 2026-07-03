@@ -25,6 +25,7 @@ import {
   type NetAllocationTree,
 } from '@/lib/net-allocation';
 import { getGroupMembersByClass } from './net-allocation';
+import { getSubtreeTaskPointsByMember } from '@/lib/queries/stakes';
 import {
   planProjectNetDistribution,
   type DistributionRunPlan,
@@ -143,7 +144,10 @@ export async function runProjectNetDistributionAction(
     return { success: false, error: 'This org has no net-allocation tree to distribute by.' };
   }
   const classMembers = await getGroupMembersByClass(input.groupId);
-  const resolved = resolveNetAllocation(tree, classMembers);
+  // Class shares split proportionally to task points earned across the org
+  // subtree (stake distribution by points — Cameron, 2026-07-02).
+  const memberWeights = await getSubtreeTaskPointsByMember(input.groupId);
+  const resolved = resolveNetAllocation(tree, classMembers, memberWeights);
 
   let plan: DistributionRunPlan;
   try {

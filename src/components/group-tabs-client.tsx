@@ -382,6 +382,7 @@ export function GroupTabsClient({
           following: 0,
         },
         profitShare: members.length > 0 ? Math.round((100 / members.length) * 100) / 100 : 0,
+        pointsEarned: 0,
         contributionMetrics: {
           offersCreated: 0,
           offersAccepted: 0,

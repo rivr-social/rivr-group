@@ -10,15 +10,20 @@ const Tabs = TabsPrimitive.Root
 const TabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
->(({ className, ...props }, ref) => (
+>(({ className, children, ...props }, ref) => (
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex h-10 max-w-full items-center justify-center gap-1 overflow-x-auto rounded-md bg-muted p-1 text-muted-foreground scrollbar-hide max-md:flex max-md:w-max max-md:min-w-full max-md:justify-start",
+      "liquid-glass inline-flex h-10 max-w-full items-center justify-center gap-1 overflow-x-auto rounded-md bg-muted/70 p-1 text-muted-foreground backdrop-blur-sm scrollbar-hide max-md:flex max-md:w-max max-md:min-w-full max-md:justify-start",
       className,
     )}
     {...props}
-  />
+  >
+    <div className="liquid-glass-effect rounded-md" />
+    <div className="liquid-glass-tint rounded-md" />
+    <div className="liquid-glass-shine rounded-md" />
+    {children}
+  </TabsPrimitive.List>
 ))
 TabsList.displayName = TabsPrimitive.List.displayName
 
@@ -29,7 +34,7 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+      "relative inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background/80 data-[state=active]:text-foreground data-[state=active]:shadow-sm data-[state=active]:backdrop-blur-sm",
       className,
     )}
     {...props}

@@ -15,6 +15,7 @@ import {
   type NetAllocationTree,
   type ResolvedNetAllocation,
 } from '@/lib/net-allocation';
+import { getSubtreeTaskPointsByMember } from '@/lib/queries/stakes';
 import { getCurrentUserId } from './helpers';
 import { isUuid } from './types';
 
@@ -141,8 +142,10 @@ export async function getGroupMembersByClass(
 
 /**
  * Resolves the saved allocation tree for a group into concrete per-individual
- * bps shares, using the group's current membership-by-class. This is the
- * read-side preview/resolution used by the Stake editor and (eventually) the
+ * bps shares, using the group's current membership-by-class. Class shares are
+ * split proportionally to each member's task points earned across the org and
+ * its subgroup tree (equal split only when nobody in the class holds points).
+ * This is the read-side preview/resolution used by the Stake editor and the
  * Layer-2 distribution RUN. It does NOT move money.
  *
  * @param groupId The org/group agent id.
@@ -166,5 +169,6 @@ export async function resolveGroupNetAllocation(
   if (tree.rules.length === 0) return [];
 
   const classMembers = await getGroupMembersByClass(groupId);
-  return resolveNetAllocation(tree, classMembers);
+  const memberWeights = await getSubtreeTaskPointsByMember(groupId);
+  return resolveNetAllocation(tree, classMembers, memberWeights);
 }

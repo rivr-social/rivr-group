@@ -35,7 +35,10 @@ export function BottomNav() {
   ]
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-background border-t">
+    <nav className="liquid-glass liquid-glass-shell fixed bottom-0 left-0 right-0 z-[100] border-t border-white/10">
+      <div className="liquid-glass-effect-shell" />
+      <div className="liquid-glass-tint" />
+      <div className="liquid-glass-shine" />
       <div className="flex justify-around items-center h-16">
         {/* Conditional class application highlights whichever route is currently active. */}
         {navItems.map((item) => {

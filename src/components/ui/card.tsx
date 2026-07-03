@@ -2,18 +2,32 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn(
-      "rounded-lg border bg-card text-card-foreground shadow-sm",
-      // Ticket #109: soften card edges in dark mode — whitish + very transparent.
-      "dark:bg-white/5 dark:border-white/10",
-      className,
-    )}
-    {...props}
-  />
-))
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
+  glass?: boolean
+}
+
+const Card = React.forwardRef<HTMLDivElement, CardProps>(
+  ({ className, children, glass = true, ...props }, ref) => (
+    <div
+      ref={ref}
+      className={cn(
+        glass && "liquid-glass rounded-xl border border-transparent",
+        "text-card-foreground dark:bg-white/5 dark:border-white/10",
+        className,
+      )}
+      {...props}
+    >
+      {glass ? (
+        <>
+          <div className="liquid-glass-distortion rounded-xl" />
+          <div className="liquid-glass-tint rounded-xl" />
+          <div className="liquid-glass-shine rounded-xl" />
+        </>
+      ) : null}
+      {children}
+    </div>
+  ),
+)
 Card.displayName = "Card"
 
 const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
