@@ -202,6 +202,18 @@ connectors).
   `updateProfileAction` via `validateSocialLinks` (`src/lib/social-links.ts`).
 - **Tab visibility (P-G3):** already present (predates this port).
 
+## Stake distribution (points-based, 2026-07-02)
+
+Org stake is proportional to TASK POINTS earned across the group and its
+subgroup tree (recursive `agents.parent_id`). The points rail is the `earn` /
+`task-points-earned` ledger edge written by `toggleTaskCompletion`
+(`metadata.points`). `getMemberStakesForGroup` (lib/queries/stakes.ts) derives
+`profitShare = memberPoints / subtreeTotalPoints`; net-allocation `class` rules
+split their bps proportionally to the same weights
+(`getSubtreeTaskPointsByMember` → `resolveNetAllocation(tree, classMembers,
+memberWeights)`), falling back to an equal split only when nobody in the class
+holds points. Group-only feature — do NOT port to locale/region.
+
 ## Development
 
 ```bash

@@ -149,3 +149,85 @@ describe('resolveNetAllocation', () => {
     expect(resolveNetAllocation({ rules: [] }, new Map())).toEqual([]);
   });
 });
+
+describe('resolveNetAllocation — points-weighted class splits', () => {
+  const tree: NetAllocationTree = {
+    rules: [{ targetType: 'class', targetId: 'host', bps: 1000 }],
+  };
+  const members = new Map([['host', ['m1', 'm2', 'm3']]]);
+
+  it('splits a class proportionally to member points', () => {
+    const weights = new Map([
+      ['m1', 60],
+      ['m2', 30],
+      ['m3', 10],
+    ]);
+    const resolved = resolveNetAllocation(tree, members, weights);
+    expect(resolved.map((r) => [r.recipientId, r.bps])).toEqual([
+      ['m1', 600],
+      ['m2', 300],
+      ['m3', 100],
+    ]);
+  });
+
+  it('rounds proportional shares to an exact sum (largest remainder)', () => {
+    const weights = new Map([
+      ['m1', 1],
+      ['m2', 1],
+      ['m3', 1],
+    ]);
+    const resolved = resolveNetAllocation(tree, members, weights);
+    expect(resolved.map((r) => r.bps)).toEqual([334, 333, 333]);
+    expect(resolved.reduce((sum, r) => sum + r.bps, 0)).toBe(1000);
+  });
+
+  it('gives zero-weight members nothing, including remainder bps', () => {
+    const weights = new Map([
+      ['m1', 2],
+      ['m2', 1],
+      // m3 has earned no points
+    ]);
+    const resolved = resolveNetAllocation(tree, members, weights);
+    const byId = new Map(resolved.map((r) => [r.recipientId, r.bps]));
+    expect(byId.get('m1')).toBe(667);
+    expect(byId.get('m2')).toBe(333);
+    // Zero-share recipients are omitted from the resolved list entirely
+    // (same convention as the distribution planner's credit omission).
+    expect(byId.has('m3')).toBe(false);
+    expect(resolved.reduce((sum, r) => sum + r.bps, 0)).toBe(1000);
+  });
+
+  it('falls back to an equal split when no member of the class holds points', () => {
+    const resolved = resolveNetAllocation(tree, members, new Map());
+    expect(resolved.map((r) => r.bps)).toEqual([334, 333, 333]);
+  });
+
+  it('ignores non-finite and negative weights', () => {
+    const weights = new Map([
+      ['m1', Number.NaN],
+      ['m2', -50],
+      ['m3', 10],
+    ]);
+    const resolved = resolveNetAllocation(tree, members, weights);
+    const byId = new Map(resolved.map((r) => [r.recipientId, r.bps]));
+    expect(byId.has('m1')).toBe(false);
+    expect(byId.has('m2')).toBe(false);
+    expect(byId.get('m3')).toBe(1000);
+  });
+
+  it('weights only affect class splits — individual rules pass through unchanged', () => {
+    const mixed: NetAllocationTree = {
+      rules: [
+        { targetType: 'individual', targetId: 'solo', bps: 500 },
+        { targetType: 'class', targetId: 'host', bps: 1000 },
+      ],
+    };
+    const weights = new Map([['m1', 5]]);
+    const resolved = resolveNetAllocation(mixed, members, weights);
+    const byId = new Map(resolved.map((r) => [r.recipientId, r.bps]));
+    expect(byId.get('solo')).toBe(500);
+    expect(byId.get('m1')).toBe(1000);
+    expect(byId.has('m2')).toBe(false);
+    expect(byId.has('m3')).toBe(false);
+  });
+});

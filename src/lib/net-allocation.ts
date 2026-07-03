@@ -133,20 +133,29 @@ export function validateNetAllocationTree(
  * Resolves an allocation tree into concrete per-individual bps shares.
  *
  * - An `individual` rule contributes its full bps to that recipient.
- * - A `class` rule splits its bps EQUALLY across the resolved members of the
- *   class using exact-sum largest-remainder rounding (so the class's bps is
- *   neither lost nor inflated). A class with NO members contributes nothing —
- *   its share stays with the org rather than leaking to other recipients.
+ * - A `class` rule splits its bps across the resolved members of the class.
+ *   When `memberWeights` is supplied and the class's members hold a positive
+ *   total weight, the split is PROPORTIONAL TO WEIGHT (stake distribution by
+ *   points earned in the org and its subgroups — Cameron, 2026-07-02);
+ *   members with zero weight receive nothing. When no weights are supplied,
+ *   or no member of the class holds any weight, the split falls back to
+ *   EQUAL. Both paths use exact-sum largest-remainder rounding (so the
+ *   class's bps is neither lost nor inflated). A class with NO members
+ *   contributes nothing — its share stays with the org rather than leaking
+ *   to other recipients.
  *
  * Shares for the same recipient arising from multiple rules are summed.
  *
  * @param tree The validated allocation tree.
  * @param classMembers Map of class key → member agent ids.
+ * @param memberWeights Optional per-member stake weight (points earned across
+ *   the org subtree). Missing members count as weight 0.
  * @returns Resolved per-individual shares (deduped/summed), in stable order.
  */
 export function resolveNetAllocation(
   tree: NetAllocationTree,
   classMembers: Map<string, string[]>,
+  memberWeights?: Map<string, number>,
 ): ResolvedNetAllocation[] {
   const order: string[] = [];
   const byRecipient = new Map<string, ResolvedNetAllocation>();
@@ -180,7 +189,18 @@ export function resolveNetAllocation(
     // class
     const members = classMembers.get(rule.targetId) ?? [];
     if (members.length === 0) continue; // empty class → stays with the org
-    for (const share of splitBpsEqually(rule.bps, members.length)) {
+
+    const weights = members.map((id) => {
+      const w = memberWeights?.get(id) ?? 0;
+      return Number.isFinite(w) && w > 0 ? w : 0;
+    });
+    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+
+    const shares =
+      totalWeight > 0
+        ? splitBpsByWeight(rule.bps, weights)
+        : splitBpsEqually(rule.bps, members.length);
+    for (const share of shares) {
       const recipientId = members[share.index];
       add(recipientId, share.bps, 'class', rule.targetId);
     }
@@ -206,4 +226,39 @@ function splitBpsEqually(
     parts.push({ index: i, bps: base + (i < remainder ? 1 : 0) });
   }
   return parts;
+}
+
+/**
+ * Splits a bps amount across recipients PROPORTIONALLY TO WEIGHT so the parts
+ * sum EXACTLY to `totalBps` (largest-remainder over the fractional parts;
+ * ties broken by index for determinism). Zero-weight recipients get 0 bps and
+ * never receive remainder bps. Callers must ensure the total weight is > 0.
+ */
+function splitBpsByWeight(
+  totalBps: number,
+  weights: number[],
+): Array<{ index: number; bps: number }> {
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+  if (totalWeight <= 0) return [];
+
+  const exact = weights.map((w) => (totalBps * w) / totalWeight);
+  const parts = exact.map((v, index) => ({
+    index,
+    bps: Math.floor(v),
+    frac: v - Math.floor(v),
+  }));
+
+  let remainder = totalBps - parts.reduce((sum, p) => sum + p.bps, 0);
+  // Distribute leftover bps to the largest fractional parts, but only to
+  // recipients holding real weight — a zero-weight member must stay at 0.
+  const byFrac = parts
+    .filter((p) => weights[p.index] > 0)
+    .sort((a, b) => b.frac - a.frac || a.index - b.index);
+  for (const p of byFrac) {
+    if (remainder <= 0) break;
+    p.bps += 1;
+    remainder -= 1;
+  }
+
+  return parts.map(({ index, bps }) => ({ index, bps }));
 }

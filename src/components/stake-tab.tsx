@@ -97,7 +97,10 @@ export function StakeTab({
           <Card>
             <CardHeader>
               <CardTitle>Group Stake Distribution</CardTitle>
-              <CardDescription>Total allocated stakes: {totalStakes.toFixed(1)}% of group profits</CardDescription>
+              <CardDescription>
+                Stake is proportional to task points earned across this group and its subgroups.
+                Total allocated stakes: {totalStakes.toFixed(1)}% of group profits
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
@@ -120,6 +123,7 @@ export function StakeTab({
                     </div>
                     <div className="text-right">
                       <div className="text-lg font-semibold">{stake.profitShare.toFixed(1)}%</div>
+                      <div className="text-xs text-muted-foreground">{stake.pointsEarned} pts</div>
                       <div className="w-32">
                         <Progress value={(stake.profitShare / totalStakes) * 100} className="h-2" />
                       </div>
@@ -149,6 +153,10 @@ export function StakeTab({
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-amber-600">{stake.pointsEarned}</div>
+                      <div className="text-sm text-muted-foreground">Points Earned</div>
+                    </div>
                     <div className="text-center">
                       <div className="text-2xl font-bold text-blue-600">{stake.contributionMetrics.offersCreated}</div>
                       <div className="text-sm text-muted-foreground">Offers Created</div>

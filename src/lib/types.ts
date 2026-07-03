@@ -988,7 +988,9 @@ export type Proposal = {
 /** Member stake and contribution metrics used for group profit-share calculations. */
 export type MemberStake = {
   user: User
-  profitShare: number // Percentage (0-100)
+  profitShare: number // Percentage (0-100), points-based: memberPoints / subtree totalPoints
+  /** Task points earned across the org and its subgroup tree — the stake numerator. */
+  pointsEarned: number
   contributionMetrics: {
     offersCreated: number
     offersAccepted: number
