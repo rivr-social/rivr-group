@@ -1,0 +1,253 @@
+/**
+ * Tests for the group action tools' project/job/event list + update surface
+ * (the tools an org's external agent uses to audit and repair schedules).
+ *
+ * Two concerns are covered:
+ *   1. buildProjectListing — the pure read model that nests jobs under their
+ *      project by metadata.projectId and surfaces the scheduling fields.
+ *   2. The mutating tools (rivr.jobs.update / rivr.projects.update) — that they
+ *      route every write through the canonical, permission-gated updateResource
+ *      path (surfacing its FORBIDDEN denial rather than bypassing it) and that
+ *      they validate ISO date input before touching the database.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// The group-action-tools module imports its create/update server actions and a
+// query helper at load time. Stub them so the module loads without pulling in
+// db/auth, and so we can assert how the tools call updateResource.
+const mockUpdateResource = vi.fn();
+const mockGetResourcesByOwnerAndType = vi.fn();
+
+vi.mock("@/app/actions/resource-creation", () => ({
+  createProjectResource: vi.fn(),
+  createEventResource: vi.fn(),
+  createOfferingResource: vi.fn(),
+  createDocumentResourceAction: vi.fn(),
+  createGroupResource: vi.fn(),
+  updateGroupResource: vi.fn(),
+  deleteGroupResource: vi.fn(),
+  updateResource: (...args: unknown[]) => mockUpdateResource(...args),
+}));
+
+vi.mock("@/app/actions/interactions/tasks", () => ({
+  updateTaskStatus: vi.fn(),
+  claimTasksAction: vi.fn(),
+}));
+
+vi.mock("@/app/actions/interactions/project-team", () => ({
+  claimJobAction: vi.fn(),
+  recordJobContributionAction: vi.fn(),
+}));
+
+vi.mock("@/lib/queries/resources", () => ({
+  getResourcesByOwnerAndType: (...args: unknown[]) => mockGetResourcesByOwnerAndType(...args),
+}));
+
+import {
+  buildProjectListing,
+  GROUP_ACTION_TOOLS,
+  type ListableResource,
+} from "@/lib/federation/group-action-tools";
+
+const GROUP_ID = "group-1";
+
+function tool(name: string) {
+  const found = GROUP_ACTION_TOOLS.find((t) => t.name === name);
+  if (!found) throw new Error(`tool ${name} not registered`);
+  return found;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("buildProjectListing", () => {
+  it("nests jobs under their project by metadata.projectId and surfaces scheduling fields", () => {
+    const projects: ListableResource[] = [
+      {
+        id: "p1",
+        name: "Spring Build",
+        metadata: { status: "in_progress", timeframe: { start: "2026-03-01", end: "2026-05-31" } },
+      },
+      { id: "p2", name: "Autumn Harvest", metadata: { status: "planning" } },
+    ];
+    const jobs: ListableResource[] = [
+      {
+        id: "j1",
+        name: "Frame the walls",
+        metadata: {
+          projectId: "p1",
+          startDate: "2026-03-05",
+          deadline: "2026-03-20",
+          date: "2026-03-05",
+          assignees: ["a1", "a2"],
+          maxAssignees: 3,
+        },
+      },
+      { id: "j2", name: "Paint", metadata: { projectId: "p1" } },
+      { id: "j3", name: "Sow seeds", metadata: { projectId: "p2", deadline: "2026-09-15" } },
+    ];
+
+    const listing = buildProjectListing(projects, jobs);
+
+    expect(listing).toHaveLength(2);
+
+    const p1 = listing.find((p) => p.id === "p1")!;
+    expect(p1.status).toBe("in_progress");
+    expect(p1.timeframe).toEqual({ start: "2026-03-01", end: "2026-05-31" });
+    expect(p1.jobs.map((j) => j.id)).toEqual(["j1", "j2"]);
+
+    const j1 = p1.jobs.find((j) => j.id === "j1")!;
+    expect(j1).toEqual({
+      id: "j1",
+      name: "Frame the walls",
+      startDate: "2026-03-05",
+      deadline: "2026-03-20",
+      date: "2026-03-05",
+      assignees: ["a1", "a2"],
+      maxAssignees: 3,
+    });
+
+    // Job with only a projectId link still nests, with null/empty scheduling.
+    const j2 = p1.jobs.find((j) => j.id === "j2")!;
+    expect(j2).toEqual({
+      id: "j2",
+      name: "Paint",
+      startDate: null,
+      deadline: null,
+      date: null,
+      assignees: [],
+      maxAssignees: null,
+    });
+
+    const p2 = listing.find((p) => p.id === "p2")!;
+    expect(p2.timeframe).toEqual({ start: null, end: null });
+    expect(p2.jobs.map((j) => j.id)).toEqual(["j3"]);
+  });
+
+  it("omits jobs that carry no projectId link", () => {
+    const projects: ListableResource[] = [{ id: "p1", name: "P1", metadata: {} }];
+    const jobs: ListableResource[] = [
+      { id: "orphan", name: "Unlinked job", metadata: { deadline: "2026-01-01" } },
+      { id: "j1", name: "Linked", metadata: { projectId: "p1" } },
+    ];
+
+    const listing = buildProjectListing(projects, jobs);
+
+    expect(listing[0].jobs.map((j) => j.id)).toEqual(["j1"]);
+  });
+
+  it("tolerates null metadata on both projects and jobs", () => {
+    const projects: ListableResource[] = [{ id: "p1", name: "P1", metadata: null }];
+    const jobs: ListableResource[] = [{ id: "j1", name: "J1", metadata: null }];
+
+    const listing = buildProjectListing(projects, jobs);
+
+    expect(listing).toEqual([
+      { id: "p1", name: "P1", status: null, timeframe: { start: null, end: null }, jobs: [] },
+    ]);
+  });
+});
+
+describe("rivr.projects.list tool", () => {
+  it("nests group-owned jobs under group-owned projects", async () => {
+    mockGetResourcesByOwnerAndType.mockImplementation(async (_owner: string, type: string) => {
+      if (type === "project") return [{ id: "p1", name: "P1", metadata: { status: "active" } }];
+      if (type === "job") return [{ id: "j1", name: "J1", metadata: { projectId: "p1" } }];
+      return [];
+    });
+
+    const result = (await tool("rivr.projects.list").run({}, { groupId: GROUP_ID })) as {
+      groupId: string;
+      count: number;
+      projects: Array<{ id: string; jobs: Array<{ id: string }> }>;
+    };
+
+    expect(mockGetResourcesByOwnerAndType).toHaveBeenCalledWith(GROUP_ID, "project", 50);
+    expect(mockGetResourcesByOwnerAndType).toHaveBeenCalledWith(GROUP_ID, "job", 500);
+    expect(result.count).toBe(1);
+    expect(result.projects[0].jobs.map((j) => j.id)).toEqual(["j1"]);
+  });
+});
+
+describe("rivr.jobs.update tool", () => {
+  it("routes through the canonical updateResource with a merged metadata patch", async () => {
+    mockUpdateResource.mockResolvedValue({ success: true, resourceId: "j1" });
+
+    const result = await tool("rivr.jobs.update").run(
+      { jobId: "j1", deadline: "2026-04-01", maxAssignees: 4 },
+      { groupId: GROUP_ID },
+    );
+
+    expect(mockUpdateResource).toHaveBeenCalledTimes(1);
+    expect(mockUpdateResource).toHaveBeenCalledWith({
+      resourceId: "j1",
+      metadataPatch: { deadline: "2026-04-01", maxAssignees: 4 },
+    });
+    expect(result).toEqual({ success: true, resourceId: "j1" });
+  });
+
+  it("surfaces the permission-gate denial from updateResource instead of bypassing it", async () => {
+    // canModifyResource (inside updateResource) rejects a non-owner without
+    // group write access; the tool must return that FORBIDDEN result verbatim.
+    mockUpdateResource.mockResolvedValue({
+      success: false,
+      message: "You do not have permission to update this object.",
+      error: { code: "FORBIDDEN" },
+    });
+
+    const result = (await tool("rivr.jobs.update").run(
+      { jobId: "not-mine", status: "completed" },
+      { groupId: GROUP_ID },
+    )) as { success: boolean; error?: { code: string } };
+
+    expect(mockUpdateResource).toHaveBeenCalledWith({
+      resourceId: "not-mine",
+      metadataPatch: { status: "completed" },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe("FORBIDDEN");
+  });
+
+  it("validates ISO dates and never touches updateResource on bad input", () => {
+    expect(() =>
+      tool("rivr.jobs.update").run({ jobId: "j1", deadline: "not-a-date" }, { groupId: GROUP_ID }),
+    ).toThrow(/valid ISO date/);
+    expect(mockUpdateResource).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty update (no fields to change)", () => {
+    expect(() =>
+      tool("rivr.jobs.update").run({ jobId: "j1" }, { groupId: GROUP_ID }),
+    ).toThrow(/at least one field/);
+    expect(mockUpdateResource).not.toHaveBeenCalled();
+  });
+});
+
+describe("rivr.projects.update tool", () => {
+  it("normalizes timeframe + status into the metadata patch", async () => {
+    mockUpdateResource.mockResolvedValue({ success: true, resourceId: "p1" });
+
+    await tool("rivr.projects.update").run(
+      { projectId: "p1", timeframe: { start: "2026-06-01" }, status: "in_progress", name: "Renamed" },
+      { groupId: GROUP_ID },
+    );
+
+    expect(mockUpdateResource).toHaveBeenCalledWith({
+      resourceId: "p1",
+      name: "Renamed",
+      description: undefined,
+      metadataPatch: { timeframe: { start: "2026-06-01", end: null }, status: "in_progress" },
+    });
+  });
+
+  it("rejects an invalid timeframe bound before writing", () => {
+    expect(() =>
+      tool("rivr.projects.update").run(
+        { projectId: "p1", timeframe: { end: "whenever" } },
+        { groupId: GROUP_ID },
+      ),
+    ).toThrow(/timeframe.end/);
+    expect(mockUpdateResource).not.toHaveBeenCalled();
+  });
+});

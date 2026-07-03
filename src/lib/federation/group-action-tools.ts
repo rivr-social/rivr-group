@@ -29,12 +29,14 @@ import {
   createGroupResource,
   updateGroupResource,
   deleteGroupResource,
+  updateResource,
 } from "@/app/actions/resource-creation";
 import { updateTaskStatus, claimTasksAction } from "@/app/actions/interactions/tasks";
 import {
   claimJobAction,
   recordJobContributionAction,
 } from "@/app/actions/interactions/project-team";
+import { getResourcesByOwnerAndType } from "@/lib/queries/resources";
 
 // ---------------------------------------------------------------------------
 // Coercion helpers
@@ -59,6 +61,137 @@ function strArray(value: unknown): string[] {
     ? value.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim())
     : [];
 }
+
+/**
+ * Coerce an optional ISO date/datetime arg, validating it parses. Returns
+ * `undefined` when the key is absent/blank (so the field is left unchanged on
+ * update) and throws a precise error when a non-empty value is not a valid date.
+ */
+function optionalIsoDate(args: Record<string, unknown>, key: string): string | undefined {
+  const value = str(args[key]);
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new Error(`"${key}" must be a valid ISO date string (e.g. "2026-08-15" or "2026-08-15T18:00:00Z").`);
+  }
+  return value;
+}
+
+/**
+ * Coerce an optional `{ start, end }` timeframe arg into a normalized object of
+ * validated ISO strings (null when a bound is omitted). Returns `undefined` when
+ * no timeframe object is supplied. Throws when either bound is a non-empty
+ * non-date value.
+ */
+function readTimeframe(args: Record<string, unknown>): { start: string | null; end: string | null } | undefined {
+  const raw = args.timeframe;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  const start = str(obj.start);
+  const end = str(obj.end);
+  if (start !== undefined && !Number.isFinite(Date.parse(start))) {
+    throw new Error(`"timeframe.start" must be a valid ISO date string.`);
+  }
+  if (end !== undefined && !Number.isFinite(Date.parse(end))) {
+    throw new Error(`"timeframe.end" must be a valid ISO date string.`);
+  }
+  return { start: start ?? null, end: end ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Project/job listing (read model)
+// ---------------------------------------------------------------------------
+
+/** A minimal resource row shape the listing builder needs (id/name/metadata). */
+export interface ListableResource {
+  id: string;
+  name: string;
+  metadata: Record<string, unknown> | null;
+}
+
+/** A job nested under its project in the listing read model. */
+export interface ProjectListingJob {
+  id: string;
+  name: string;
+  startDate: string | null;
+  deadline: string | null;
+  date: string | null;
+  assignees: string[];
+  maxAssignees: number | null;
+}
+
+/** A project with its date range and nested jobs in the listing read model. */
+export interface ProjectListingProject {
+  id: string;
+  name: string;
+  status: string | null;
+  timeframe: { start: string | null; end: string | null };
+  jobs: ProjectListingJob[];
+}
+
+function metadataOf(resource: ListableResource): Record<string, unknown> {
+  return (resource.metadata ?? {}) as Record<string, unknown>;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Nest jobs under their parent projects by `metadata.projectId` (the canonical
+ * link the create flow writes on each job). Surfaces each project's status +
+ * `metadata.timeframe {start,end}` and, per job, its scheduling metadata
+ * (startDate/deadline/date), assignees, and slot cap — exactly the fields an org
+ * agent needs to audit and repair project/job dates. Jobs with no `projectId`
+ * link are omitted (they belong to no project).
+ */
+export function buildProjectListing(
+  projects: ListableResource[],
+  jobs: ListableResource[],
+): ProjectListingProject[] {
+  const jobsByProject = new Map<string, ProjectListingJob[]>();
+  for (const job of jobs) {
+    const meta = metadataOf(job);
+    const projectId = readString(meta.projectId);
+    if (!projectId) continue;
+    const entry: ProjectListingJob = {
+      id: job.id,
+      name: job.name,
+      startDate: readString(meta.startDate),
+      deadline: readString(meta.deadline),
+      date: readString(meta.date),
+      assignees: strArray(meta.assignees),
+      maxAssignees: readNumber(meta.maxAssignees),
+    };
+    const bucket = jobsByProject.get(projectId);
+    if (bucket) bucket.push(entry);
+    else jobsByProject.set(projectId, [entry]);
+  }
+
+  return projects.map((project) => {
+    const meta = metadataOf(project);
+    const timeframe =
+      meta.timeframe && typeof meta.timeframe === "object" && !Array.isArray(meta.timeframe)
+        ? (meta.timeframe as Record<string, unknown>)
+        : {};
+    return {
+      id: project.id,
+      name: project.name,
+      status: readString(meta.status),
+      timeframe: {
+        start: readString(timeframe.start),
+        end: readString(timeframe.end),
+      },
+      jobs: jobsByProject.get(project.id) ?? [],
+    };
+  });
+}
+
+/** How many group-owned jobs to scan when nesting under projects. */
+const PROJECT_LISTING_JOB_SCAN_CAP = 500;
 
 /**
  * The group a create should be owned by: an explicit `groupId` arg (a subgroup /
@@ -165,6 +298,160 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         budget: num(args.budget) ?? null,
         jobs: Array.isArray(args.jobs) ? (args.jobs as unknown[]) : undefined,
       }),
+  },
+  {
+    name: "rivr.projects.list",
+    description:
+      "List the group's projects, each with its jobs nested underneath (jobs are matched to a project by their metadata.projectId). " +
+      "For every project it returns id, name, status, and metadata.timeframe {start,end}; for every job it returns id, name, " +
+      "startDate/deadline/date, assignees, and maxAssignees. Use this to audit and repair project/job schedules. " +
+      "Defaults to the primary group; pass groupId to target a subgroup/circle the actor administers.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        ...GROUP_ID_PROP,
+        limit: { type: "number", description: "Max projects to return. Defaults to 50." },
+      },
+    },
+    run: async (args, ctx) => {
+      const groupId = pickGroup(args, ctx);
+      const limit = num(args.limit) ?? 50;
+      const [projects, jobs] = await Promise.all([
+        getResourcesByOwnerAndType(groupId, "project", limit),
+        getResourcesByOwnerAndType(groupId, "job", PROJECT_LISTING_JOB_SCAN_CAP),
+      ]);
+      const listing = buildProjectListing(projects, jobs);
+      return { groupId, count: listing.length, projects: listing };
+    },
+  },
+  {
+    name: "rivr.projects.update",
+    description:
+      "Update a project the actor may manage (owner or group write/admin authority). " +
+      "Set the schedule via timeframe {start,end} (ISO date strings), and/or change name, description, or status. " +
+      "Only the fields you pass are changed; timeframe/status merge into the project metadata. Requires write authority on the project's group.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["projectId"],
+      properties: {
+        projectId: { type: "string", description: "The project resource id to update." },
+        timeframe: {
+          type: "object",
+          additionalProperties: false,
+          description: "Project date range. Provide ISO date strings.",
+          properties: {
+            start: { type: "string", description: "ISO start date, e.g. '2026-08-01'." },
+            end: { type: "string", description: "ISO end date, e.g. '2026-08-31'." },
+          },
+        },
+        name: { type: "string" },
+        description: { type: "string" },
+        status: { type: "string", description: "Project status, e.g. 'planning', 'in_progress', 'completed'." },
+      },
+    },
+    run: (args) => {
+      const resourceId = requireStr(args, "projectId");
+      const metadataPatch: Record<string, unknown> = {};
+      const timeframe = readTimeframe(args);
+      if (timeframe) metadataPatch.timeframe = timeframe;
+      const status = str(args.status);
+      if (status) metadataPatch.status = status;
+      const name = str(args.name);
+      const description = str(args.description);
+      if (
+        Object.keys(metadataPatch).length === 0 &&
+        name === undefined &&
+        description === undefined
+      ) {
+        throw new Error("Provide at least one field to update (timeframe, name, description, or status).");
+      }
+      return updateResource({
+        resourceId,
+        name,
+        description,
+        metadataPatch: Object.keys(metadataPatch).length > 0 ? metadataPatch : undefined,
+      });
+    },
+  },
+  {
+    name: "rivr.jobs.update",
+    description:
+      "Update a job (a work item under a project) the actor may manage (owner or group write/admin authority). " +
+      "Repair its schedule with startDate, deadline, and/or date (ISO date strings), and/or set status or maxAssignees. " +
+      "Only the fields you pass are changed; they merge into the job metadata. Requires write authority on the job's group.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["jobId"],
+      properties: {
+        jobId: { type: "string", description: "The job resource id to update." },
+        startDate: { type: "string", description: "ISO start date." },
+        deadline: { type: "string", description: "ISO deadline date." },
+        date: { type: "string", description: "ISO scheduled date." },
+        status: { type: "string", description: "Job status, e.g. 'open', 'in_progress', 'completed'." },
+        maxAssignees: { type: "number", description: "Maximum number of assignees (claim slots)." },
+      },
+    },
+    run: (args) => {
+      const resourceId = requireStr(args, "jobId");
+      const metadataPatch: Record<string, unknown> = {};
+      const startDate = optionalIsoDate(args, "startDate");
+      if (startDate !== undefined) metadataPatch.startDate = startDate;
+      const deadline = optionalIsoDate(args, "deadline");
+      if (deadline !== undefined) metadataPatch.deadline = deadline;
+      const date = optionalIsoDate(args, "date");
+      if (date !== undefined) metadataPatch.date = date;
+      const status = str(args.status);
+      if (status) metadataPatch.status = status;
+      const maxAssignees = num(args.maxAssignees);
+      if (maxAssignees !== undefined) metadataPatch.maxAssignees = maxAssignees;
+      if (Object.keys(metadataPatch).length === 0) {
+        throw new Error("Provide at least one field to update (startDate, deadline, date, status, or maxAssignees).");
+      }
+      return updateResource({ resourceId, metadataPatch });
+    },
+  },
+  {
+    name: "rivr.events.update",
+    description:
+      "Update an event the actor may manage (owner or group write/admin authority). " +
+      "Repair when it happens with date (ISO date, e.g. '2026-08-15') and startTime/endTime (e.g. '18:00'), " +
+      "or startDate for explicit-ISO records. Only the fields you pass are changed; they merge into the event metadata. " +
+      "Requires write authority on the event's group.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["eventId"],
+      properties: {
+        eventId: { type: "string", description: "The event resource id to update." },
+        date: { type: "string", description: "Event date, e.g. '2026-08-15'. This is the primary rendered date." },
+        startDate: { type: "string", description: "Explicit ISO start datetime (alternate to date, used when date is unset)." },
+        startTime: { type: "string", description: "Start time of day, e.g. '18:00'." },
+        endTime: { type: "string", description: "End time of day, e.g. '21:00'." },
+      },
+    },
+    run: (args) => {
+      const resourceId = requireStr(args, "eventId");
+      const metadataPatch: Record<string, unknown> = {};
+      // Event render (graph-adapters agentToEvent/resourceToEventAgent) composes
+      // the displayed date from metadata.date + metadata.time, falling back to
+      // metadata.startDate. Map startTime -> metadata.time so a time repair
+      // actually moves the rendered time.
+      const date = optionalIsoDate(args, "date");
+      if (date !== undefined) metadataPatch.date = date;
+      const startDate = optionalIsoDate(args, "startDate");
+      if (startDate !== undefined) metadataPatch.startDate = startDate;
+      const startTime = str(args.startTime);
+      if (startTime) metadataPatch.time = startTime;
+      const endTime = str(args.endTime);
+      if (endTime) metadataPatch.endTime = endTime;
+      if (Object.keys(metadataPatch).length === 0) {
+        throw new Error("Provide at least one field to update (date, startDate, startTime, or endTime).");
+      }
+      return updateResource({ resourceId, metadataPatch });
+    },
   },
   {
     name: "rivr.events.create",
