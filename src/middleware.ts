@@ -138,10 +138,12 @@ function buildCspHeader(nonce: string): string {
   // In dev mode, use 'unsafe-inline' for scripts to avoid CSP noise from
   // next-themes, HMR, and other dev-time inline scripts that lack nonces.
   // In production, enforce nonce-based CSP for proper XSS protection.
-  // The sha256 hash whitelists the next-themes inline script that prevents FOUC.
+  // The sha256 hashes whitelist the two static inline scripts: next-themes'
+  // FOUC-prevention script and the crystalline-bg pre-paint boot script
+  // (recompute if either script's exact text changes).
   const scriptSrc = isDev
     ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://js.stripe.com`
-    : `script-src 'self' 'nonce-${nonce}' 'sha256-n46vPwSWuMC0W703pBofImv82Z26xo4LXymv0E9caPk=' 'unsafe-eval' 'wasm-unsafe-eval' https://js.stripe.com`;
+    : `script-src 'self' 'nonce-${nonce}' 'sha256-n46vPwSWuMC0W703pBofImv82Z26xo4LXymv0E9caPk=' 'sha256-4lN0Nms+eLyEuxG3yC9cHcVuEbIxGjeYo4BkqFxl1oE=' 'unsafe-eval' 'wasm-unsafe-eval' https://js.stripe.com`;
 
   return [
     "default-src 'self'",
