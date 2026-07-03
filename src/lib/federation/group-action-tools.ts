@@ -30,6 +30,7 @@ import {
   updateGroupResource,
   deleteGroupResource,
   updateResource,
+  deleteResource,
 } from "@/app/actions/resource-creation";
 import { updateTaskStatus, claimTasksAction } from "@/app/actions/interactions/tasks";
 import {
@@ -190,6 +191,63 @@ export function buildProjectListing(
   });
 }
 
+/** A group-owned event in the listing read model. */
+export interface EventListingEvent {
+  id: string;
+  name: string;
+  date: string | null;
+  startDate: string | null;
+  time: string | null;
+  location: string | null;
+  status: string | null;
+}
+
+/**
+ * Project the scheduling-relevant fields of each group-owned event resource —
+ * the mirror of {@link buildProjectListing} for events. The rendered date is
+ * composed downstream from `metadata.date` + `metadata.time` (falling back to
+ * `metadata.startDate` for explicit-ISO records), so all three are surfaced so
+ * an org agent can audit and repair when an event happens.
+ */
+export function buildEventListing(events: ListableResource[]): EventListingEvent[] {
+  return events.map((event) => {
+    const meta = metadataOf(event);
+    return {
+      id: event.id,
+      name: event.name,
+      date: readString(meta.date),
+      startDate: readString(meta.startDate),
+      time: readString(meta.time),
+      location: readString(meta.location),
+      status: readString(meta.status),
+    };
+  });
+}
+
+/**
+ * Normalize the optional per-job scheduling fields (startDate/deadline/date) an
+ * org agent may pass when creating jobs nested under a project, validating each
+ * as an ISO date string exactly like the {@link optionalIsoDate} update tools do
+ * (throwing on a non-empty non-date). Non-date job fields (title, description,
+ * category, skills, tasks, …) pass through untouched. Returns `undefined` when
+ * no jobs array is supplied so the create action leaves jobs unset.
+ */
+function normalizeJobCreationDates(rawJobs: unknown): unknown[] | undefined {
+  if (!Array.isArray(rawJobs)) return undefined;
+  return rawJobs.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const job = raw as Record<string, unknown>;
+    const normalized: Record<string, unknown> = { ...job };
+    const startDate = optionalIsoDate(job, "startDate");
+    if (startDate !== undefined) normalized.startDate = startDate;
+    const deadline = optionalIsoDate(job, "deadline");
+    if (deadline !== undefined) normalized.deadline = deadline;
+    const date = optionalIsoDate(job, "date");
+    if (date !== undefined) normalized.date = date;
+    return normalized;
+  });
+}
+
 /** How many group-owned jobs to scan when nesting under projects. */
 const PROJECT_LISTING_JOB_SCAN_CAP = 500;
 
@@ -252,12 +310,21 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         title: { type: "string" },
         description: { type: "string" },
         category: { type: "string", description: "Project category, e.g. 'events', 'operations'." },
-        deadline: { type: "string", description: "ISO date/time the project is due." },
+        deadline: { type: "string", description: "ISO date/time the project is due, e.g. '2026-08-31'." },
+        timeframe: {
+          type: "object",
+          additionalProperties: false,
+          description: "Project date range (ISO date strings). Persisted at creation — no follow-up update needed.",
+          properties: {
+            start: { type: "string", description: "ISO start date, e.g. '2026-08-01'." },
+            end: { type: "string", description: "ISO end date, e.g. '2026-08-31'." },
+          },
+        },
         budget: { type: "number", description: "Optional budget amount." },
         jobs: {
           type: "array",
           description:
-            "Optional jobs to create under the project. Each job may carry its own tasks.",
+            "Optional jobs to create under the project. Each job may carry its own schedule (startDate/deadline/date) and tasks.",
           items: {
             type: "object",
             additionalProperties: true,
@@ -267,6 +334,9 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
               description: { type: "string" },
               category: { type: "string" },
               maxAssignees: { type: "number" },
+              startDate: { type: "string", description: "ISO start date for the job." },
+              deadline: { type: "string", description: "ISO deadline date for the job." },
+              date: { type: "string", description: "ISO scheduled date for the job." },
               skills: { type: "array", items: { type: "string" } },
               tasks: {
                 type: "array",
@@ -294,9 +364,10 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         description: requireStr(args, "description"),
         category: requireStr(args, "category"),
         groupId: pickGroup(args, ctx),
-        deadline: str(args.deadline),
+        deadline: optionalIsoDate(args, "deadline"),
+        timeframe: readTimeframe(args),
         budget: num(args.budget) ?? null,
-        jobs: Array.isArray(args.jobs) ? (args.jobs as unknown[]) : undefined,
+        jobs: normalizeJobCreationDates(args.jobs),
       }),
   },
   {
@@ -488,6 +559,44 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         imageUrl: str(args.imageUrl),
         ownerId: pickGroup(args, ctx),
       }),
+  },
+  {
+    name: "rivr.events.list",
+    description:
+      "List the group's events, each with its scheduling metadata: id, name, date, startDate, time, " +
+      "location, and status. Use this to audit and repair event schedules (pair with rivr.events.update). " +
+      "Defaults to the primary group; pass groupId to target a subgroup/circle the actor administers.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        ...GROUP_ID_PROP,
+        limit: { type: "number", description: "Max events to return. Defaults to 50." },
+      },
+    },
+    run: async (args, ctx) => {
+      const groupId = pickGroup(args, ctx);
+      const limit = num(args.limit) ?? 50;
+      const events = await getResourcesByOwnerAndType(groupId, "event", limit);
+      const listing = buildEventListing(events);
+      return { groupId, count: listing.length, events: listing };
+    },
+  },
+  {
+    name: "rivr.events.delete",
+    description:
+      "Delete (soft-delete) an event the actor may manage (owner or group write/admin authority). " +
+      "The event is marked deleted (recoverable) rather than hard-removed. " +
+      "Requires write authority on the event's group — the same gate as rivr.events.update.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["eventId"],
+      properties: {
+        eventId: { type: "string", description: "The event resource id to delete." },
+      },
+    },
+    run: (args) => deleteResource(requireStr(args, "eventId")),
   },
   {
     name: "rivr.offerings.create",

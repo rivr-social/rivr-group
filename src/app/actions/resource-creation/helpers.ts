@@ -306,10 +306,22 @@ export async function createResourceWithLedger(input: CreateResourceInput): Prom
     // stays group-owned, gated below) — and falls back to current behavior when
     // no controllerId is available so we never null-own.
     const executionContext = getExecutionContext();
+    const hasExplicitOwner =
+      typeof input.ownerId === "string" && input.ownerId.trim().length > 0;
     const requestedOwnerId = input.ownerId ?? userId;
+    // Only re-home to the controller when the autobot is DEFAULTING to owning the
+    // content itself (no explicit `input.ownerId` supplied). An explicit owner —
+    // e.g. a group the agent acts AS — must stay owned by that principal. Without
+    // this guard, a group agent acting under a human controller (actorId ===
+    // groupId === requestedOwnerId) would silently re-home group-owned resources
+    // to the human, and the group actor could then no longer modify them
+    // (canModifyResource compares the group actor to the human owner → FORBIDDEN).
+    // Projects don't hit this because createProjectResource inserts directly; the
+    // guard brings events/offerings/etc. that route through here into parity.
     const isAutobotControllerContent =
       executionContext?.actorType === "autobot" &&
       Boolean(executionContext.controllerId) &&
+      !hasExplicitOwner &&
       requestedOwnerId === userId;
 
     let ownerId = requestedOwnerId;

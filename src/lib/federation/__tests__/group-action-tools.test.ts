@@ -16,10 +16,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // query helper at load time. Stub them so the module loads without pulling in
 // db/auth, and so we can assert how the tools call updateResource.
 const mockUpdateResource = vi.fn();
+const mockDeleteResource = vi.fn();
+const mockCreateProjectResource = vi.fn();
 const mockGetResourcesByOwnerAndType = vi.fn();
 
 vi.mock("@/app/actions/resource-creation", () => ({
-  createProjectResource: vi.fn(),
+  createProjectResource: (...args: unknown[]) => mockCreateProjectResource(...args),
   createEventResource: vi.fn(),
   createOfferingResource: vi.fn(),
   createDocumentResourceAction: vi.fn(),
@@ -27,6 +29,7 @@ vi.mock("@/app/actions/resource-creation", () => ({
   updateGroupResource: vi.fn(),
   deleteGroupResource: vi.fn(),
   updateResource: (...args: unknown[]) => mockUpdateResource(...args),
+  deleteResource: (...args: unknown[]) => mockDeleteResource(...args),
 }));
 
 vi.mock("@/app/actions/interactions/tasks", () => ({
@@ -45,6 +48,7 @@ vi.mock("@/lib/queries/resources", () => ({
 
 import {
   buildProjectListing,
+  buildEventListing,
   GROUP_ACTION_TOOLS,
   type ListableResource,
 } from "@/lib/federation/group-action-tools";
@@ -249,5 +253,230 @@ describe("rivr.projects.update tool", () => {
       ),
     ).toThrow(/timeframe.end/);
     expect(mockUpdateResource).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildEventListing", () => {
+  it("surfaces each event's scheduling fields (date/startDate/time/location/status)", () => {
+    const events: ListableResource[] = [
+      {
+        id: "e1",
+        name: "Potluck",
+        metadata: {
+          date: "2026-08-15",
+          time: "18:00",
+          location: "Community Hall",
+          status: "scheduled",
+        },
+      },
+      {
+        id: "e2",
+        name: "Cleanup",
+        metadata: { startDate: "2026-09-01T09:00:00Z" },
+      },
+    ];
+
+    expect(buildEventListing(events)).toEqual([
+      {
+        id: "e1",
+        name: "Potluck",
+        date: "2026-08-15",
+        startDate: null,
+        time: "18:00",
+        location: "Community Hall",
+        status: "scheduled",
+      },
+      {
+        id: "e2",
+        name: "Cleanup",
+        date: null,
+        startDate: "2026-09-01T09:00:00Z",
+        time: null,
+        location: null,
+        status: null,
+      },
+    ]);
+  });
+
+  it("tolerates null metadata", () => {
+    const events: ListableResource[] = [{ id: "e1", name: "E1", metadata: null }];
+    expect(buildEventListing(events)).toEqual([
+      { id: "e1", name: "E1", date: null, startDate: null, time: null, location: null, status: null },
+    ]);
+  });
+});
+
+describe("rivr.events.list tool", () => {
+  it("returns group-owned events with a count, scanning the 'event' type", async () => {
+    mockGetResourcesByOwnerAndType.mockImplementation(async (_owner: string, type: string) => {
+      if (type === "event") {
+        return [{ id: "e1", name: "Potluck", metadata: { date: "2026-08-15", time: "18:00" } }];
+      }
+      return [];
+    });
+
+    const result = (await tool("rivr.events.list").run({}, { groupId: GROUP_ID })) as {
+      groupId: string;
+      count: number;
+      events: Array<{ id: string; date: string | null; time: string | null }>;
+    };
+
+    expect(mockGetResourcesByOwnerAndType).toHaveBeenCalledWith(GROUP_ID, "event", 50);
+    expect(result.groupId).toBe(GROUP_ID);
+    expect(result.count).toBe(1);
+    expect(result.events[0]).toMatchObject({ id: "e1", date: "2026-08-15", time: "18:00" });
+  });
+
+  it("honors an explicit limit and subgroup groupId", async () => {
+    mockGetResourcesByOwnerAndType.mockResolvedValue([]);
+
+    await tool("rivr.events.list").run({ groupId: "sub-1", limit: 5 }, { groupId: GROUP_ID });
+
+    expect(mockGetResourcesByOwnerAndType).toHaveBeenCalledWith("sub-1", "event", 5);
+  });
+});
+
+describe("rivr.events.delete tool", () => {
+  it("routes through the canonical, permission-gated deleteResource", async () => {
+    mockDeleteResource.mockResolvedValue({ success: true, resourceId: "e1" });
+
+    const result = await tool("rivr.events.delete").run({ eventId: "e1" }, { groupId: GROUP_ID });
+
+    expect(mockDeleteResource).toHaveBeenCalledTimes(1);
+    expect(mockDeleteResource).toHaveBeenCalledWith("e1");
+    expect(result).toEqual({ success: true, resourceId: "e1" });
+  });
+
+  it("requires an eventId", () => {
+    expect(() => tool("rivr.events.delete").run({}, { groupId: GROUP_ID })).toThrow(/eventId/);
+    expect(mockDeleteResource).not.toHaveBeenCalled();
+  });
+});
+
+describe("not-found vs forbidden ordering", () => {
+  // The underlying updateResource/deleteResource now check existence BEFORE
+  // permission, returning NOT_FOUND for a missing id instead of masking it as
+  // FORBIDDEN. The tools must surface that distinct code verbatim (not collapse
+  // both denials into one), so an org agent can tell "no such event" apart from
+  // "you may not touch this event".
+  it("rivr.events.update surfaces a NOT_FOUND result distinctly from FORBIDDEN", async () => {
+    mockUpdateResource.mockResolvedValue({
+      success: false,
+      message: "That object does not exist or has been deleted.",
+      error: { code: "NOT_FOUND" },
+    });
+
+    const result = (await tool("rivr.events.update").run(
+      { eventId: "ghost", date: "2026-08-15" },
+      { groupId: GROUP_ID },
+    )) as { success: boolean; error?: { code: string } };
+
+    expect(mockUpdateResource).toHaveBeenCalledWith({
+      resourceId: "ghost",
+      metadataPatch: { date: "2026-08-15" },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe("NOT_FOUND");
+  });
+
+  it("rivr.events.delete surfaces NOT_FOUND for a missing id (not FORBIDDEN)", async () => {
+    mockDeleteResource.mockResolvedValue({
+      success: false,
+      message: "That object does not exist or has been deleted.",
+      error: { code: "NOT_FOUND" },
+    });
+
+    const result = (await tool("rivr.events.delete").run(
+      { eventId: "ghost" },
+      { groupId: GROUP_ID },
+    )) as { success: boolean; error?: { code: string } };
+
+    expect(result.error?.code).toBe("NOT_FOUND");
+  });
+
+  it("still surfaces FORBIDDEN when the resource exists but is not writable", async () => {
+    mockUpdateResource.mockResolvedValue({
+      success: false,
+      message: "You do not have permission to update this object.",
+      error: { code: "FORBIDDEN" },
+    });
+
+    const result = (await tool("rivr.events.update").run(
+      { eventId: "not-mine", date: "2026-08-15" },
+      { groupId: GROUP_ID },
+    )) as { success: boolean; error?: { code: string } };
+
+    expect(result.error?.code).toBe("FORBIDDEN");
+  });
+});
+
+describe("rivr.projects.create — create-path date persistence", () => {
+  it("passes validated deadline, timeframe, and nested-job schedule fields through to the create action", async () => {
+    mockCreateProjectResource.mockResolvedValue({ success: true, resourceId: "p1" });
+
+    await tool("rivr.projects.create").run(
+      {
+        title: "Spring Build",
+        description: "Build the thing",
+        category: "operations",
+        deadline: "2026-08-31",
+        timeframe: { start: "2026-08-01", end: "2026-08-31" },
+        jobs: [
+          {
+            title: "Frame the walls",
+            description: "Framing",
+            startDate: "2026-08-02",
+            deadline: "2026-08-10",
+            date: "2026-08-02",
+          },
+        ],
+      },
+      { groupId: GROUP_ID },
+    );
+
+    expect(mockCreateProjectResource).toHaveBeenCalledTimes(1);
+    const payload = mockCreateProjectResource.mock.calls[0][0] as {
+      groupId: string;
+      deadline?: string;
+      timeframe?: { start: string | null; end: string | null };
+      jobs?: Array<Record<string, unknown>>;
+    };
+    expect(payload.groupId).toBe(GROUP_ID);
+    expect(payload.deadline).toBe("2026-08-31");
+    expect(payload.timeframe).toEqual({ start: "2026-08-01", end: "2026-08-31" });
+    expect(payload.jobs).toHaveLength(1);
+    // The job's schedule fields survive into the payload (previously dropped,
+    // forcing a follow-up jobs.update to set them).
+    expect(payload.jobs![0]).toMatchObject({
+      title: "Frame the walls",
+      startDate: "2026-08-02",
+      deadline: "2026-08-10",
+      date: "2026-08-02",
+    });
+  });
+
+  it("validates ISO dates on the project deadline before creating", () => {
+    expect(() =>
+      tool("rivr.projects.create").run(
+        { title: "T", description: "D", category: "c", deadline: "not-a-date" },
+        { groupId: GROUP_ID },
+      ),
+    ).toThrow(/valid ISO date/);
+    expect(mockCreateProjectResource).not.toHaveBeenCalled();
+  });
+
+  it("validates ISO dates on a nested job's schedule before creating", () => {
+    expect(() =>
+      tool("rivr.projects.create").run(
+        {
+          title: "T",
+          description: "D",
+          category: "c",
+          jobs: [{ title: "J", description: "d", deadline: "whenever" }],
+        },
+        { groupId: GROUP_ID },
+      ),
+    ).toThrow(/valid ISO date/);
+    expect(mockCreateProjectResource).not.toHaveBeenCalled();
   });
 });

@@ -59,7 +59,18 @@ export async function updateResource(input: UpdateResourceInput): Promise<Action
   }
 
   const permission = await canModifyResource(userId, input.resourceId);
-  if (!permission.allowed || !permission.resource) {
+  // Distinguish "does not exist" from "exists but you may not touch it": a
+  // missing resource returns NOT_FOUND (canModifyResource omits `resource` only
+  // when the row is absent/soft-deleted) so callers aren't told FORBIDDEN for an
+  // id that never existed. Existence is checked before permission.
+  if (!permission.resource) {
+    return {
+      success: false,
+      message: "That object does not exist or has been deleted.",
+      error: { code: "NOT_FOUND" },
+    };
+  }
+  if (!permission.allowed) {
     return {
       success: false,
       message: "You do not have permission to update this object.",
@@ -300,7 +311,16 @@ export async function deleteResource(resourceId: string): Promise<ActionResult> 
   }
 
   const permission = await canModifyResource(userId, resourceId);
-  if (!permission.allowed || !permission.resource) {
+  // Existence before permission (see updateResource): a missing id returns
+  // NOT_FOUND rather than masking it as a permission denial.
+  if (!permission.resource) {
+    return {
+      success: false,
+      message: "That object does not exist or has been deleted.",
+      error: { code: "NOT_FOUND" },
+    };
+  }
+  if (!permission.allowed) {
     return {
       success: false,
       message: "You do not have permission to delete this object.",
@@ -1061,6 +1081,12 @@ export async function createProjectResource(input: {
               maxAssignees: job.maxAssignees ?? null,
               requiredBadges: Array.isArray(job.requiredBadges) ? job.requiredBadges : [],
               skills: Array.isArray(job.skills) ? job.skills : [],
+              // Schedule fields set at creation time (org agents pass these on
+              // nested jobs so no follow-up jobs.update is required). Stored as
+              // strings; the caller (group-action-tools) validates ISO shape.
+              startDate: typeof job.startDate === "string" ? job.startDate : null,
+              deadline: typeof job.deadline === "string" ? job.deadline : null,
+              date: typeof job.date === "string" ? job.date : null,
             },
           } as NewResource)
           .returning({ id: resources.id });
