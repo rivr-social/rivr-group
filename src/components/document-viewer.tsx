@@ -13,8 +13,10 @@
 import { useEffect, useState, useTransition, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { updateResource } from "@/app/actions/create-resources"
+import { flattenFacetedTags, normalizeFacetedTags } from "@/lib/parachute-doc"
 import type { Document } from "@/types/domain"
 import type { MemberInfo } from "@/types/domain"
+import { FacetedTagEditor } from "@/components/faceted-tag-editor"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -32,6 +34,8 @@ interface DocumentViewerProps {
   onBack: () => void
   onDocumentUpdated?: (document: Document) => void
   members?: MemberInfo[]
+  /** Materialized tag-paths already used across the vault, offered as chip autocomplete. */
+  suggestions?: string[]
 }
 
 /**
@@ -125,7 +129,7 @@ function renderDocumentContent(content: string): ReactNode[] {
  * @param props.onBack Callback that returns to the previous documents view.
  * @returns Document detail UI with metadata, actions, and rendered content.
  */
-export function DocumentViewer({ document, onBack, onDocumentUpdated, members = [] }: DocumentViewerProps) {
+export function DocumentViewer({ document, onBack, onDocumentUpdated, members = [], suggestions = [] }: DocumentViewerProps) {
   const router = useRouter()
   const { toast } = useToast()
   const [isEditing, setIsEditing] = useState(false)
@@ -134,7 +138,7 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
   const [description, setDescription] = useState(document.description)
   const [content, setContent] = useState(document.content)
   const [category, setCategory] = useState(document.category ?? "")
-  const [tags, setTags] = useState((document.tags ?? []).join(", "))
+  const [facetedTags, setFacetedTags] = useState<string[][]>(document.facetedTags ?? [])
   const [showOnAbout, setShowOnAbout] = useState(document.showOnAbout === true)
   const creator = members.find(user => user.id === document.createdBy)
 
@@ -143,17 +147,17 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
     setDescription(document.description)
     setContent(document.content)
     setCategory(document.category ?? "")
-    setTags((document.tags ?? []).join(", "))
+    setFacetedTags(document.facetedTags ?? [])
     setShowOnAbout(document.showOnAbout === true)
     setIsEditing(false)
   }, [document])
 
   const handleSave = () => {
     startTransition(async () => {
-      const nextTags = tags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean)
+      // Normalize the nested tag-paths, then mirror them into the flat `tags`
+      // column (full paths + segments) so existing tag search keeps matching.
+      const normalizedFacets = normalizeFacetedTags(facetedTags)
+      const nextTags = flattenFacetedTags(normalizedFacets)
 
       const result = await updateResource({
         resourceId: document.id,
@@ -164,6 +168,7 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
         metadataPatch: {
           category: category.trim() || null,
           showOnAbout,
+          facetedTags: normalizedFacets,
         },
       })
 
@@ -183,6 +188,7 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
         content,
         category: category.trim() || undefined,
         tags: nextTags,
+        facetedTags: normalizedFacets,
         showOnAbout,
         updatedAt: new Date().toISOString(),
       }
@@ -269,8 +275,13 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
                   <Input id="document-category" value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Governance" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="document-tags">Tags</Label>
-                  <Input id="document-tags" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="policy, founding, public" />
+                  <Label>Tags</Label>
+                  <FacetedTagEditor
+                    value={facetedTags}
+                    suggestions={suggestions}
+                    datalistId={`doc-tags-${document.id}`}
+                    onChange={setFacetedTags}
+                  />
                 </div>
               </div>
               <label className="flex items-center gap-3 text-sm font-medium">
@@ -282,7 +293,19 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
             <>
               <CardTitle className="text-2xl mt-4">{document.title}</CardTitle>
               <p className="text-muted-foreground">{document.description}</p>
-              {document.tags && document.tags.length > 0 && (
+              {document.facetedTags && document.facetedTags.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <Tag className="h-4 w-4 text-muted-foreground" />
+                  {document.facetedTags.map((path) => {
+                    const label = path.join("/")
+                    return (
+                      <Badge key={label} variant="secondary" className="text-xs">
+                        {label}
+                      </Badge>
+                    )
+                  })}
+                </div>
+              ) : document.tags && document.tags.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-2 mt-2">
                   <Tag className="h-4 w-4 text-muted-foreground" />
                   {document.tags.map(tag => (
@@ -291,7 +314,7 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
                     </Badge>
                   ))}
                 </div>
-              )}
+              ) : null}
             </>
           )}
         </CardHeader>

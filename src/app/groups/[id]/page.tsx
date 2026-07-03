@@ -16,6 +16,7 @@ import { resolveEventWindow } from "@/lib/calendar/event-window"
 import { readGroupMembershipPlans } from "@/lib/group-memberships"
 import { getActiveGroupSubscriptionPlanId } from "@/lib/group-subscriptions"
 import { buildGroupPageMetadata } from "@/lib/object-metadata"
+import { parseFacetedTagsFromMetadata } from "@/lib/parachute-doc"
 import { AgentPageShell } from "@/components/agent-page-shell"
 import { Button } from "@/components/ui/button"
 import { GroupJoinControl } from "@/components/group-join-control"
@@ -432,6 +433,10 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
             createdBy: r.ownerId,
             groupId: id,
             tags: Array.isArray(meta.tags) ? (meta.tags as string[]) : [],
+            facetedTags: parseFacetedTagsFromMetadata(
+              r.metadata,
+              Array.isArray(meta.tags) ? (meta.tags as string[]) : r.tags,
+            ),
             category: typeof meta.category === "string" ? meta.category : undefined,
             showOnAbout: meta.showOnAbout === true,
           }

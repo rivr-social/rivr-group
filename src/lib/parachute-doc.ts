@@ -83,10 +83,14 @@ export const MAX_SEGMENT_LENGTH = 120;
  *    promoted to a tag-path), or
  *  - `string`     — a single materialized path.
  *
- * Each segment is trimmed; empty segments are dropped. Paths are truncated to
- * {@link MAX_TAG_DEPTH} segments (each capped at {@link MAX_SEGMENT_LENGTH}
- * chars). Empty paths are removed, exact duplicates are collapsed, and the
- * result is sorted for stable storage and rendering.
+ * Each segment is trimmed and lower-cased (Parachute/Obsidian fold tags to
+ * lower-case in both `extractInlineTags` and `extractFrontmatterTags`, so a
+ * tag typed in the RIVR UI as `Work/Projects` is the SAME facet as an imported
+ * `work/projects` and the two never split the tag tree — this is what keeps
+ * straight-from-vault imports round-tripping). Empty segments are dropped.
+ * Paths are truncated to {@link MAX_TAG_DEPTH} segments (each capped at
+ * {@link MAX_SEGMENT_LENGTH} chars). Empty paths are removed, exact duplicates
+ * are collapsed, and the result is sorted for stable storage and rendering.
  */
 export function normalizeFacetedTags(input: unknown): TagPath[] {
   const rawPaths: unknown[] = toRawPathList(input);
@@ -343,7 +347,9 @@ function toSegments(rawPath: unknown): string[] {
     if (typeof part !== "string") continue;
     const trimmed = part.trim();
     if (!trimmed) continue;
-    segments.push(trimmed.slice(0, MAX_SEGMENT_LENGTH));
+    // Fold to lower-case to match Parachute's tag normalization exactly, so
+    // UI-typed and vault-imported tags resolve to one canonical facet.
+    segments.push(trimmed.toLowerCase().slice(0, MAX_SEGMENT_LENGTH));
     if (segments.length >= MAX_TAG_DEPTH) break;
   }
   return segments;

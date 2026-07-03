@@ -73,6 +73,13 @@ export type Document = {
   createdBy: string
   groupId: string
   tags?: string[]
+  /**
+   * Nested (faceted) tag-paths from `metadata.facetedTags` — each inner array is
+   * one position in an orthogonal hierarchy (e.g. `["work","projects","rivr"]`).
+   * Powers the parachute-vault tag tree and inline chip editing. The flat `tags`
+   * array is kept as a mirror/index of these paths + their segments.
+   */
+  facetedTags?: string[][]
   category?: string
   showOnAbout?: boolean
 }

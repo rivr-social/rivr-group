@@ -22,6 +22,7 @@ import { db } from "@/db";
 import { resources, ledger } from "@/db/schema";
 import { eq, and, isNull, desc, sql, inArray } from "drizzle-orm";
 import type { Resource, ResourceType } from "@/db/schema";
+import { parseFacetedTagsFromMetadata } from "@/lib/parachute-doc";
 import type {
   Document,
   JobShift,
@@ -479,6 +480,7 @@ export function resourceToDocument(resource: Resource, fallbackGroupId = ""): Do
     createdBy: (m.createdBy as string) ?? resource.ownerId,
     groupId: (m.groupId as string) ?? (m.groupDbId as string) ?? fallbackGroupId,
     tags: resource.tags ?? undefined,
+    facetedTags: parseFacetedTagsFromMetadata(resource.metadata, resource.tags),
     category: (m.category as string) ?? undefined,
     showOnAbout: m.showOnAbout === true,
   };

@@ -40,6 +40,34 @@ describe("normalizeFacetedTags", () => {
   it("promotes a single materialized string to one tag-path", () => {
     expect(normalizeFacetedTags("x/y/z")).toEqual([["x", "y", "z"]]);
   });
+
+  it("folds segments to lower-case so UI-typed tags match vault-imported ones (Parachute parity)", () => {
+    // Parachute lower-cases every tag on import; `Work/Projects` typed in the
+    // RIVR UI must collapse to the same facet as an imported `work/projects`,
+    // never splitting the tag tree into two nodes.
+    expect(normalizeFacetedTags(["Work/Projects", "work/projects"])).toEqual([
+      ["work", "projects"],
+    ]);
+    expect(normalizeFacetedTags([["Status", "Draft"]])).toEqual([["status", "draft"]]);
+  });
+
+  it("maps a slash-path string to lower-case facet arrays and a flat mirror (persistence mapping)", () => {
+    // slash-path input -> facetedTags arrays -> flat tags[] mirror.
+    const facets = normalizeFacetedTags(["Work/Projects/RIVR", "status/draft"]);
+    expect(facets).toEqual([
+      ["status", "draft"],
+      ["work", "projects", "rivr"],
+    ]);
+    expect(flattenFacetedTags(facets)).toEqual([
+      "draft",
+      "projects",
+      "rivr",
+      "status",
+      "status/draft",
+      "work",
+      "work/projects/rivr",
+    ]);
+  });
 });
 
 describe("flattenFacetedTags", () => {
