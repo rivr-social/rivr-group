@@ -46,9 +46,7 @@ export const metadata: Metadata = {
  * Runs as the first child of <body> — synchronously during parse, before the
  * browser paints anything.
  */
-const CRYSTALLINE_BOOT_SCRIPT = `(function(){try{var on=${
-  process.env.NEXT_PUBLIC_TESTA_BG === "crystalline"
-}||{"a.rivr.social":1,"app.rivr.social":1,"beta.rivr.social":1,"dev.rivr.social":1}[location.hostname]===1;if(on){document.documentElement.classList.add("crystalline-bg");}else{var t=null;try{t=localStorage.getItem("theme")}catch(e){}var d=t==="dark"||((!t||t==="system")&&matchMedia("(prefers-color-scheme: dark)").matches);var l=document.createElement("link");l.rel="preload";l.as="image";l.href=d?"/bg-dark.jpg":"/bg-light.jpg";document.head.appendChild(l);}}catch(e){}})();`;
+const CRYSTALLINE_BOOT_SCRIPT = `(function(){try{var on=true;if(on){document.documentElement.classList.add("crystalline-bg");}else{var t=null;try{t=localStorage.getItem("theme")}catch(e){}var d=t==="dark"||((!t||t==="system")&&matchMedia("(prefers-color-scheme: dark)").matches);var l=document.createElement("link");l.rel="preload";l.as="image";l.href=d?"/bg-dark.jpg":"/bg-light.jpg";document.head.appendChild(l);}}catch(e){}})();`;
 
 export default async function RootLayout({
   children,

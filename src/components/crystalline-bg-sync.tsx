@@ -10,27 +10,17 @@
  * post-hydration. This component is that re-applier for the crystalline flag.
  *
  * useLayoutEffect runs synchronously after the hydration commit and before
- * the browser paints, so there is no visible background flash. Renders
- * nothing; lane logic mirrors the boot script (one canonical host list).
+ * the browser paints, so there is no visible background flash. The crystalline
+ * background is now the unified Rivr background across the ENTIRE live
+ * ecosystem, so it re-applies on every host (no lane allowlist).
  */
 'use client';
 
 import { useLayoutEffect } from 'react';
 
-/** Hostnames that are global Rivr runtimes — the crystalline lanes. */
-const CRYSTALLINE_HOSTS = new Set([
-  'a.rivr.social',
-  'app.rivr.social',
-  'beta.rivr.social',
-  'dev.rivr.social',
-]);
-
 export function CrystallineBgSync() {
   useLayoutEffect(() => {
-    const enabled =
-      process.env.NEXT_PUBLIC_TESTA_BG === 'crystalline' ||
-      CRYSTALLINE_HOSTS.has(window.location.hostname);
-    if (enabled) document.documentElement.classList.add('crystalline-bg');
+    document.documentElement.classList.add('crystalline-bg');
   }, []);
   return null;
 }
