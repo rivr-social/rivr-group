@@ -3,6 +3,7 @@
 
 import type React from "react";
 import { useState } from "react";
+import { Slash } from "lucide-react";
 import { BottomNav } from "@/components/bottom-nav";
 import { CommandBar } from "@/components/CommandBar";
 
@@ -14,19 +15,19 @@ export default function MainLayout({
   const [commandBarOpen, setCommandBarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen pb-16">
+    <div className="relative min-h-screen pb-16">
       {children}
-      <div className="fixed bottom-16 left-0 right-0 z-40 flex justify-center pointer-events-none">
-        <div className="w-full max-w-xl px-4 pointer-events-auto">
-          <button
-            onClick={() => setCommandBarOpen(true)}
-            className="mx-auto flex items-center gap-1.5 rounded-full bg-muted/80 backdrop-blur-md border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shadow-sm cursor-pointer"
-            aria-label="Open command bar"
-          >
-            <span className="font-mono">/</span>
-            <span>Command</span>
-          </button>
-        </div>
+      <div className="fixed bottom-20 left-0 right-0 z-40 flex justify-center pointer-events-none">
+        <button
+          onClick={() => setCommandBarOpen(true)}
+          className="liquid-glass pointer-events-auto inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/25 bg-transparent text-muted-foreground transition-colors hover:text-foreground"
+          aria-label="Open command palette"
+        >
+          <div className="liquid-glass-effect rounded-full" />
+          <div className="liquid-glass-tint rounded-full" />
+          <div className="liquid-glass-shine rounded-full" />
+          <Slash className="h-4 w-4" />
+        </button>
       </div>
       <CommandBar
         open={commandBarOpen}

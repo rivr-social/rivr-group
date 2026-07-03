@@ -99,7 +99,10 @@ export function GroupProfileHeader({
   }, [groupId, toast, router])
 
   return (
-    <div className="rounded-xl border overflow-hidden bg-card">
+    <div className="liquid-glass rounded-xl border overflow-hidden bg-card">
+      <div className="liquid-glass-effect rounded-xl" />
+      <div className="liquid-glass-tint rounded-xl" />
+      <div className="liquid-glass-shine rounded-xl" />
       {/* Cover image */}
       {isAdmin ? (
         <button

@@ -263,15 +263,22 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
 
     setLoadingJobs((prev) => ({ ...prev, [projectId]: true }))
     try {
-      const resources = await fetchResourcesByOwner(projectId)
+      // Jobs are RESOURCES owned by the group (resources.owner_id FKs to
+      // agents, and a project is a resource, so a job cannot own to the project
+      // id directly) and linked to the project via metadata.projectId — exactly
+      // how the project detail page filters. fetchResourcesByOwner(projectId)
+      // returned nothing (jobs aren't owned by the project), so the dropdown
+      // always showed "No jobs". Fetch the group's resources and keep the jobs
+      // linked to THIS project.
+      const resources = await fetchResourcesByOwner(groupId)
       const jobResources = resources.filter((r) => {
         const meta = r.metadata ?? {}
-        return (
+        const isJob =
           r.type === "listing" ||
           r.type === "job" ||
           String(meta.resourceKind ?? "").toLowerCase() === "job" ||
           String(meta.entityType ?? "").toLowerCase() === "job"
-        )
+        return isJob && String(meta.projectId ?? "") === projectId
       })
       setJobsByProject((prev) => ({
         ...prev,
@@ -287,7 +294,7 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
     } finally {
       setLoadingJobs((prev) => ({ ...prev, [projectId]: false }))
     }
-  }, [jobsByProject, toast])
+  }, [jobsByProject, toast, groupId])
 
   // ---------- Toggle project expansion ----------
 
@@ -507,7 +514,20 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
                   onOpenChange={() => toggleProjectExpansion(project.id)}
                   className="w-full"
                 >
-                  <Card className={`border-l-4 ${getPriorityColor(project.priority)}`}>
+                  <Card
+                    glass
+                    // `.liquid-glass` forces `background: var(--glass-surface-bg)`
+                    // (transparent by default), which overrides Tailwind bg
+                    // classes — over the decorative gold page gradient the cards
+                    // washed out. Give the glass surface a real semi-opaque fill.
+                    // LIGHT: --card is white, so 0.9 reads clearly over the gold.
+                    // DARK: --card (≈13% L) is nearly the same as --background
+                    // (≈10% L), so the fill alone doesn't separate — a
+                    // mode-contrasting border (black/10 light, white/15 dark)
+                    // defines each card edge. Verified in both modes.
+                    style={{ ["--glass-surface-bg" as string]: "hsl(var(--card) / 0.9)" }}
+                    className={`border border-black/10 dark:border-white/15 border-l-4 ${getPriorityColor(project.priority)} shadow-md hover:shadow-lg transition-shadow`}
+                  >
                     <CollapsibleTrigger asChild>
                       <CardHeader className="cursor-pointer hover:bg-gray-50">
                         <div className="flex justify-between items-start">
@@ -548,10 +568,10 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
                           )}
                           <div className="space-y-1">
                             <div className="flex justify-between text-sm">
-                              <span>Completion</span>
-                              <span>{completion}%</span>
+                              <span className="text-muted-foreground">Completion</span>
+                              <span className="font-medium tabular-nums">{completion}%</span>
                             </div>
-                            <Progress value={completion} className="h-2" />
+                            <Progress value={completion} className="h-1.5 bg-black/10 dark:bg-white/10" />
                           </div>
                         </div>
                         <div className="flex justify-end mt-2">

@@ -9,14 +9,14 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        default: "bg-transparent text-primary-foreground hover:bg-white/[0.08]",
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+          "bg-transparent text-destructive-foreground hover:bg-red-500/[0.12]",
         outline:
-          "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+          "border border-white/10 bg-transparent hover:bg-white/[0.08] hover:text-accent-foreground",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
+          "bg-transparent text-secondary-foreground hover:bg-white/[0.08]",
+        ghost: "bg-transparent hover:bg-white/[0.08] hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
@@ -37,12 +37,34 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean
+  glass?: boolean
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, glass = true, children, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"
-    return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />
+    const skipGlass = !glass || variant === "link" || asChild
+    if (skipGlass) {
+      return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props}>{children}</Comp>
+    }
+    return (
+      <Comp
+        className={cn(
+          buttonVariants({ variant, size }),
+          "liquid-glass relative overflow-hidden",
+          className,
+        )}
+        ref={ref}
+        {...props}
+      >
+        <div className="liquid-glass-effect rounded-md" />
+        <div className="liquid-glass-tint rounded-md" />
+        <div className="liquid-glass-shine rounded-md" />
+        <span className="relative z-[3] inline-flex items-center gap-2">
+          {children}
+        </span>
+      </Comp>
+    )
   },
 )
 Button.displayName = "Button"

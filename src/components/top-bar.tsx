@@ -15,6 +15,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { Bell, Drama, LogIn, MessageSquare, Moon, Plus, Search, Sun, X } from "lucide-react"
 import { useTheme } from "next-themes"
+import { GLOBAL_BASE_URL, isOnGlobalInstance } from "@/lib/global-base-url"
 import { Button } from "@/components/ui/button"
 import { LocaleSwitcher } from "@/components/locale-switcher" // Renamed
 import { UserMenu } from "@/components/user-menu"
@@ -25,11 +26,25 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { getActivePersonaInfo } from "@/app/actions/personas"
 import type { SerializedAgent } from "@/lib/graph-serializers"
 import { useRemoteViewer } from "@/contexts/remote-viewer-context"
-import { GLOBAL_BASE_URL } from "@/lib/global-base-url"
 
 interface TopBarProps {
   selectedLocale: string
   onLocaleChange: (localeId: string) => void
+}
+
+/**
+ * Returns whether the current instance is the global app, deferred until
+ * after mount. Uses the shared GLOBAL_HOSTNAMES set from global-base-url.ts
+ * so there is one canonical list. Returning `null` on the server and first
+ * client render keeps SSR output identical to the initial client render,
+ * avoiding React #418 hydration mismatches.
+ */
+function useIsGlobalInstance(): { isGlobal: boolean | null } {
+  const [isGlobal, setIsGlobal] = useState<boolean | null>(null);
+  useEffect(() => {
+    queueMicrotask(() => setIsGlobal(isOnGlobalInstance()));
+  }, []);
+  return { isGlobal };
 }
 
 /**
@@ -40,9 +55,21 @@ interface TopBarProps {
  * @param props.onLocaleChange - Handler invoked when a user selects a new locale/chapter.
  */
 export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
+  const { isGlobal: isGlobalInstance } = useIsGlobalInstance();
+  // Ticket #109: clicking the top-left logo navigates to GLOBAL on every
+  // instance (peer, home, global alike). On the global instance that
+  // resolves to `/` relative; otherwise an absolute cross-origin link.
+  // During the SSR / pre-mount phase `isGlobalInstance` is `null`; we fall
+  // back to the absolute global URL so the server-rendered HTML matches
+  // the first client render exactly (fixes React #418 hydration mismatch).
+  const globalHomeHref = `${GLOBAL_BASE_URL}/`;
+  const logoHref = isGlobalInstance === true ? "/" : globalHomeHref;
   // Local UI state controlling whether the user menu popover is open.
   const [userMenuOpen, setUserMenuOpen] = useState(false)
-  // Controls whether the inline search bar dropdown is expanded.
+  // Controls whether the inline search bar dropdown is expanded. This
+  // sovereign instance has no local /explore results surface (drift fix #3),
+  // so the header search icon opens an inline SearchBar instead of linking
+  // to a local explore route.
   const [searchOpen, setSearchOpen] = useState(false)
   const searchContainerRef = useRef<HTMLDivElement>(null)
 
@@ -58,16 +85,18 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [searchOpen])
   const { theme, setTheme } = useTheme()
-  // Theme icon needs a mounted guard — next-themes resolves `theme` only on
-  // the client, so rendering a theme-aware icon on SSR would cause React
-  // #418 hydration mismatches.
+  // next-themes resolves `theme` only on the client; rendering a theme-aware
+  // icon on SSR would mismatch the client pass. Track mount state and defer
+  // the sun/moon choice to a post-mount render to prevent React #418.
   const [themeMounted, setThemeMounted] = useState(false)
-  useEffect(() => { setThemeMounted(true) }, [])
+  useEffect(() => { queueMicrotask(() => setThemeMounted(true)) }, [])
   // Context-backed user profile data used as an avatar/session fallback.
   const { currentUser } = useUser()
   // Session hook provides auth state; status is checked to avoid flashing the
   // Login button while the session is still being resolved on the client.
   const { data: session, status } = useSession()
+  // Federated SSO visitors carry a remote-viewer cookie instead of a local
+  // session; treat them as authenticated for header affordances.
   const { isAuthenticated: remoteAuthenticated } = useRemoteViewer()
 
   // Active persona tracking for avatar overlay indicator
@@ -81,8 +110,7 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
     }
   }, [])
   useEffect(() => {
-    if (session) checkPersona()
-    else setActivePersona(null)
+    queueMicrotask(() => { if (session) checkPersona() })
   }, [session, checkPersona])
 
   // When operating as a persona, show the persona's avatar instead of the user's
@@ -91,20 +119,38 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
   const authenticated = Boolean(session || remoteAuthenticated)
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 w-full border-b bg-background">
+    <header className="liquid-glass liquid-glass-shell fixed top-0 left-0 right-0 z-[100] w-full border-b border-white/10">
+      <div className="liquid-glass-effect-shell" />
+      <div className="liquid-glass-tint" />
+      <div className="liquid-glass-shine" />
       <div className="flex h-14 items-center px-2 sm:px-4">
         <div className="flex items-center gap-1.5 shrink-0">
           {/*
-            Ticket #109: top-left logo always navigates to GLOBAL
-            (cross-origin on this sovereign instance), using the new
-            theme-aware R-logo.
+            Logo always links to GLOBAL home. On the global instance this
+            stays same-origin (`/`) so next/link-style nav still works;
+            on peer/home/sovereign instances it is an absolute
+            cross-origin link, so we use a plain <a>.
           */}
           <a
-            href={`${GLOBAL_BASE_URL}/`}
+            href={logoHref}
             className="relative flex items-center"
             aria-label="RIVR — go to global home"
           >
-            {/* Light-mode logo */}
+            {/*
+              R mark acts as the top-left logo. The theme toggle is absolutely
+              positioned as a yellow-gold sun/moon glyph that sits above the
+              tail of the R — matching the sun/moon sparkle on the canonical
+              mark artwork.
+            */}
+            {/*
+              `unoptimized`: the brand mark is a fixed 48px chrome asset whose
+              2750×2750 source PNGs make sharp's WebP/AVIF encoder hang on the
+              `/_next/image` path (every real browser negotiates WebP/AVIF), so
+              the optimized request never returns and the logo renders blank.
+              Serving the raw PNG sidesteps the optimizer entirely; a logo gains
+              nothing from on-the-fly optimization.
+            */}
+            {/* Light-mode logo (hidden in dark mode) */}
             <Image
               src="/rivr-logo-light.png"
               alt="RIVR"
@@ -112,8 +158,9 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
               height={48}
               className="h-12 w-12 block dark:hidden"
               priority
+              unoptimized
             />
-            {/* Dark-mode logo */}
+            {/* Dark-mode logo (hidden in light mode) */}
             <Image
               src="/rivr-logo-dark.png"
               alt="RIVR"
@@ -121,6 +168,7 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
               height={48}
               className="h-12 w-12 hidden dark:block"
               priority
+              unoptimized
             />
             <button
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTheme(theme === "dark" ? "light" : "dark"); }}
@@ -137,9 +185,30 @@ export function TopBar({ selectedLocale, onLocaleChange }: TopBarProps) {
           </a>
         </div>
         <div className="flex-1 ml-2 sm:ml-4 flex items-center min-w-0">
-          <LocaleSwitcher selectedLocale={selectedLocale} onLocaleChange={onLocaleChange} />
+          {/*
+            While `isGlobalInstance` is `null` (SSR + first client render)
+            we render an empty slot. The decision branches in after the
+            mount effect resolves the real hostname. Rendering identical
+            output on the server and on the first client pass is what
+            prevents React #418 hydration mismatches.
+
+            The locale switcher renders on BOTH global and sovereign
+            instances. Its locale list is always projected from global's
+            registry (useGlobalLocales), and selecting a locale routes via
+            globalLocaleHref: on global it stays same-origin and filters the
+            local home feed; on a sovereign group/locale/person host it
+            navigates to `${GLOBAL_BASE_URL}/?locale=<slug>` — i.e. the global
+            instance with that locale filtered in the main feed. (This
+            replaces the old "Browse Rivr" link on sovereign instances.)
+          */}
+          {isGlobalInstance === null ? null : (
+            <LocaleSwitcher selectedLocale={selectedLocale} onLocaleChange={onLocaleChange} />
+          )}
         </div>
         <div className="flex items-center gap-0.5 sm:gap-1.5 ml-1 shrink-0">
+          {/* No local /explore results surface on this sovereign instance
+              (drift fix #3) — the search icon toggles an inline SearchBar
+              dropdown that searches local entities instead. */}
           <div ref={searchContainerRef} className="relative">
             <Button
               variant="ghost"

@@ -156,7 +156,15 @@ export function GroupCalendar({
     }
 
     for (const r of projectResources) {
-      const raw = extractDate(r, "startDate", "deadline", "date") ?? r.createdAt
+      // Projects store their schedule in metadata.timeframe.{start,end} (the
+      // create form's datetime-range) — NOT metadata.startDate. Reading only the
+      // flat keys missed it and fell back to createdAt, so every project landed
+      // on its creation day in the calendar. Read the nested timeframe.start
+      // first, then the legacy flat keys, then createdAt.
+      const pmeta = (r.metadata ?? {}) as Record<string, unknown>
+      const tf = (pmeta.timeframe ?? {}) as Record<string, unknown>
+      const tfStart = typeof tf.start === "string" && tf.start.trim() ? tf.start : null
+      const raw = tfStart ?? extractDate(r, "startDate", "deadline", "date") ?? r.createdAt
       const dateStr = utcInstantToLocalWallClock(raw) ?? raw
       if (dateStr) items.push(toCalendarItem(r, "project", dateStr, "projects"))
     }

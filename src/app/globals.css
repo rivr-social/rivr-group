@@ -14,7 +14,7 @@
 
 :root {
   --font-inter: "Inter", system-ui, -apple-system, sans-serif;
-  --background: 180 56% 71%;
+  --background: 180 25% 41%;
   --foreground: 240 10% 3.9%;
   --card: 0 0% 100%;
   --card-foreground: 240 10% 3.9%;
@@ -67,6 +67,7 @@
     color: hsl(var(--foreground));
     font-family: var(--font-inter);
   }
+
 }
 
 /* Custom scrollbar styles for sidebar */
@@ -94,4 +95,158 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* ── Liquid Glass Effect ─────────────────────────────────────────────────── */
+
+.liquid-glass {
+  --glass-surface-bg: transparent;
+  --glass-tint-color: rgba(255, 255, 255, 0.14);
+  --glass-shine-light: rgba(255, 255, 255, 0.06);
+  --glass-shine-dark: rgba(255, 255, 255, 0.04);
+  overflow: visible;
+  background: var(--glass-surface-bg);
+  box-shadow: none;
+}
+
+.dark .liquid-glass {
+  --glass-tint-color: rgba(255, 255, 255, 0.05);
+  --glass-shine-light: rgba(255, 255, 255, 0.015);
+  --glass-shine-dark: rgba(255, 255, 255, 0.01);
+}
+
+.liquid-glass-shell {
+  --glass-tint-color: rgba(255, 255, 255, 0.09);
+  --glass-shine-light: rgba(255, 255, 255, 0.05);
+  --glass-shine-dark: rgba(255, 255, 255, 0.03);
+  box-shadow: none;
+}
+
+.dark .liquid-glass-shell {
+  --glass-tint-color: rgba(255, 255, 255, 0.035);
+  --glass-shine-light: rgba(255, 255, 255, 0.012);
+  --glass-shine-dark: rgba(255, 255, 255, 0.008);
+}
+
+.liquid-glass.fixed {
+  position: fixed;
+}
+
+.liquid-glass:not(.fixed) {
+  position: relative;
+}
+
+.liquid-glass-effect,
+.liquid-glass-distortion,
+.liquid-glass-effect-shell,
+.liquid-glass-effect-strong {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  overflow: hidden;
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.liquid-glass-effect,
+.liquid-glass-distortion {
+  filter: url(#glass-distortion);
+}
+
+.liquid-glass-effect-shell {
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  filter: url(#glass-distortion-shell);
+}
+
+.liquid-glass-effect-strong {
+  filter: url(#glass-distortion-strong);
+}
+
+.liquid-glass-tint {
+  z-index: 1;
+  position: absolute;
+  inset: 0;
+  background: var(--glass-tint-color);
+  pointer-events: none;
+}
+
+.liquid-glass-shine {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: inset 0.5px 0.5px 0.5px 0 var(--glass-shine-light),
+    inset -0.5px -0.5px 0.5px 0 var(--glass-shine-dark);
+}
+
+.liquid-glass > :not(.liquid-glass-effect):not(.liquid-glass-distortion):not(.liquid-glass-effect-shell):not(.liquid-glass-effect-strong):not(.liquid-glass-tint):not(.liquid-glass-shine) {
+  position: relative;
+  z-index: 3;
+}
+
+/* ── Fixed Background ──────────────────────────────────────────────────── */
+
+#rivr-water-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: #4e8282 url("/bg-light.jpg") center / cover no-repeat;
+}
+
+.dark #rivr-water-bg {
+  background: #1a2a2a url("/bg-dark.jpg") center / cover no-repeat;
+}
+
+/* Crystalline volumetric background — the FINAL background on global lanes
+   (a/app/beta/dev.rivr.social), both themes. Rendered as a static CSS layer
+   so it paints on the very first frame: a tiny pre-hydration script in the
+   root layout sets `body.crystalline-bg` from the hostname BEFORE first
+   paint. (Previously a client component mounted this after hydration, so
+   users watched solid-color → water jpg → crystalline swap in sequence, and
+   dark mode downloaded an 80 KB jpg only to throw it away.)
+
+   Same six-layer composition per theme (4 soft asymmetric radials, a corner
+   vignette, a linear base) so light + dark feel like the same artwork with
+   swapped pigment. Light: warm gold/sienna palette (Cameron 2026-05-05 —
+   #f9d294 cream, #f0cc8b gold, #c69a62 tan, #794e1b deep brown). Dark:
+   deep-teal volumetric fog. */
+#rivr-crystalline-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  display: none;
+  filter: blur(2px);
+  background:
+    radial-gradient(ellipse 60% 50% at 75% 18%, rgba(249, 210, 148, 0.65) 0%, rgba(249, 210, 148, 0) 65%),
+    radial-gradient(ellipse 50% 40% at 30% 35%, rgba(240, 204, 139, 0.55) 0%, rgba(240, 204, 139, 0) 70%),
+    radial-gradient(ellipse 45% 35% at 70% 75%, rgba(249, 210, 148, 0.45) 0%, rgba(249, 210, 148, 0) 70%),
+    radial-gradient(ellipse 40% 35% at 18% 78%, rgba(121, 78, 27, 0.45) 0%, rgba(121, 78, 27, 0) 70%),
+    radial-gradient(ellipse 100% 100% at 50% 50%, rgba(121, 78, 27, 0) 55%, rgba(121, 78, 27, 0.40) 100%),
+    linear-gradient(180deg, #c69a62 0%, #f0cc8b 45%, #c69a62 100%);
+}
+
+.dark #rivr-crystalline-bg {
+  background:
+    radial-gradient(ellipse 60% 50% at 75% 18%, rgba(108, 187, 178, 0.55) 0%, rgba(108, 187, 178, 0) 65%),
+    radial-gradient(ellipse 50% 40% at 30% 35%, rgba(58, 134, 128, 0.45) 0%, rgba(58, 134, 128, 0) 70%),
+    radial-gradient(ellipse 45% 35% at 70% 75%, rgba(120, 200, 192, 0.30) 0%, rgba(120, 200, 192, 0) 70%),
+    radial-gradient(ellipse 40% 35% at 18% 78%, rgba(36, 90, 88, 0.55) 0%, rgba(36, 90, 88, 0) 70%),
+    radial-gradient(ellipse 100% 100% at 50% 50%, rgba(0, 0, 0, 0) 60%, rgba(0, 22, 24, 0.55) 100%),
+    linear-gradient(180deg, #0c2a2c 0%, #14474a 45%, #0e3032 100%);
+}
+
+body.crystalline-bg #rivr-crystalline-bg {
+  display: block;
+}
+
+/* Exactly one background layer is ever visible: crystalline on global lanes,
+   the water photo everywhere else. */
+body.crystalline-bg #rivr-water-bg {
+  display: none;
 }
