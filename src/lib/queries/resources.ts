@@ -583,7 +583,16 @@ function resourceToProjectRecord(resource: Resource): ProjectRecord {
  * @returns JobShift array derived from 'shift' resources.
  */
 export async function getShifts(limit = 100): Promise<JobShift[]> {
-  const rows = await getResourcesByType("shift", limit);
+  // Jobs persist as type "job" (the create flow, calendar, and job board all
+  // use it); "shift" is a legacy synonym with no live rows. Fetching only
+  // "shift" here made every /jobs/[id] lookup miss → "Job Not Found". Query
+  // both so job links resolve while any legacy shift rows still work.
+  const rows = await db.query.resources.findMany({
+    where: and(inArray(resources.type, ["job", "shift"]), isNull(resources.deletedAt)),
+    limit,
+    orderBy: [desc(resources.createdAt)],
+    with: { owner: true },
+  });
   return rows.map(resourceToJobShift);
 }
 
