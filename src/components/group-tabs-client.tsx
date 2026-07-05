@@ -21,6 +21,7 @@ import { TreasuryTab } from "@/components/treasury-tab"
 import { JobBoardTab } from "@/components/job-board-tab"
 import { BadgesTab } from "@/components/badges-tab"
 import { PressTab } from "@/components/press-tab"
+import { StockTab } from "@/components/stock-tab"
 import { PostFeed } from "@/components/post-feed"
 import { EventFeed } from "@/components/event-feed"
 import { PeopleFeed } from "@/components/people-feed"
@@ -45,6 +46,7 @@ import type { Document } from "@/types/domain"
 import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel, GroupTabKey } from "@/lib/types"
 import { ProposalStatus, GROUP_TAB_KEYS, DEFAULT_TAB_VISIBILITY } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
+import { toStockInventory, type StockNeed } from "@/lib/stock"
 
 interface ActivityEntry {
   id: string
@@ -122,6 +124,7 @@ const GROUP_TAB_TRIGGER_LABELS: Record<GroupTabKey, string> = {
   press: "Press",
   treasury: "Treasury",
   gallery: "Gallery",
+  stock: "Stock",
 }
 
 export interface GroupTabsClientProps {
@@ -187,6 +190,12 @@ export interface GroupTabsClientProps {
   /** Individual members available as allocation targets in the Stake-tree editor. */
   netAllocationMembers?: NetAllocationMemberOption[]
   pressResources: SerializedResource[]
+  /** Tangible-stock resources (type resource/asset) for the Stock → Inventory subtab. */
+  stockResources: SerializedResource[]
+  /** Persisted Needs shopping list for the Stock → Needs subtab. */
+  stockNeeds: StockNeed[]
+  /** Whether the viewer may edit stock needs (admin or group content-write). */
+  stockCanManage: boolean
   documentResources: Document[]
   projectResources: SerializedResource[]
   jobResources: SerializedResource[]
@@ -232,6 +241,9 @@ export function GroupTabsClient({
   netAllocationClasses = [],
   netAllocationMembers = [],
   pressResources,
+  stockResources,
+  stockNeeds,
+  stockCanManage,
   documentResources,
   projectResources,
   jobResources,
@@ -869,6 +881,17 @@ export function GroupTabsClient({
       {/* ── Press ── */}
       <TabsContent value="press" className="mt-4">
         <PressTab groupId={groupId} isGroupAdmin={isGroupAdmin} pressResources={pressResources} galleryItems={galleryItems} />
+      </TabsContent>
+
+      {/* ── Stock ── */}
+      <TabsContent value="stock" className="mt-4">
+        <StockTab
+          parentType="org"
+          parentId={groupId}
+          inventory={toStockInventory(stockResources)}
+          initialNeeds={stockNeeds}
+          canManage={stockCanManage}
+        />
       </TabsContent>
 
       {/* ── Treasury ── */}

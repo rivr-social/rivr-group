@@ -29,6 +29,8 @@ import { calculateTotalStakes, getMemberStakesForGroup } from "@/lib/queries/sta
 import { getRecordedContributions } from "@/app/actions/interactions"
 import { getGroupMembersByClass } from "@/app/actions/wallet/net-allocation"
 import { parseNetAllocationTree } from "@/lib/net-allocation"
+import { canPostToGroup } from "@/app/actions/create-resources"
+import { extractStockNeeds, isStockInventoryType } from "@/lib/stock"
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -265,6 +267,14 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     const category = String(meta.category ?? "").toLowerCase()
     return category.includes("press") || category.includes("news") || category.includes("media")
   })
+  // ── Stock tab ── tangible-stock resources (material/asset REA types) for the
+  // read-only Inventory subtab, plus the editable Needs list persisted on the
+  // org's own metadata. Managing needs requires admin or group content-write.
+  const stockResources = detail.resources.filter((r) => isStockInventoryType(r.type))
+  const stockNeeds = extractStockNeeds(groupMeta)
+  const stockCanManage = currentUserId
+    ? isGroupAdmin || (await canPostToGroup(currentUserId, id, "create"))
+    : false
 
   // ── Activity filters ──
   const activityEntries = (activity as Array<{ id: string; verb: string; timestamp: string; [key: string]: unknown }>)
@@ -414,6 +424,9 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         netAllocationClasses={netAllocationClasses}
         netAllocationMembers={netAllocationMembers}
         pressResources={pressResources}
+        stockResources={stockResources}
+        stockNeeds={stockNeeds}
+        stockCanManage={stockCanManage}
         documentResources={documentResources.map((r) => {
           const meta = (r.metadata ?? {}) as Record<string, unknown>
           return {

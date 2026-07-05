@@ -13,6 +13,8 @@ import { JobAboutTab } from "@/components/job-about-tab"
 import { JobTasksTab } from "@/components/job-tasks-tab"
 import { JobTimerTab } from "@/components/job-timer-tab"
 import { JobClaimPanel } from "@/components/job-claim-panel"
+import { StockTab } from "@/components/stock-tab"
+import type { StockInventoryItem, StockNeed } from "@/lib/stock"
 import type { JobClaimPanelData } from "@/app/actions/interactions/project-team"
 
 interface JobDetailClientProps {
@@ -23,9 +25,15 @@ interface JobDetailClientProps {
   userBadgeIds: string[]
   currentUserId: string | null
   claimPanel?: JobClaimPanelData | null
+  /** Read-only stock inventory linked to this job (Stock → Inventory subtab). */
+  stockInventory: StockInventoryItem[]
+  /** Persisted Needs list for the Stock → Needs subtab. */
+  stockNeeds: StockNeed[]
+  /** Whether the viewer may edit stock needs (job owner or group content-write). */
+  stockCanManage: boolean
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -191,10 +199,11 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="about">About</TabsTrigger>
           <TabsTrigger value="tasks">Tasks ({totalTasks})</TabsTrigger>
           <TabsTrigger value="timer">Timer</TabsTrigger>
+          <TabsTrigger value="stock">Stock</TabsTrigger>
         </TabsList>
 
         <TabsContent value="about" className="mt-6">
@@ -207,6 +216,16 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
         <TabsContent value="timer" className="mt-6">
           <JobTimerTab job={job} currentUserId={effectiveUserId} />
+        </TabsContent>
+
+        <TabsContent value="stock" className="mt-6">
+          <StockTab
+            parentType="job"
+            parentId={jobId}
+            inventory={stockInventory}
+            initialNeeds={stockNeeds}
+            canManage={stockCanManage}
+          />
         </TabsContent>
       </Tabs>
     </div>

@@ -244,6 +244,81 @@ export async function getEventsByProjectId(
 }
 
 /**
+ * Returns tangible-stock resources (material/asset REA types) linked to a
+ * project via metadata, for the project's Stock → Inventory subtab.
+ *
+ * Mirrors {@link getEventsByProjectId}'s linkage tolerance:
+ * - `metadata.projectId` matches (canonical link), with snake_case + managing
+ *   aliases accepted for historical rows.
+ *
+ * Type matching is restricted to the tangible stock types `resource` and
+ * `asset` (distinct from posts/events/jobs/documents).
+ *
+ * @param projectId Project resource UUID (string).
+ * @param limit Max rows to return. Defaults to `100`.
+ * @returns Matching non-deleted stock resources ordered newest first.
+ * @throws Propagates database/connection errors from the underlying query.
+ * @example
+ * ```ts
+ * const stock = await getResourcesByProjectId(projectId);
+ * ```
+ */
+export async function getResourcesByProjectId(
+  projectId: string,
+  limit = 100,
+): Promise<Resource[]> {
+  const result = await db.execute(sql`
+    SELECT r.*
+    FROM resources r
+    WHERE r.deleted_at IS NULL
+      AND r.type IN ('resource', 'asset')
+      AND (
+        r.metadata->>'projectId' = ${projectId}
+        OR r.metadata->>'managingProjectId' = ${projectId}
+        OR r.metadata->>'project_id' = ${projectId}
+        OR r.metadata->>'managing_project_id' = ${projectId}
+      )
+    ORDER BY r.created_at DESC
+    LIMIT ${limit}
+  `);
+
+  return (result as Record<string, unknown>[]).map(rowToResource);
+}
+
+/**
+ * Returns tangible-stock resources (material/asset REA types) linked to a job
+ * via `metadata.jobId`, for the job's Stock → Inventory subtab.
+ *
+ * @param jobId Job resource UUID (string).
+ * @param limit Max rows to return. Defaults to `100`.
+ * @returns Matching non-deleted stock resources ordered newest first.
+ * @throws Propagates database/connection errors from the underlying query.
+ * @example
+ * ```ts
+ * const stock = await getResourcesByJobId(jobId);
+ * ```
+ */
+export async function getResourcesByJobId(
+  jobId: string,
+  limit = 100,
+): Promise<Resource[]> {
+  const result = await db.execute(sql`
+    SELECT r.*
+    FROM resources r
+    WHERE r.deleted_at IS NULL
+      AND r.type IN ('resource', 'asset')
+      AND (
+        r.metadata->>'jobId' = ${jobId}
+        OR r.metadata->>'job_id' = ${jobId}
+      )
+    ORDER BY r.created_at DESC
+    LIMIT ${limit}
+  `);
+
+  return (result as Record<string, unknown>[]).map(rowToResource);
+}
+
+/**
  * Returns resources that contain a specific tag in the `tags` array column.
  *
  * @param tag Tag to match.
