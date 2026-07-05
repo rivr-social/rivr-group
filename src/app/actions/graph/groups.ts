@@ -256,3 +256,57 @@ export async function fetchGroupLineage(
   }
   return lineage;
 }
+
+/** Relationship types that confer org-grade capability the way a subgroup does. */
+const ORG_GRADE_AFFILIATION_TYPES = new Set([
+  "affiliate",
+  "affiliated",
+  "partner",
+  "partnership",
+  "coalition",
+]);
+
+/**
+ * Whether a group is affiliated/partnered with an org-grade group.
+ *
+ * Partner/affiliate edges live in the ledger (`metadata.relationshipType`) and
+ * are disjoint from the `parentId` subgroup chain that `fetchGroupLineage`
+ * walks. A basic group that is an affiliate/partner of an organization should
+ * still receive the org tab set (Jobs, treasury, governance, …) the same way a
+ * subgroup does — without this, affiliated-group members never saw the Jobs
+ * board (the partner-group Jobs-tab residual). Only the group's DIRECT
+ * relationship edges are considered (no transitive walk) so the check is
+ * O(edges) and always terminates. A counterpart counts only when it is itself
+ * org-grade (by `metadata.groupType` or agent `type`).
+ *
+ * @param groupId Group agent id.
+ * @returns `true` when at least one org-grade affiliate/partner edge exists.
+ * @throws Propagates database/connection errors from the underlying queries.
+ */
+export async function hasOrgGradeAffiliation(groupId: string): Promise<boolean> {
+  if (!isUuid(groupId)) return false;
+  const relationships = await fetchGroupRelationships(groupId);
+  const counterpartIds = new Set<string>();
+  for (const rel of relationships) {
+    if (!ORG_GRADE_AFFILIATION_TYPES.has(rel.type.toLowerCase())) continue;
+    const otherId = rel.sourceGroupId === groupId ? rel.targetGroupId : rel.sourceGroupId;
+    if (otherId && otherId !== groupId && isUuid(otherId)) counterpartIds.add(otherId);
+  }
+  for (const otherId of counterpartIds) {
+    const other = await q<Agent | null>("optional", { table: "agents", fn: "getAgent", id: otherId }, {
+      serialize: "raw",
+      permissions: "skip",
+    });
+    if (!other || other.deletedAt) continue;
+    const meta = (other.metadata ?? {}) as Record<string, unknown>;
+    const otherGroupType = typeof meta.groupType === "string" ? meta.groupType.toLowerCase() : "";
+    const otherType = String(other.type ?? "").toLowerCase();
+    if (
+      ["organization", "org"].includes(otherGroupType) ||
+      ["organization", "org", "ring", "family", "guild", "community"].includes(otherType)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}

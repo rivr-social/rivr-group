@@ -9,7 +9,7 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import { MessageSquare, Settings } from "lucide-react"
-import { fetchAgentFeed, fetchGroupDetail, fetchPublicAgentsByIds , fetchGroupLineage } from "@/app/actions/graph"
+import { fetchAgentFeed, fetchGroupDetail, fetchPublicAgentsByIds , fetchGroupLineage, hasOrgGradeAffiliation } from "@/app/actions/graph"
 import { agentToGroup, agentToUser } from "@/lib/graph-adapters"
 import { isUuid } from "@/app/actions/graph/types"
 import { resolveEventWindow } from "@/lib/calendar/event-window"
@@ -74,7 +74,17 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
            ["organization", "org", "ring", "family", "guild", "community"].includes(a.type.toLowerCase()),
   )
   const ownGroupType = rawGroupType === "org" ? "organization" : (rawGroupType || fallbackGroupType)
-  const canonicalGroupType = hasOrgAncestor && ownGroupType === "basic" ? "organization" : ownGroupType
+  // Partner/affiliated groups linked to an org-grade group inherit the org tab
+  // set (jobs, treasury, governance, …) the same way a subgroup does. Affiliate
+  // edges live in the ledger — disjoint from the parentId chain above — so a
+  // basic group that is only a partner (not a subgroup) of an org would
+  // otherwise stay "basic" and its members never saw the Jobs board. Only
+  // evaluated when the group isn't already org-grade by its own type or a
+  // subgroup ancestor, so it adds at most one relationship lookup.
+  const hasOrgAffiliation =
+    ownGroupType === "basic" && !hasOrgAncestor ? await hasOrgGradeAffiliation(group.id) : false
+  const canonicalGroupType =
+    (hasOrgAncestor || hasOrgAffiliation) && ownGroupType === "basic" ? "organization" : ownGroupType
   const ownerId = typeof groupMeta.creatorId === "string" ? groupMeta.creatorId : undefined
   const currentUserId = session ?? null
   // Use the canonical admin gate so parent-group admin status cascades to

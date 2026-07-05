@@ -64,6 +64,7 @@ export {
   fetchGroupRelationships,
   fetchGroupBadges,
   fetchGroupLineage,
+  hasOrgGradeAffiliation,
 } from "./groups";
 export type { SerializedGroupRelationship, MemberInfo } from "./types";
 
