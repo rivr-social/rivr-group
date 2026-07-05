@@ -11,6 +11,8 @@ const PUBLIC_PAGE_PATHS = new Set([
 ]);
 
 const PUBLIC_PAGE_PREFIXES = [
+  // /docs subtree is auth-optional so agents and anonymous visitors can read it.
+  "/docs",
   "/auth/signup",
   "/auth/reset-password",
   "/auth/forgot-password",

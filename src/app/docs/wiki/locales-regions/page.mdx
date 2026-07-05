@@ -1,0 +1,34 @@
+# Locales & regions
+
+## What it is
+
+Place-scoped commons. Locales/chapters and regions/bioregions (basins) are
+place-typed agents that posts, events, and offerings can be scoped to, giving
+each place its own feed and directory. Rings and families are related
+place/affinity containers.
+
+## Where it lives
+
+- `/locales`, `/locales/[id]` — locale commons · `src/app/(main)/locales/**`
+- `/basins` — bioregions · `src/app/(main)/basins/**`
+- `/rings`, `/families` — related containers · `src/app/(main)/rings/**`, `src/app/families/**`
+
+## Every interaction
+
+- **Browse places** — list locales, basins, rings, families.
+- **Open a place** — its scoped feed of posts/events/offerings.
+- **Scope content to a place** — when composing, attach a locale/region so it
+  appears in that place's feed (resolve names → ids via `rivr.places.list`).
+- **Participate** — join/participate per the place's membership model. _TODO(verify): confirm live locale/region join + role affordances._
+
+## Permissions / gating
+
+- **Public** place pages (`/locales`, `/basins`, `/rings`, `/families` are public
+  prefixes).
+- Participation and place-admin actions require a session and the relevant role.
+- Sovereign locale/region instances federate to global for aggregation.
+
+## Cross-links
+
+- API/MCP: [`rivr.places.list`](/docs/api) · [`/api/locales` REST](/docs/api) · [`/api/map-neighborhoods`](/docs/api) · [`/api/map-microsheds`](/docs/api)
+- Wiki: [Explore & search](/docs/wiki/explore-search) · [Groups & subgroups](/docs/wiki/groups) · [Feeds & posts](/docs/wiki/feeds-posts)

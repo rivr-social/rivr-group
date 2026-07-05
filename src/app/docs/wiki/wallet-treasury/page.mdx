@@ -1,0 +1,36 @@
+# Wallet & treasury
+
+## What it is
+
+The value surfaces: a wallet with balances and transaction history, a points
+balance (contribution rewards), subscription/membership management, and purchase
+history. Some flows involve EVM wallet integration; thanks-tokens carry a
+demurrage (decay) mechanic.
+
+## Where it lives
+
+- `/wallet` — wallet · `src/app/(main)/wallet/page.tsx`
+- `/points` — points balance · `src/app/(main)/points/page.tsx`
+- `/subscribe` — memberships · `src/app/(main)/subscribe/page.tsx`
+- `/profile/purchases` — purchase history · `src/app/(main)/profile/purchases/page.tsx`
+
+## Every interaction
+
+- **View balances & transactions** — wallet balance and transaction history.
+- **View points** — points balance sums active `earn` ledger rows credited to
+  the actor; balance equals lifetime (no spend surface yet).
+- **Manage subscription** — subscribe/upgrade membership tiers; open the Stripe
+  billing portal.
+- **Send thanks tokens** — gift thanks (see [Marketplace & gifts](/docs/wiki/marketplace)); balances decay via demurrage.
+- **Deposit / transfer** — wallet deposit/transfer flows where enabled. _TODO(verify): confirm live EVM deposit/transfer affordances._
+
+## Permissions / gating
+
+- All wallet/points/subscription surfaces require a session.
+- Billing actions derive the subject from the session; membership entitlements
+  gate certain create/sell capabilities (seller/host/organizer/steward tiers).
+
+## Cross-links
+
+- API/MCP: [Wallet tools](/docs/api) · [Mutual Economy tools](/docs/api) · [`rivr.points.balance`](/docs/api) · [`/api/billing` REST](/docs/api) · [`/api/stripe` REST](/docs/api)
+- Wiki: [Marketplace & gifts](/docs/wiki/marketplace) · [Badges & stake](/docs/wiki/badges-stake) · [Account & settings](/docs/wiki/account-settings)

@@ -1,0 +1,37 @@
+# Builder
+
+## What it is
+
+A static-site builder that deterministically generates a website from an owner's
+Resources (REA) and publishes it — optionally bound to a custom domain via DNS
+connectors. Available to both first-class users and groups (global homes both).
+
+## Where it lives
+
+- `/builder` — builder UI · `src/app/(main)/builder/page.tsx` (`builder-client.tsx`)
+- Model/service · `src/lib/builder/{site-model,site-service,dns-write}.ts`
+- API · `src/app/api/builder/{site,publish,domain}/route.ts`
+- Schema · `site_versions` + `site_publications` (migration `0055_site_builder.sql`)
+
+## Every interaction
+
+- **Preview** — `GET/POST /api/builder/site` renders a server-side preview from
+  the owner's Resources (no client-side generation).
+- **Publish** — `POST /api/builder/publish` snapshots a version and publishes it.
+- **Bind a custom domain** — `POST /api/builder/domain` plans + applies DNS
+  records via the owner's DNS connector (Cloudflare zone API, Namecheap
+  `setHosts`, or Squarespace manual-instruction fallback). Credentials are
+  decrypted server-side from the owner's stored connector — never accepted from
+  the client. `DELETE` unbinds.
+- **Choose a theme** — theme presets mirror the profile presets.
+
+## Permissions / gating
+
+- Owner resolution reuses `resolveConnectionSubject` (auth-derived self vs
+  group-admin); an owner id is never taken from the client.
+- Site publications are home-authority and are never federated.
+
+## Cross-links
+
+- API/MCP: [`/api/builder` REST](/docs/api) · [`/api/connections` REST](/docs/api) · [`/api/connectors` REST](/docs/api)
+- Wiki: [Federation & SSO identity](/docs/wiki/federation-identity) · [Docs, filesystem & vault](/docs/wiki/docs-vault) · [Account & settings](/docs/wiki/account-settings)

@@ -1,0 +1,32 @@
+# Messages
+
+## What it is
+
+Direct messages between users and group/room conversations, backed by Matrix
+(Synapse). Includes 1:1 DMs and multi-party rooms.
+
+## Where it lives
+
+- `/messages` — inbox · `src/app/(main)/messages/page.tsx`
+- `/messages/[otherUserId]` — 1:1 DM thread · `src/app/(main)/messages/[otherUserId]/page.tsx`
+- `/messages/room/[roomId]` — group room · `src/app/(main)/messages/room/[roomId]/page.tsx`
+
+## Every interaction
+
+- **Open a conversation** — select a DM or room from the inbox.
+- **Send a message** — compose and send; delivered over Matrix.
+- **Start a DM** — message another user by id.
+- **Participate in a room** — group/room conversations. _TODO(verify): confirm
+  room creation, invites, and read-receipt affordances live._
+
+## Permissions / gating
+
+- All messaging requires a session and a provisioned Matrix identity.
+- Room membership gates room visibility and participation.
+- Matrix discovery is advertised at `/.well-known/matrix/*`.
+
+## Cross-links
+
+- API/MCP: [Notifications tools](/docs/api) · Matrix well-known ([Federation protocol](/docs/api/federation))
+- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Account & settings](/docs/wiki/account-settings)
+- Integration: Matrix homeserver (`matrix.rivr.social`); config via `MATRIX_*` env.

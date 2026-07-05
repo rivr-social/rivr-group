@@ -1,0 +1,65 @@
+# Auth models
+
+RIVR authenticates three kinds of principal. Every API surface derives identity
+**server-side** from one of these — client-supplied identity, owner, signer, or
+wallet is never trusted to bypass server derivation.
+
+<Callout type="note" title="Verified-principal rule">
+  RIVR's correct trust primitive is Ed25519-signed events plus a peer registry.
+  Every feature routes identity through one of the three principals below; none
+  accepts an ambient claim (a header, a client-named `scope_id`, a caller-named
+  callback) as authority.
+</Callout>
+
+## 1. Session <AuthBadge mode="session" />
+
+The default for the browser app. A NextAuth v5 session cookie establishes the
+signed-in user; server components and route handlers read it via `auth()` and
+derive the acting agent id from the session — never from request input.
+
+- **Used by:** all interactive pages, most `/api/**` write routes, and MCP tools
+  marked `enabledFor: ["session"]`.
+- **Credential authority:** password verification is delegated to
+  `app.rivr.social/api/federation/sso/issue` with a local bcrypt fallback, so
+  this sovereign instance can verify a global identity without holding its
+  password.
+
+## 2. MCP token <AuthBadge mode="token" />
+
+A Bearer token presented to the MCP endpoint (`POST /api/mcp`). This is how
+agents and automations act. The instance's static `AIAGENT_MCP_TOKEN` authorizes
+an **act-as** context: the tool call runs as a specific actor/controller, and
+every invocation is written to the MCP provenance log.
+
+- **Used by:** MCP tools marked `enabledFor: ["session", "token"]`. See the
+  [API overview](/docs/api) for the tool surface and discovery endpoints.
+- **Discovery:** `/.well-known/mcp` and `/llms.txt` advertise the endpoint.
+- **Scope:** a token call can only invoke tools whose `enabledFor` includes
+  `"token"`. Destructive, irreversible operations are deliberately withheld from
+  MCP and require the interactive UI.
+
+## 3. Peer signature <AuthBadge mode="peer-signature" />
+
+The federation trust rail. Sovereign instances exchange **Ed25519-signed events**
+authenticated against a **peer registry** (`/api/federation/peers`,
+`/api/federation/remote-auth`). The signature — not a header or an asserted node
+id — is the principal. Nonce + signature dedup prevent replay; imported events
+bind their actor to the materialized local agent id (FK-safe), never to the raw
+remote id.
+
+- **Used by:** the federation import/push/query endpoints — see the
+  [Federation protocol](/docs/api/federation) page for the trust model.
+- **Catch-up:** a locally-initiated pull-sync cron may set an `allowHistorical`
+  flag to replay events after &gt;7-day downtime; push/import routes stay strict.
+
+## Public (auth-optional) <AuthBadge mode="public" />
+
+A subset of routes is intentionally public — discovery, health, manifests,
+federation handshakes, Stripe webhooks, map tiles, and this docs site. These are
+enumerated in `PUBLIC_PAGE_PREFIXES` / `PUBLIC_API_PREFIXES`
+(`src/lib/route-access.ts`).
+
+## See also
+
+- [Federation protocol](/docs/api/federation) — the signed-event endpoints and trust model.
+- [Federation & SSO identity (wiki)](/docs/wiki/federation-identity) — the user-facing side of sovereign homes and cross-instance identity.

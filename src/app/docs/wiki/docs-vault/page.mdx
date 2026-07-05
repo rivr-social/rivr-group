@@ -1,0 +1,72 @@
+# Docs, filesystem & vault
+
+## What it is
+
+The docs module **is a parachute vault**: one integrated surface where a nested
+tag tree is the primary navigation and every document carries editable nested
+tags. Docs are markdown-body Resources whose faceted location is a nested-tag
+array (`metadata.facetedTags`, mirrored to flat `tags`); a doc appears under
+**every** tag path it carries. Tag semantics match Parachute exactly
+(lower-cased slash paths like `work/projects/rivr`), so a Parachute/Obsidian
+vault imports losslessly. Per-resource access control (direct grants + ABAC
+policies), visibility, share-as-post, and history ride on the same rows.
+
+## Where it lives
+
+- `/groups/[id]/docs` — group docs / faceted Tags vault · `src/app/groups/[id]/docs/page.tsx`
+- `/families/[id]/docs`, `/rings/[id]/docs` — container docs
+- Profile docs tab — own-profile filesystem (`documents-tab.tsx`)
+- Agent-HQ filesystem API · `src/app/api/agent-hq/**`; ABAC engine `src/lib/permissions.ts`
+
+## Every interaction
+
+- **Navigate the vault** — a persistent left rail shows the nested tag tree
+  ("All docs", collapsible facet folders with per-node doc counts, and an
+  "Untagged" bucket); selecting a path filters to docs under it (exact or
+  subtree). No separate list-vs-Tags toggle — the vault IS the docs module.
+- **Edit a doc's tags inline** — on the doc view, tags render as chips
+  (× to remove); add tags by typing a slash path (`a/b/c`, Enter/comma to
+  commit) with autocomplete from the vault's existing paths. Persists to
+  `metadata.facetedTags` + the flat `tags` mirror in one update.
+- **Import a vault** (sovereign person instances) — Docs toolbar → "Import
+  vault": pick a Parachute/Obsidian folder (or pull a live daemon); notes become
+  faceted-tag doc Resources; unchanged notes skip on re-import (idempotent).
+- **Browse the filesystem** — a virtual DB filesystem over Resources, rooted at
+  the **object whose page you opened**, not at you: on a group's Docs tab it
+  roots at that GROUP, on your profile it roots at YOU. The root has three
+  folders — `agents/` (the object's related agents: a group's members &
+  subgroups, or a person's personas & the groups they belong to/manage),
+  `ledger/` (the object's action history, by verb), and `resources/` (the
+  object's owned content, nested by type). Select a resource folder to manage
+  its permissions. Access is authorized server-side: a **group** filesystem is
+  visible only to that group's admins; a **person** filesystem only to that same
+  person (self or their own personas). An unauthorized viewer gets an empty tree
+  — the scope subject is derived and checked from `auth()`, never trusted from
+  the client.
+- **Open the ACL panel** — for a resource (or a resource-type folder):
+  - set **visibility**;
+  - add **direct grants** (verb + role + locale/global scope) to any agent;
+  - create **ABAC policies** (allow/deny, conditions equals/in/exists/gt…lte, AND/OR, locale scope);
+  - **share as post**; view read-only **history**.
+- **Require payment for access (x402)** — per-record paid access, OFF by
+  default. The record's owner opts in from the doc editor, setting a price and
+  a settlement address (stored under `resources.metadata.x402`). A caller
+  without an explicit grant then gets a 402 challenge at
+  `GET /api/resources/[id]/access` and is served after a verified, settled
+  x402 payment (receipts persist in `x402_receipts`; a unique settlement-tx
+  index gives replay protection, and authenticated payers are re-granted
+  without re-charging). Toggling it off restores plain grant-based access.
+
+## Permissions / gating
+
+- ACL management is gated by `check(userId, "grant", id, "resource")` — owner or
+  grant-holder only.
+- Folder ACL opens for a `resources/{type}/{id}` directory and its leaves;
+  true subtree/type-folder ABAC is a documented gap (per-resource scope).
+- Tag edits reuse the doc-update action and are gated to the doc's
+  owner/author (same enforcement the viewer already applies).
+
+## Cross-links
+
+- API/MCP: [Files tools](/docs/api) · [`/api/agent-hq` REST](/docs/api) (db/entries, resources/[id]/access|policies|ledger|share)
+- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Account & settings](/docs/wiki/account-settings) · [Autobot & agents](/docs/wiki/autobot-agents)

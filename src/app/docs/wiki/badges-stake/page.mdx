@@ -1,0 +1,32 @@
+# Badges & stake
+
+## What it is
+
+Badges are issued credentials that recognize skills, roles, or contribution and
+can gate actions (e.g. job claims). Points-based stake converts contribution into
+standing/weight within an org. Admins manage badge issuance.
+
+## Where it lives
+
+- `/badges`, `/badges/[id]` — badge directory + detail · `src/app/badges/**`
+- `/admin/badges` — badge administration · `src/app/admin/badges/page.tsx`
+- `/points` — points/stake · `src/app/(main)/points/page.tsx`
+
+## Every interaction
+
+- **Browse badges / open a badge** — see a badge and its holders.
+- **Issue a badge** — admins award badges to agents (`/admin/badges`).
+- **Earn points** — contribution credits `earn` ledger rows; points accrue to the
+  actor's balance.
+- **Stake** — points-based org stake converts contribution → standing. _TODO(verify): confirm live stake mechanic and where it is set._
+
+## Permissions / gating
+
+- **Public** badge pages (`/badges` is a public prefix).
+- **Badge issuance** is admin-gated (`/admin/badges`).
+- Badge holdings gate downstream capabilities (e.g. claiming badge-gated jobs).
+
+## Cross-links
+
+- Wiki: [Projects & jobs](/docs/wiki/projects-jobs) (badge-gated claims) · [Governance](/docs/wiki/governance) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Admin](/docs/wiki/admin)
+- API/MCP: [`rivr.points.balance`](/docs/api) · [Work Graph tools](/docs/api)

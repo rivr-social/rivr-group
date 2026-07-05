@@ -1,0 +1,39 @@
+# Marketplace & gifts
+
+## What it is
+
+The marketplace lets agents list offerings and buyers purchase them via Stripe,
+with receipts and confirmation flows. Alongside paid exchange, RIVR supports
+gift/mutual-aid economy through thanks-tokens. Membership products are also sold
+here.
+
+## Where it lives
+
+- `/marketplace`, `/marketplace/[id]` — listings · `src/app/(main)/marketplace/**`
+- `/marketplace/[id]/purchase`, `/confirmed`, `/receipt/[receiptId]` — checkout flow
+- `/products/membership-*` — membership products · `src/app/products/**`
+- `/profile/purchases` — purchase history · `src/app/(main)/profile/purchases/page.tsx`
+
+## Every interaction
+
+- **Browse / open a listing.**
+- **Save a listing** — add to saved listings.
+- **Purchase** — Stripe checkout. The buyer identity is derived **server-side**
+  from the session (never from client input); on success a receipt resource is
+  created and shown at `/marketplace/[id]/confirmed` → `/receipt/[receiptId]`.
+- **Create an offering/listing** — sellers (with the seller membership) create
+  listings.
+- **Send thanks tokens** — gift one or more thanks tokens to another agent,
+  optionally attaching a message or the resource being thanked.
+
+## Permissions / gating
+
+- **Public** listing browse (`/marketplace`, `/products` are public prefixes).
+- **Buying** requires a session; **selling** typically requires the seller
+  membership tier.
+- Checkout buyer metadata is set server-side (security-hardened, issue #101).
+
+## Cross-links
+
+- API/MCP: [Offerings tools](/docs/api) · [Mutual Economy tools](/docs/api) (thanks, points) · [`rivr.thanks.send`](/docs/api) · [`/api/stripe` REST](/docs/api) · [`/api/billing` REST](/docs/api)
+- Wiki: [Wallet & treasury](/docs/wiki/wallet-treasury) · [Account & settings](/docs/wiki/account-settings)

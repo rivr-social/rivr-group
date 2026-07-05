@@ -1,0 +1,36 @@
+# Account & settings
+
+## What it is
+
+Personal account management: profile editing, avatar/cover, notification
+preferences, privacy, billing, outgoing-email configuration, and full data
+export (account sovereignty).
+
+## Where it lives
+
+- `/settings` — settings · `src/app/settings/page.tsx`
+- `/settings/outgoing-email` — SMTP/outgoing email · `src/app/settings/outgoing-email/page.tsx`
+- `/profile` — own profile · `src/app/(main)/profile/page.tsx`
+- `/notifications` — notifications · `src/app/(main)/notifications/page.tsx`
+
+## Every interaction
+
+- **Edit profile** — name, bio, skills, location; upload avatar and cover.
+  (Sparse update: only supplied fields change; explicit `null` clears a field.)
+- **Notification preferences** — configure what triggers notifications.
+- **Manage billing** — open the Stripe portal, manage memberships (see [Wallet & treasury](/docs/wiki/wallet-treasury)).
+- **Configure outgoing email** — set/test SMTP for the account/instance.
+- **Export your data** — request a full JSON export (profile, personas,
+  resources, ledger, wallets, subscriptions, memberships). Session-only.
+- **Auth flows** — login, signup, forgot/reset password (public auth pages).
+
+## Permissions / gating
+
+- All settings require a session; data export and account deletion are strictly
+  session-derived (deletion only via the interactive UI with typed confirmation —
+  never over MCP).
+
+## Cross-links
+
+- API/MCP: [Account tools](/docs/api) (`rivr.account.export_data`) · [Settings tools](/docs/api) · [`rivr.profile.update_basic`](/docs/api) · [`/api/auth` REST](/docs/api) · [`/api/recovery`](/docs/api)
+- Wiki: [Federation & SSO identity](/docs/wiki/federation-identity) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Notifications via Messages](/docs/wiki/messages)

@@ -1,0 +1,43 @@
+# Groups & subgroups
+
+## What it is
+
+Groups are agent-owned communities/orgs with their own feed, members, tabs, and
+resources. Groups can nest (subgroups) with a lineage breadcrumb, and
+org-descendant subgroups get the full org tab set. A group that is an
+**affiliate/partner** of an org-grade group (a ledger `relationshipType` edge,
+not a `parentId` subgroup edge) inherits that same org tab set — so partner-group
+members see the Jobs board and other org tabs, not just subgroups. Rings and
+families are related group-like containers.
+
+## Where it lives
+
+- `/groups` — directory · `src/app/(main)/groups/page.tsx`
+- `/groups/[id]` — group home + tabs · `src/app/groups/[id]/page.tsx` (`group-tabs-client.tsx`)
+- `/groups/[id]/settings` — group settings · `src/app/groups/[id]/settings/page.tsx`
+- `/groups/[id]/docs` — group docs/filesystem · `src/app/groups/[id]/docs/page.tsx`
+- `/rings`, `/rings/[id]`, `/families`, `/families/[id]` — related containers
+
+## Every interaction
+
+- **Join / leave** — toggle membership on a group or ring.
+- **Request to join / approve** — request-gated groups; admins approve or deny.
+- **Browse tabs** — feed, members, events, projects, docs, and org tabs for
+  org-typed groups and their descendant subgroups.
+- **Lineage breadcrumb** — navigate up the subgroup → parent → org chain.
+- **Post as the group** — admins author group-owned posts (see [Feeds & posts](/docs/wiki/feeds-posts)).
+- **Manage settings** — name, description, visibility, membership policy, member
+  capability toggles _(TODO(verify): enumerate the exact toggle set live)_.
+
+## Permissions / gating
+
+- **Public** group pages are readable by guests (`/groups` is a public prefix).
+- **Members** see member-only content and can post/participate per capability.
+- **Group admins** manage membership, settings, subgroups, and group authorship.
+- Group-agent ownership: the group is itself an agent that can own resources.
+
+## Cross-links
+
+- API/MCP: [Groups tools](/docs/api) · [Group lifecycle tools](/docs/api) · [`rivr.groups.join`](/docs/api) · [`/api/groups` REST](/docs/api) · [`/api/billing/group-subscribe`](/docs/api)
+- Wiki: [Projects & jobs](/docs/wiki/projects-jobs) · [Governance](/docs/wiki/governance) · [Docs, filesystem & vault](/docs/wiki/docs-vault) · [Badges & stake](/docs/wiki/badges-stake)
+- Federation: sovereign group instances federate to global; membership lifecycle emits signed events.

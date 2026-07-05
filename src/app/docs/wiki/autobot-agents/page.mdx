@@ -1,0 +1,39 @@
+# Autobot & agents
+
+## What it is
+
+The agent control plane: personas (delegated actor identities under a controller
+account), connectors to external services, and the MCP surface that lets agents
+act on a user's behalf with full provenance logging. Autobot includes a chat
+surface and voice/TTS/transcription capabilities.
+
+## Where it lives
+
+- `/autobot`, `/autobot/chat` — autobot UI · `src/app/(main)/autobot/**`
+- Autobot API · `src/app/api/autobot/**` (chat, status, settings, provenance, tts, voice, gpu)
+- MCP endpoint · `src/app/api/mcp/route.ts`; tool defs `src/lib/federation/mcp-tools/**`
+
+## Every interaction
+
+- **Chat with autobot** — `/autobot/chat`; may be augmented with knowledge-graph
+  context (`rivr.kg.chat`).
+- **Manage personas** — list/create personas under the controller; switch the
+  active persona (`rivr.personas.list`).
+- **Connect a service** — add connectors (opaque, encrypted credentials) used by
+  builder DNS-write, feeds/bridges, and agent tools.
+- **Act-as over MCP** — an MCP bearer token authorizes tool calls as a specific
+  actor/controller; every call is written to the provenance log.
+- **Review provenance** — `rivr.audit.recent` / `/api/autobot/provenance`.
+
+## Permissions / gating
+
+- MCP tools are gated by `enabledFor` (session and/or token); most allow token
+  auth, a few are session-only (e.g. account data export).
+- Personas are owned by their controller; tools resolve ownership against the
+  controller, not the persona.
+- Destructive/irreversible actions (e.g. account deletion) are withheld from MCP.
+
+## Cross-links
+
+- API: [MCP tools](/docs/api) · [Auth models](/docs/api/auth) · [`/api/autobot` REST](/docs/api) · [`/api/mcp` REST](/docs/api) · [`/api/kg` REST](/docs/api)
+- Wiki: [Federation & SSO identity](/docs/wiki/federation-identity) · [Docs, filesystem & vault](/docs/wiki/docs-vault) · [Builder](/docs/wiki/builder)

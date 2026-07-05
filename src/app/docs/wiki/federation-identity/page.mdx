@@ -1,0 +1,38 @@
+# Federation & SSO identity
+
+## What it is
+
+How a person is one identity across many instances. Sovereign instances (person,
+group, locale, region) run independently and federate into global; a user's
+**home instance** is authoritative for their identity, and global is the
+credential authority. Profiles render locally and via cross-instance projection.
+
+## Where it lives
+
+- `/profile`, `/profile/[username]` — profile · `src/app/(main)/profile/**`
+- `/settings` — identity/account settings · `src/app/settings/page.tsx`
+- Federation protocol · `src/app/api/federation/**`; resolution `src/lib/federation/**`
+
+## Every interaction
+
+- **View your / others' profile** — home-authoritative data plus federated
+  projections; a remote viewer cookie tracks cross-instance viewing.
+- **Federated sign-in (SSO)** — start at `/api/federation/sso/start?homeBaseUrl=…`;
+  password verification is delegated to the global authority
+  (`/api/federation/sso/issue`) with local bcrypt fallback.
+- **Register / connect a peer** — instances register in each other's peer registry
+  (`/api/federation/peers`) to exchange signed events.
+- **Sovereign merge** — migrate a hosted user to a sovereign home. _TODO(verify):
+  the merge flow still requires manual fixes for new users (see open issues)._
+
+## Permissions / gating
+
+- Identity is derived from the session or a verified peer signature — never an
+  asserted node id (the verified-principal rule; see [Auth models](/docs/api/auth)).
+- Cross-instance direct interaction on a domain you lack an account on is limited
+  (cross-instance SSO not yet fully implemented).
+
+## Cross-links
+
+- API: [Federation protocol](/docs/api/federation) · [Auth models](/docs/api/auth) · [`/api/federation` REST](/docs/api) · [`/api/universal-manifest` REST](/docs/api)
+- Wiki: [Autobot & agents](/docs/wiki/autobot-agents) · [Account & settings](/docs/wiki/account-settings) · [Builder](/docs/wiki/builder)
