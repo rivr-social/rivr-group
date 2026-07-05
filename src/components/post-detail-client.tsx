@@ -360,10 +360,11 @@ export function PostDetailClient({
               variant="ghost"
               size="sm"
               className="h-12 w-full rounded-none justify-center text-muted-foreground"
+              aria-label="Share"
+              title="Share"
               onClick={() => navigator.clipboard.writeText(window.location.href)}
             >
-              <Share2 className="h-5 w-5 mr-2" />
-              Share
+              <Share2 className="h-5 w-5" />
             </Button>
             </div>
             <div className="border-t bg-background/60 px-4 py-4">

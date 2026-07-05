@@ -749,13 +749,14 @@ function PostCard({
                 variant="ghost"
                 size="sm"
                 className="h-12 w-full rounded-none justify-center text-muted-foreground"
+                aria-label="Share"
+                title="Share"
                 onClick={(e) => {
                   e.stopPropagation()
                   onShare()
                 }}
               >
-                <Share2 className="h-4 w-4 mr-2" />
-                Share
+                <Share2 className="h-4 w-4" />
               </Button>
             </div>
             {showComments ? (
