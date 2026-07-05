@@ -393,20 +393,20 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold">Projects & Jobs</h2>
-          <p className="text-gray-600">Find projects and jobs to contribute and earn points</p>
+          <p className="text-muted-foreground">Find projects and jobs to contribute and earn points</p>
         </div>
-        <div className="flex gap-2">
-          <Link href={`/create?tab=job&group=${groupId}`}>
-            <Button variant="outline">
+        <div className="flex flex-wrap gap-2">
+          <Link href={`/create?tab=job&group=${groupId}`} className="flex-1 sm:flex-none">
+            <Button variant="outline" className="w-full sm:w-auto">
               <Briefcase className="h-4 w-4 mr-2" />
               New Job
             </Button>
           </Link>
-          <Link href={`/create?tab=project&group=${groupId}`}>
-            <Button>
+          <Link href={`/create?tab=project&group=${groupId}`} className="flex-1 sm:flex-none">
+            <Button className="w-full sm:w-auto">
               <Plus className="h-4 w-4 mr-2" />
               New Project
             </Button>

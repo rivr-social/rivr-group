@@ -20,7 +20,6 @@ import { parseFacetedTagsFromMetadata } from "@/lib/parachute-doc"
 import { AgentPageShell } from "@/components/agent-page-shell"
 import { Button } from "@/components/ui/button"
 import { GroupJoinControl } from "@/components/group-join-control"
-import { GroupActions } from "@/components/group-actions"
 import { GroupTabsClient } from "@/components/group-tabs-client"
 import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
@@ -348,7 +347,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
       tagLabels={tagLabels}
       isAdmin={isGroupAdmin}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {isGroupAdmin && (
           <Link href={`/groups/${group.id}/settings`}>
             <Button variant="outline" size="sm">
@@ -365,12 +364,6 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
             </Button>
           </Link>
         )}
-        <GroupActions
-          groupId={group.id}
-          groupName={group.name}
-          groupDescription={group.description}
-          ownerId={ownerId}
-        />
         <GroupJoinControl
           groupId={group.id}
           groupName={group.name}
