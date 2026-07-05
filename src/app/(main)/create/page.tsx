@@ -554,6 +554,7 @@ export default function CreatePage() {
     claimApprovalRequired: boolean
     claimGateMembership: boolean
     claimGateAdmin: boolean
+    isGlobal: boolean
     duration: string
     totalPoints: number
     status: string
@@ -595,6 +596,7 @@ export default function CreatePage() {
     claimApprovalRequired: false,
     claimGateMembership: false,
     claimGateAdmin: false,
+    isGlobal: false,
   })
   const [currentTask, setCurrentTask] = useState({
     name: "",
@@ -1035,6 +1037,7 @@ export default function CreatePage() {
       claimApprovalRequired: false,
       claimGateMembership: false,
       claimGateAdmin: false,
+      isGlobal: false,
     })
     setShowJobCreation(false)
 
@@ -2519,6 +2522,31 @@ export default function CreatePage() {
                             </div>
                           </div>
                         )}
+                      </div>
+
+                      {/* Job visibility — a job can be made globally visible
+                          (surfaces in the group's locale, region, and global),
+                          independent of the project's own visibility. */}
+                      <div className="space-y-3 border-t pt-4">
+                        <div>
+                          <h4 className="font-medium">Visibility</h4>
+                          <p className="text-xs text-gray-500">
+                            Make this job globally visible so it surfaces beyond this group.
+                          </p>
+                        </div>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={currentJob.isGlobal}
+                            onChange={(e) =>
+                              setCurrentJob((prev) => ({ ...prev, isGlobal: e.target.checked }))
+                            }
+                          />
+                          <span className="text-sm">
+                            Globally visible (show in locale, region, and global)
+                          </span>
+                        </label>
                       </div>
 
                       {/* Claim gating — who can claim this job, and whether an

@@ -1056,6 +1056,12 @@ export async function createProjectResource(input: {
         if (!jobTitle) continue;
         const jobDescription = String(job.description ?? "").trim();
 
+        // Per-job visibility: a job may be independently marked globally
+        // visible (surfaces in the group's locale/region/global) even under a
+        // more restricted project; otherwise it inherits the project's.
+        const jobIsGlobal = job.isGlobal === true;
+        const jobVisibility = jobIsGlobal ? "public" : projectVisibility;
+
         const [createdJob] = await tx
           .insert(resources)
           .values({
@@ -1064,7 +1070,7 @@ export async function createProjectResource(input: {
             description: jobDescription || null,
             content: jobDescription || null,
             ownerId,
-            visibility: projectVisibility,
+            visibility: jobVisibility,
             tags: scopeTags,
               metadata: {
                 resourceKind: "job",
@@ -1074,7 +1080,7 @@ export async function createProjectResource(input: {
                 scopedLocaleIds,
                 scopedGroupIds,
                 scopedUserIds,
-                isGlobal: wantsGlobal,
+                isGlobal: jobIsGlobal || wantsGlobal,
                 category: job.category ?? null,
                 priority: job.priority ?? null,
                 location: job.location ?? null,
