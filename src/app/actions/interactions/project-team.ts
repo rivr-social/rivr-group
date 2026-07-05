@@ -23,12 +23,23 @@ import { isUuid } from "./types";
  * lightweight `job-application` interest signal). */
 const JOB_CLAIM_INTERACTION = "job-claim";
 
+/** Ledger interaction type marking a PENDING, approval-gated job claim. Kept as
+ * an inactive (`is_active = false`) row with `reviewStatus = 'pending'` so it is
+ * invisible to team/claim predicates until an admin approves it — mirroring the
+ * group membership-request approval model. On approval the row is flipped to an
+ * active `job-claim`. */
+const JOB_CLAIM_REQUEST_INTERACTION = "job-claim-request";
+
 /** Ledger interaction type marking a recorded job CONTRIBUTION on completion.
  * This is what surfaces a contributor as a stakeholder in the Stake tab — it is
  * NOT a badge award (badges are claim-time GATES, not completion rewards). */
 const JOB_CONTRIBUTION_INTERACTION = "job-contribution";
 
-/** Counts the active job-claims on a job, optionally excluding one claimant. */
+/**
+ * Counts the occupied slots on a job — active job-claims PLUS pending
+ * approval-gated requests — optionally excluding one claimant. Pending requests
+ * reserve a slot so an approval-gated job cannot be over-subscribed while
+ * requests await review. */
 async function countActiveJobClaims(
   jobId: string,
   excludeClaimantId?: string,
@@ -37,15 +48,19 @@ async function countActiveJobClaims(
     SELECT COUNT(DISTINCT subject_id) AS claim_count
     FROM ledger
     WHERE verb = 'join'
-      AND is_active = true
-      AND metadata->>'interactionType' = ${JOB_CLAIM_INTERACTION}
       AND metadata->>'targetId' = ${jobId}
+      AND (
+        (is_active = true AND metadata->>'interactionType' = ${JOB_CLAIM_INTERACTION})
+        OR (metadata->>'interactionType' = ${JOB_CLAIM_REQUEST_INTERACTION}
+            AND COALESCE(metadata->>'reviewStatus', 'pending') = 'pending')
+      )
       ${excludeClaimantId ? sql`AND subject_id <> ${excludeClaimantId}::uuid` : sql``}
   `)) as Array<Record<string, unknown>>;
   return Number(rows[0]?.claim_count ?? 0);
 }
 
-/** Returns whether the claimant already holds an active claim on the job. */
+/** Returns whether the claimant already holds an active claim OR a pending
+ * approval request on the job. */
 async function claimantHasActiveClaim(
   jobId: string,
   claimantId: string,
@@ -55,9 +70,12 @@ async function claimantHasActiveClaim(
     FROM ledger
     WHERE subject_id = ${claimantId}::uuid
       AND verb = 'join'
-      AND is_active = true
-      AND metadata->>'interactionType' = ${JOB_CLAIM_INTERACTION}
       AND metadata->>'targetId' = ${jobId}
+      AND (
+        (is_active = true AND metadata->>'interactionType' = ${JOB_CLAIM_INTERACTION})
+        OR (metadata->>'interactionType' = ${JOB_CLAIM_REQUEST_INTERACTION}
+            AND COALESCE(metadata->>'reviewStatus', 'pending') = 'pending')
+      )
     LIMIT 1
   `)) as Array<Record<string, unknown>>;
   return rows.length > 0;
@@ -100,6 +118,7 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
   if (!job) return { success: false, message: "Job not found." };
 
   const meta = (job.metadata ?? {}) as Record<string, unknown>;
+  const groupId = job.ownerId;
   const requiredBadges = Array.isArray(meta.requiredBadges)
     ? meta.requiredBadges.filter((b): b is string => typeof b === "string")
     : [];
@@ -107,11 +126,29 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
     typeof meta.maxAssignees === "number" ? meta.maxAssignees : null;
   const status = typeof meta.status === "string" ? meta.status : "open";
 
+  // Creator-selected claim gates (set at job creation).
+  const gateMembership = meta.claimGateMembership === true;
+  const gateAdmin = meta.claimGateAdmin === true;
+  const approvalRequired = meta.claimApprovalRequired === true;
+
   const scope: JobClaimScope = {
     claimable: status !== "closed" && status !== "cancelled" && status !== "filled",
     requiredBadges,
     maxAssignees,
+    gateMembership,
+    gateAdmin,
   };
+
+  // Only resolve membership/admin facts when a gate actually needs them.
+  let isMember = false;
+  let isAdmin = false;
+  if (gateMembership || gateAdmin) {
+    const { isGroupAdmin, isGroupMember } = await import("@/app/actions/group-admin");
+    [isAdmin, isMember] = await Promise.all([
+      isGroupAdmin(userId, groupId),
+      isGroupMember(userId, groupId),
+    ]);
+  }
 
   const [heldBadgeIds, activeClaimCount, alreadyClaimed] = await Promise.all([
     getUserBadgeIds(userId),
@@ -123,39 +160,69 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
     heldBadgeIds,
     activeClaimCount,
     alreadyClaimed,
+    isMember,
+    isAdmin,
   });
   if (!eligibility.eligible) {
     return { success: false, message: JOB_CLAIM_DENIAL_MESSAGES[eligibility.reason] };
   }
 
+  const projectId = typeof meta.projectId === "string" ? meta.projectId : null;
+
   const facadeResult = await federatedWrite(
     {
-      type: "claimJobAction",
+      type: approvalRequired ? "requestJobClaimAction" : "claimJobAction",
       actorId: userId,
-      targetAgentId: job.ownerId,
+      targetAgentId: groupId,
       payload: { jobId },
     },
     async () => {
-      await db.insert(ledger).values({
-        subjectId: userId,
-        verb: "join",
-        objectId: jobId,
-        objectType: "resource",
-        resourceId: jobId,
-        isActive: true,
-        metadata: {
-          interactionType: JOB_CLAIM_INTERACTION,
-          targetId: jobId,
-          targetType: "job",
-          projectId: typeof meta.projectId === "string" ? meta.projectId : null,
-        },
-      } as NewLedgerEntry);
+      const values: NewLedgerEntry = approvalRequired
+        ? ({
+            subjectId: userId,
+            verb: "join",
+            objectId: jobId,
+            objectType: "resource",
+            resourceId: jobId,
+            // Pending requests stay inactive + private so they are invisible to
+            // team/claim predicates until an admin approves (mirrors the group
+            // membership-request approval model).
+            isActive: false,
+            visibility: "private",
+            metadata: {
+              interactionType: JOB_CLAIM_REQUEST_INTERACTION,
+              targetId: jobId,
+              targetType: "job",
+              projectId,
+              groupId,
+              reviewStatus: "pending",
+              requestedAt: new Date().toISOString(),
+            },
+          } as NewLedgerEntry)
+        : ({
+            subjectId: userId,
+            verb: "join",
+            objectId: jobId,
+            objectType: "resource",
+            resourceId: jobId,
+            isActive: true,
+            metadata: {
+              interactionType: JOB_CLAIM_INTERACTION,
+              targetId: jobId,
+              targetType: "job",
+              projectId,
+            },
+          } as NewLedgerEntry);
 
-      const jobId2 = typeof meta.projectId === "string" ? meta.projectId : null;
+      await db.insert(ledger).values(values);
+
       revalidatePath("/");
       revalidatePath(`/jobs/${jobId}`);
-      if (jobId2) revalidatePath(`/groups/${job.ownerId}`);
-      return { success: true, message: "Job claimed." } as ActionResult;
+      if (projectId) revalidatePath(`/projects/${projectId}`);
+      revalidatePath(`/groups/${groupId}`);
+      return approvalRequired
+        ? { success: true, message: "Claim submitted — awaiting approval.", pending: true }
+        : ({ success: true, message: "Job claimed." } as ActionResult);
     },
   );
 
@@ -168,10 +235,15 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
     entityType: "resource",
     entityId: jobId,
     actorId: userId,
-    payload: { action: "job_claim" },
+    payload: { action: approvalRequired ? "job_claim_request" : "job_claim" },
   }).catch(() => {});
 
-  return facadeResult.data ?? { success: true, message: "Job claimed." };
+  return (
+    facadeResult.data ??
+    (approvalRequired
+      ? { success: true, message: "Claim submitted — awaiting approval.", pending: true }
+      : { success: true, message: "Job claimed." })
+  );
 }
 
 /**
@@ -347,4 +419,297 @@ export async function getProjectTeam(projectId: string): Promise<string[]> {
       jobId: String(row.job_id ?? ""),
     })),
   );
+}
+
+/** A pending approval-gated job-claim request, for the admin review queue. */
+export interface JobClaimRequestRecord {
+  id: string;
+  claimantId: string;
+  jobId: string;
+  status: "pending" | "approved" | "rejected";
+  requestedAt: string;
+  claimantName?: string | null;
+  claimantUsername?: string | null;
+  claimantAvatar?: string | null;
+}
+
+/**
+ * Returns the pending approval-gated claim requests on a job. Admin-gated: only
+ * the job owner or a group-write-access holder may view the queue.
+ *
+ * @param jobId UUID of the job resource.
+ */
+export async function fetchJobClaimRequests(
+  jobId: string,
+): Promise<{ success: boolean; error?: string; requests?: JobClaimRequestRecord[] }> {
+  const userId = await getCurrentUserId();
+  if (!userId) return { success: false, error: "Authentication required." };
+  if (!isUuid(jobId)) return { success: false, error: "Invalid job id." };
+
+  const [job] = await db
+    .select({ id: resources.id, ownerId: resources.ownerId })
+    .from(resources)
+    .where(and(eq(resources.id, jobId), eq(resources.type, "job"), sql`${resources.deletedAt} IS NULL`))
+    .limit(1);
+  if (!job) return { success: false, error: "Job not found." };
+
+  const { hasGroupWriteAccess } = await import("@/app/actions/create-resources");
+  const canReview = job.ownerId === userId ? true : await hasGroupWriteAccess(userId, job.ownerId);
+  if (!canReview) return { success: false, error: "Only group admins can review job claims." };
+
+  const rows = (await db.execute(sql`
+    SELECT l.id, l.subject_id AS claimant_id, l.timestamp AS requested_at,
+           a.name AS claimant_name, a.x_handle AS claimant_username, a.image AS claimant_avatar
+    FROM ledger l
+    JOIN agents a ON a.id = l.subject_id
+    WHERE l.verb = 'join'
+      AND l.metadata->>'interactionType' = ${JOB_CLAIM_REQUEST_INTERACTION}
+      AND l.metadata->>'targetId' = ${jobId}
+      AND COALESCE(l.metadata->>'reviewStatus', 'pending') = 'pending'
+    ORDER BY l.timestamp ASC
+  `)) as Array<Record<string, unknown>>;
+
+  const requests: JobClaimRequestRecord[] = rows.map((row) => ({
+    id: String(row.id ?? ""),
+    claimantId: String(row.claimant_id ?? ""),
+    jobId,
+    status: "pending" as const,
+    requestedAt:
+      row.requested_at instanceof Date
+        ? row.requested_at.toISOString()
+        : String(row.requested_at ?? ""),
+    claimantName: (row.claimant_name as string | null) ?? null,
+    claimantUsername: (row.claimant_username as string | null) ?? null,
+    claimantAvatar: (row.claimant_avatar as string | null) ?? null,
+  }));
+
+  return { success: true, requests };
+}
+
+/**
+ * Approves or rejects a pending job-claim request. Admin-gated. On approval the
+ * pending row transitions in place to an active `job-claim` (it already reserved
+ * a slot when requested, so approval cannot over-subscribe the job); on
+ * rejection it is deactivated with `reviewStatus = 'rejected'`.
+ *
+ * @param requestId UUID of the pending job-claim-request ledger row.
+ * @param decision `"approved"` or `"rejected"`.
+ */
+export async function reviewJobClaimRequest(
+  requestId: string,
+  decision: "approved" | "rejected",
+): Promise<ActionResult> {
+  const userId = await getCurrentUserId();
+  if (!userId) return { success: false, message: "You must be logged in to review claims." };
+  if (!isUuid(requestId)) return { success: false, message: "Invalid request id." };
+
+  const [request] = await db
+    .select({
+      id: ledger.id,
+      subjectId: ledger.subjectId,
+      objectId: ledger.objectId,
+      metadata: ledger.metadata,
+    })
+    .from(ledger)
+    .where(
+      and(
+        eq(ledger.id, requestId),
+        eq(ledger.verb, "join"),
+        sql`${ledger.metadata}->>'interactionType' = ${JOB_CLAIM_REQUEST_INTERACTION}`,
+      ),
+    )
+    .limit(1);
+  if (!request) return { success: false, message: "Claim request not found." };
+
+  const rmeta = (request.metadata ?? {}) as Record<string, unknown>;
+  const jobId =
+    typeof rmeta.targetId === "string" ? rmeta.targetId : request.objectId ?? null;
+  if (!jobId) return { success: false, message: "Claim request is missing its job reference." };
+
+  const [job] = await db
+    .select({ ownerId: resources.ownerId, metadata: resources.metadata })
+    .from(resources)
+    .where(and(eq(resources.id, jobId), eq(resources.type, "job"), sql`${resources.deletedAt} IS NULL`))
+    .limit(1);
+  if (!job) return { success: false, message: "Job not found." };
+
+  const { hasGroupWriteAccess } = await import("@/app/actions/create-resources");
+  const canReview = job.ownerId === userId ? true : await hasGroupWriteAccess(userId, job.ownerId);
+  if (!canReview) return { success: false, message: "Only group admins can review job claims." };
+
+  const currentStatus = String(rmeta.reviewStatus ?? "pending");
+  if (currentStatus !== "pending") {
+    return { success: true, message: `This request was already ${currentStatus}.` };
+  }
+
+  const jobMeta = (job.metadata ?? {}) as Record<string, unknown>;
+  const projectId =
+    typeof jobMeta.projectId === "string"
+      ? jobMeta.projectId
+      : typeof rmeta.projectId === "string"
+        ? rmeta.projectId
+        : null;
+  const reviewStamp = { reviewedBy: userId, reviewedAt: new Date().toISOString() };
+
+  if (decision === "approved") {
+    await db
+      .update(ledger)
+      .set({
+        isActive: true,
+        visibility: "public",
+        metadata: {
+          ...rmeta,
+          interactionType: JOB_CLAIM_INTERACTION,
+          reviewStatus: "approved",
+          ...reviewStamp,
+        },
+      })
+      .where(eq(ledger.id, requestId));
+  } else {
+    await db
+      .update(ledger)
+      .set({
+        isActive: false,
+        expiresAt: new Date(),
+        metadata: { ...rmeta, reviewStatus: "rejected", ...reviewStamp },
+      })
+      .where(eq(ledger.id, requestId));
+  }
+
+  revalidatePath(`/jobs/${jobId}`);
+  if (projectId) revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/groups/${job.ownerId}`);
+
+  emitDomainEvent({
+    eventType: EVENT_TYPES.RESOURCE_UPDATED,
+    entityType: "resource",
+    entityId: jobId,
+    actorId: userId,
+    payload: { action: "job_claim_review", decision, claimantId: request.subjectId },
+  }).catch(() => {});
+
+  return {
+    success: true,
+    message: decision === "approved" ? "Claim approved." : "Claim rejected.",
+  };
+}
+
+/**
+ * Returns the current user's claim state on a job for UI rendering:
+ * `"claimed"` (active claim), `"pending"` (awaiting approval), or `"none"`.
+ *
+ * @param jobId UUID of the job resource.
+ */
+export async function getMyJobClaimStatus(
+  jobId: string,
+): Promise<"none" | "pending" | "claimed"> {
+  const userId = await getCurrentUserId();
+  if (!userId || !isUuid(jobId)) return "none";
+
+  const rows = (await db.execute(sql`
+    SELECT metadata->>'interactionType' AS interaction_type,
+           COALESCE(metadata->>'reviewStatus', '') AS review_status,
+           is_active
+    FROM ledger
+    WHERE subject_id = ${userId}::uuid
+      AND verb = 'join'
+      AND metadata->>'targetId' = ${jobId}
+      AND metadata->>'interactionType' IN (${JOB_CLAIM_INTERACTION}, ${JOB_CLAIM_REQUEST_INTERACTION})
+    ORDER BY timestamp DESC
+    LIMIT 1
+  `)) as Array<Record<string, unknown>>;
+
+  const row = rows[0];
+  if (!row) return "none";
+  if (row.interaction_type === JOB_CLAIM_INTERACTION && row.is_active === true) return "claimed";
+  if (
+    row.interaction_type === JOB_CLAIM_REQUEST_INTERACTION &&
+    String(row.review_status) === "pending"
+  ) {
+    return "pending";
+  }
+  return "none";
+}
+
+/** Everything the job-detail claim panel needs, resolved server-side in one call. */
+export interface JobClaimPanelData {
+  jobId: string;
+  signedIn: boolean;
+  status: "none" | "pending" | "claimed";
+  approvalRequired: boolean;
+  gateMembership: boolean;
+  gateAdmin: boolean;
+  isAdmin: boolean;
+  claimantCount: number;
+  maxAssignees: number | null;
+  claimable: boolean;
+  pendingRequests: JobClaimRequestRecord[];
+}
+
+/**
+ * Resolves the full claim-panel state for a job: the viewer's claim status, the
+ * job's gating config, whether the viewer is an admin of the owning group, the
+ * current active-claimant count, and (for admins) the pending request queue.
+ *
+ * @param jobId UUID of the job resource.
+ */
+export async function getJobClaimPanelData(jobId: string): Promise<JobClaimPanelData | null> {
+  if (!isUuid(jobId)) return null;
+
+  const [job] = await db
+    .select({ id: resources.id, ownerId: resources.ownerId, metadata: resources.metadata })
+    .from(resources)
+    .where(and(eq(resources.id, jobId), eq(resources.type, "job"), sql`${resources.deletedAt} IS NULL`))
+    .limit(1);
+  if (!job) return null;
+
+  const meta = (job.metadata ?? {}) as Record<string, unknown>;
+  const approvalRequired = meta.claimApprovalRequired === true;
+  const gateMembership = meta.claimGateMembership === true;
+  const gateAdmin = meta.claimGateAdmin === true;
+  const maxAssignees = typeof meta.maxAssignees === "number" ? meta.maxAssignees : null;
+  const status = typeof meta.status === "string" ? meta.status : "open";
+  const claimable = status !== "closed" && status !== "cancelled" && status !== "filled";
+
+  const userId = await getCurrentUserId();
+
+  // Active-claimant count (team size) — active job-claim edges only.
+  const countRows = (await db.execute(sql`
+    SELECT COUNT(DISTINCT subject_id) AS n
+    FROM ledger
+    WHERE verb = 'join' AND is_active = true
+      AND metadata->>'interactionType' = ${JOB_CLAIM_INTERACTION}
+      AND metadata->>'targetId' = ${jobId}
+  `)) as Array<Record<string, unknown>>;
+  const claimantCount = Number(countRows[0]?.n ?? 0);
+
+  let myStatus: "none" | "pending" | "claimed" = "none";
+  let isAdmin = false;
+  let pendingRequests: JobClaimRequestRecord[] = [];
+
+  if (userId) {
+    const { isGroupAdmin } = await import("@/app/actions/group-admin");
+    [myStatus, isAdmin] = await Promise.all([
+      getMyJobClaimStatus(jobId),
+      isGroupAdmin(userId, job.ownerId),
+    ]);
+    if (isAdmin) {
+      const result = await fetchJobClaimRequests(jobId);
+      pendingRequests = result.requests ?? [];
+    }
+  }
+
+  return {
+    jobId,
+    signedIn: Boolean(userId),
+    status: myStatus,
+    approvalRequired,
+    gateMembership,
+    gateAdmin,
+    isAdmin,
+    claimantCount,
+    maxAssignees,
+    claimable,
+    pendingRequests,
+  };
 }

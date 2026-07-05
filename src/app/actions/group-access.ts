@@ -621,6 +621,7 @@ export async function applyMembershipRequestForActor(
     applicationInstructions:
       typeof rawJoin?.applicationInstructions === "string" ? rawJoin.applicationInstructions : undefined,
     visibility: rawJoin?.visibility === "hidden" ? "hidden" : "public",
+    requireActiveSubscription: Boolean(rawJoin?.requireActiveSubscription),
   };
 
   if (
@@ -638,6 +639,24 @@ export async function applyMembershipRequestForActor(
     const valid = await verify(options.password, group.groupPasswordHash);
     if (!valid) {
       return { success: false, error: "Invalid group password." };
+    }
+  }
+
+  // Subscription-gated groups (B4): joining requires an active/trialing paid
+  // membership subscription. Subscribing itself grants membership via
+  // grantGroupMembership (which bypasses this path), so this gate only blocks
+  // the plain join/apply route. Admins are exempt so they can always manage.
+  if (joinSettings.requireActiveSubscription) {
+    const { getActiveGroupSubscriptionPlanId } = await import("@/lib/group-subscriptions");
+    const activePlanId = await getActiveGroupSubscriptionPlanId(actorId, groupId);
+    if (!activePlanId) {
+      const admin = await isGroupAdmin(actorId, groupId);
+      if (!admin) {
+        return {
+          success: false,
+          error: "This group requires an active membership subscription. Please subscribe to join.",
+        };
+      }
     }
   }
 

@@ -551,6 +551,9 @@ export default function CreatePage() {
     tasks: TaskFormData[]
     skills: string[]
     requiredBadges: string[]
+    claimApprovalRequired: boolean
+    claimGateMembership: boolean
+    claimGateAdmin: boolean
     duration: string
     totalPoints: number
     status: string
@@ -588,7 +591,10 @@ export default function CreatePage() {
     maxAssignees: 1,
     tasks: [] as TaskFormData[],
     skills: [] as string[],
-    requiredBadges: [] as string[]
+    requiredBadges: [] as string[],
+    claimApprovalRequired: false,
+    claimGateMembership: false,
+    claimGateAdmin: false,
   })
   const [currentTask, setCurrentTask] = useState({
     name: "",
@@ -1025,7 +1031,10 @@ export default function CreatePage() {
       maxAssignees: 1,
       tasks: [],
       skills: [],
-      requiredBadges: []
+      requiredBadges: [],
+      claimApprovalRequired: false,
+      claimGateMembership: false,
+      claimGateAdmin: false,
     })
     setShowJobCreation(false)
 
@@ -2510,6 +2519,52 @@ export default function CreatePage() {
                             </div>
                           </div>
                         )}
+                      </div>
+
+                      {/* Claim gating — who can claim this job, and whether an
+                          admin must approve the claim before it takes effect. */}
+                      <div className="space-y-3 border-t pt-4">
+                        <div>
+                          <h4 className="font-medium">Claim gating</h4>
+                          <p className="text-xs text-gray-500">
+                            Control who can claim this job and whether claims need approval.
+                          </p>
+                        </div>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={currentJob.claimApprovalRequired}
+                            onChange={(e) =>
+                              setCurrentJob((prev) => ({ ...prev, claimApprovalRequired: e.target.checked }))
+                            }
+                          />
+                          <span className="text-sm">
+                            Require admin approval before a claim takes effect
+                          </span>
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={currentJob.claimGateMembership}
+                            onChange={(e) =>
+                              setCurrentJob((prev) => ({ ...prev, claimGateMembership: e.target.checked }))
+                            }
+                          />
+                          <span className="text-sm">Only group members can claim</span>
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={currentJob.claimGateAdmin}
+                            onChange={(e) =>
+                              setCurrentJob((prev) => ({ ...prev, claimGateAdmin: e.target.checked }))
+                            }
+                          />
+                          <span className="text-sm">Only group admins can claim</span>
+                        </label>
                       </div>
 
                       {/* Job Summary */}

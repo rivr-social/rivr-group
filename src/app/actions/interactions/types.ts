@@ -6,6 +6,9 @@ export type ActionResult = {
   linkedEventId?: string;
   linkedDocumentId?: string;
   reactionType?: ReactionType | null;
+  /** True when the action created a pending-approval request rather than an
+   * immediately-active grant (e.g. an approval-gated job claim). */
+  pending?: boolean;
 };
 
 export type HiddenContentPreferences = {

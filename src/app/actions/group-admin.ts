@@ -695,6 +695,7 @@ export async function updateGroupJoinSettings(
       joinSettings.applicationInstructions.trim().length > 0
         ? joinSettings.applicationInstructions.trim().slice(0, 2000)
         : undefined,
+    requireActiveSubscription: Boolean(joinSettings.requireActiveSubscription),
   };
 
   const [current] = await db

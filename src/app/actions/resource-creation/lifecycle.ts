@@ -1081,6 +1081,10 @@ export async function createProjectResource(input: {
               maxAssignees: job.maxAssignees ?? null,
               requiredBadges: Array.isArray(job.requiredBadges) ? job.requiredBadges : [],
               skills: Array.isArray(job.skills) ? job.skills : [],
+              // Creator-selected claim gating (job-claim approval flow).
+              claimApprovalRequired: job.claimApprovalRequired === true,
+              claimGateMembership: job.claimGateMembership === true,
+              claimGateAdmin: job.claimGateAdmin === true,
               // Schedule fields set at creation time (org agents pass these on
               // nested jobs so no follow-up jobs.update is required). Stored as
               // strings; the caller (group-action-tools) validates ISO shape.

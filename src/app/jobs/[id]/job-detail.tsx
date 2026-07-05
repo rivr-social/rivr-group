@@ -12,6 +12,8 @@ import type { JobShift, ProjectRecord } from "@/types/domain"
 import { JobAboutTab } from "@/components/job-about-tab"
 import { JobTasksTab } from "@/components/job-tasks-tab"
 import { JobTimerTab } from "@/components/job-timer-tab"
+import { JobClaimPanel } from "@/components/job-claim-panel"
+import type { JobClaimPanelData } from "@/app/actions/interactions/project-team"
 
 interface JobDetailClientProps {
   jobId: string
@@ -20,9 +22,10 @@ interface JobDetailClientProps {
   projects: ProjectRecord[]
   userBadgeIds: string[]
   currentUserId: string | null
+  claimPanel?: JobClaimPanelData | null
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -182,6 +185,9 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
           </Card>
         )}
       </div>
+
+      {/* Claim / approval panel */}
+      {claimPanel && <JobClaimPanel data={claimPanel} />}
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>

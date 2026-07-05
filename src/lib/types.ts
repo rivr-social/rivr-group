@@ -484,6 +484,13 @@ export type GroupJoinSettings = {
   passwordRequired?: boolean
   inviteLink?: string
   applicationInstructions?: string
+  /**
+   * When true, joining this group requires an active (or trialing) paid
+   * membership subscription. Subscribing grants membership directly; the plain
+   * join path is blocked until a subscription is active. Used for
+   * subscription-gated subgroups (B4).
+   */
+  requireActiveSubscription?: boolean
 }
 
 /** Notification channel preferences grouped by product surface. */

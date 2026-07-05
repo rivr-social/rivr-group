@@ -1190,6 +1190,22 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
                 <Label>Require password challenge</Label>
               </div>
 
+              <div className="flex items-start gap-2">
+                <Switch
+                  checked={Boolean(joinSettings.requireActiveSubscription)}
+                  onCheckedChange={(checked) =>
+                    setJoinSettings((prev) => ({ ...prev, requireActiveSubscription: checked }))
+                  }
+                />
+                <div>
+                  <Label>Require an active membership subscription</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Members must hold an active paid subscription to join. Subscribing grants
+                    membership automatically; configure plans under Memberships.
+                  </p>
+                </div>
+              </div>
+
               <JoinQuestionEditor
                 value={joinSettings.questions ?? []}
                 onChange={(questions) =>

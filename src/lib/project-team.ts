@@ -20,7 +20,9 @@ export type JobClaimDenialReason =
   | 'job_not_claimable'
   | 'missing_required_badge'
   | 'no_open_slots'
-  | 'already_claimed';
+  | 'already_claimed'
+  | 'not_a_member'
+  | 'not_an_admin';
 
 /** Outcome of evaluating whether an agent may claim a job. */
 export type JobClaimEligibility =
@@ -40,6 +42,16 @@ export interface JobClaimScope {
    * Maximum number of concurrent assignees. `null`/`undefined` means unlimited.
    */
   maxAssignees?: number | null;
+  /**
+   * Creator-selected claim gate: require active membership in the owning group
+   * to claim. Default (undefined/false) = open to non-members.
+   */
+  gateMembership?: boolean;
+  /**
+   * Creator-selected claim gate: require group admin/moderator authority to
+   * claim. Default (undefined/false) = no admin gate.
+   */
+  gateAdmin?: boolean;
 }
 
 /** The claimant-side facts needed to evaluate eligibility. */
@@ -50,6 +62,10 @@ export interface JobClaimContext {
   activeClaimCount: number;
   /** Whether THIS claimant already holds an active claim on the job. */
   alreadyClaimed: boolean;
+  /** Whether the claimant holds an active membership in the owning group. */
+  isMember?: boolean;
+  /** Whether the claimant holds group admin/moderator authority. */
+  isAdmin?: boolean;
 }
 
 /**
@@ -99,6 +115,12 @@ export function evaluateJobClaimEligibility(
   if (context.alreadyClaimed) {
     return { eligible: false, reason: 'already_claimed' };
   }
+  if (scope.gateMembership && !context.isMember && !context.isAdmin) {
+    return { eligible: false, reason: 'not_a_member' };
+  }
+  if (scope.gateAdmin && !context.isAdmin) {
+    return { eligible: false, reason: 'not_an_admin' };
+  }
   if (!meetsBadgeRequirement(scope.requiredBadges, context.heldBadgeIds)) {
     return { eligible: false, reason: 'missing_required_badge' };
   }
@@ -115,6 +137,8 @@ export const JOB_CLAIM_DENIAL_MESSAGES: Record<JobClaimDenialReason, string> = {
     'You do not hold a badge required to claim this job.',
   no_open_slots: 'This job has no open assignee slots remaining.',
   already_claimed: 'You have already claimed this job.',
+  not_a_member: 'You must be a member of this group to claim this job.',
+  not_an_admin: 'Only group admins can claim this job.',
 };
 
 /**
