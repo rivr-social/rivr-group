@@ -713,14 +713,15 @@ function PostCard({
               <Button
                 variant="ghost"
                 size="sm"
+                aria-label="Comment"
+                title="Comment"
                 className="h-12 w-full rounded-none justify-center text-muted-foreground"
                 onClick={(e) => {
                   e.stopPropagation()
                   setShowComments((value) => !value)
                 }}
               >
-                <MessageCircle className="h-4 w-4 mr-2" />
-                Comment
+                <MessageCircle className="h-4 w-4" />
               </Button>
               <ThankModule
                 recipientId={user.id}
@@ -732,14 +733,15 @@ function PostCard({
                   <Button
                     variant="ghost"
                     size="sm"
+                    aria-label="Thank"
+                    title="Thank"
                     className="h-12 w-full rounded-none justify-center text-muted-foreground"
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation()
                     }}
                   >
-                    <Heart className="h-4 w-4 mr-2" />
-                    Thank
+                    <Heart className="h-4 w-4" />
                   </Button>
                 }
               />

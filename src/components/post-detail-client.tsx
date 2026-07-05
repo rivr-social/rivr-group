@@ -337,11 +337,12 @@ export function PostDetailClient({
             <Button
               variant="ghost"
               size="sm"
+              aria-label="Comment"
+              title="Comment"
               className="h-12 w-full rounded-none justify-center text-muted-foreground"
               onClick={() => document.getElementById(`comment-input-${post.id}`)?.focus()}
             >
-              <MessageCircle className="h-5 w-5 mr-2" />
-              Comment
+              <MessageCircle className="h-5 w-5" />
             </Button>
             <ThankModule
               recipientId={post.author.id}
@@ -350,9 +351,8 @@ export function PostDetailClient({
               context="post"
               contextId={post.id}
               triggerButton={
-                <Button variant="ghost" size="sm" type="button" className="h-12 w-full rounded-none justify-center text-muted-foreground">
-                  <Heart className="h-5 w-5 mr-2" />
-                  Thank
+                <Button variant="ghost" size="sm" type="button" aria-label="Thank" title="Thank" className="h-12 w-full rounded-none justify-center text-muted-foreground">
+                  <Heart className="h-5 w-5" />
                 </Button>
               }
             />
