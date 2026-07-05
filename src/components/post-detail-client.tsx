@@ -258,13 +258,13 @@ export function PostDetailClient({
             ) : null}
 
             {displayImages && displayImages.length > 0 ? (
-              <div className="mb-4 flex w-full items-center justify-center rounded-lg bg-muted/40 p-4">
+              <div className="relative mb-4 w-full overflow-hidden rounded-lg border border-white/10 bg-black/20">
                 <div className="relative h-[540px] w-full">
                   <Image
                     src={displayImages[0] || "/placeholder-event.jpg"}
                     alt="Post image"
                     fill
-                    className="object-contain"
+                    className="object-cover"
                     sizes="(max-width: 1024px) 100vw, 1024px"
                   />
                 </div>

@@ -631,7 +631,7 @@ function PostCard({
           {displayImages && displayImages.length > 0 ? (
             <Link
               href={`/posts/${post.id}`}
-              className="relative mb-3 block rounded-lg bg-muted/40 p-4"
+              className="relative mb-3 block overflow-hidden rounded-lg border border-white/10 bg-black/20"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="relative h-[420px] w-full">
@@ -639,7 +639,7 @@ function PostCard({
                   src={displayImages[0] || "/placeholder-event.jpg"}
                   alt="Post image"
                   fill
-                  className="object-contain"
+                  className="object-cover"
                   sizes="(max-width: 768px) 100vw, 768px"
                 />
               </div>
