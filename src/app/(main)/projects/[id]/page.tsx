@@ -45,6 +45,9 @@ import { buildGroupPageMetadata } from "@/lib/object-metadata"
 import { buildProjectStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { ProjectActions } from "@/components/project-actions"
 import { ProjectJobsTab } from "@/components/project-jobs-tab"
+import { StockTab } from "@/components/stock-tab"
+import { getResourcesByProjectId } from "@/lib/queries/resources"
+import { extractStockNeeds, toStockInventory } from "@/lib/stock"
 import { ProjectDistributionTab } from "@/components/project-distribution-tab"
 import { ProjectExpensePanel } from "@/components/project-expense-panel"
 import { parseProjectDistribution, resolveSettlementSplits, allocateByBps, type SettlementRole } from "@/lib/settlement-splits"
@@ -453,6 +456,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // Show how a sample sale's seller-net cascades per the authoritative config
   // on the project resource. `resolveSettlementSplits` reads the resources row
   // directly, so this preview reflects exactly what settlement will do.
+  // ── Stock tab data ── tangible-stock resources linked to this project via
+  // metadata.projectId, plus the editable Needs list on the project's own
+  // resource metadata. Managing needs uses the same gate as the Jobs tab.
+  const stockInventory = toStockInventory(await getResourcesByProjectId(project.id).catch(() => []))
+  const projectStockNeeds = extractStockNeeds(agent.metadata as Record<string, unknown>)
+
   const previewSplits = projectOwnerAgentId
     ? await resolveSettlementSplits({
         sellerId: projectOwnerAgentId,
@@ -573,11 +582,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
       {/* Tabbed content */}
       <Tabs defaultValue="about">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="about">About</TabsTrigger>
           <TabsTrigger value="jobs">Jobs ({linkedJobCount})</TabsTrigger>
           <TabsTrigger value="team">Team ({members.length})</TabsTrigger>
           <TabsTrigger value="treasury">Treasury</TabsTrigger>
+          <TabsTrigger value="stock">Stock</TabsTrigger>
         </TabsList>
 
         {/* ── About Tab ─────────────────────────────────────────────────── */}
@@ -899,6 +909,17 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               defaultPerHopBps: DEFAULT_LINEAGE_CASCADE_BPS,
               ancestors: lineageAncestors,
             }}
+          />
+        </TabsContent>
+
+        {/* ── Stock Tab ─────────────────────────────────────────────────── */}
+        <TabsContent value="stock" className="mt-4">
+          <StockTab
+            parentType="project"
+            parentId={project.id}
+            inventory={stockInventory}
+            initialNeeds={projectStockNeeds}
+            canManage={isAdmin}
           />
         </TabsContent>
       </Tabs>

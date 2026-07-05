@@ -1,0 +1,157 @@
+/**
+ * @fileoverview Unit tests for the pure Stock helpers (Inventory projection,
+ * Needs parsing, and "Post as request" text formatting).
+ */
+import { describe, expect, it } from "vitest";
+import {
+  MIN_STOCK_NEED_QUANTITY,
+  STOCK_INVENTORY_TYPES,
+  buildNeedRequestText,
+  extractStockNeeds,
+  isStockInventoryType,
+  normalizeStockNeedQuantity,
+  parseStockNeed,
+  toStockInventory,
+  toStockInventoryItem,
+} from "@/lib/stock";
+
+describe("isStockInventoryType", () => {
+  it("accepts the tangible stock types", () => {
+    for (const type of STOCK_INVENTORY_TYPES) {
+      expect(isStockInventoryType(type)).toBe(true);
+    }
+  });
+
+  it("rejects non-stock and empty types", () => {
+    expect(isStockInventoryType("post")).toBe(false);
+    expect(isStockInventoryType("event")).toBe(false);
+    expect(isStockInventoryType("job")).toBe(false);
+    expect(isStockInventoryType(null)).toBe(false);
+    expect(isStockInventoryType(undefined)).toBe(false);
+  });
+});
+
+describe("normalizeStockNeedQuantity", () => {
+  it("defaults absent/invalid values to the minimum", () => {
+    expect(normalizeStockNeedQuantity(undefined)).toBe(MIN_STOCK_NEED_QUANTITY);
+    expect(normalizeStockNeedQuantity("not-a-number")).toBe(MIN_STOCK_NEED_QUANTITY);
+    expect(normalizeStockNeedQuantity(0)).toBe(MIN_STOCK_NEED_QUANTITY);
+    expect(normalizeStockNeedQuantity(-4)).toBe(MIN_STOCK_NEED_QUANTITY);
+  });
+
+  it("truncates positive numbers and parses numeric strings", () => {
+    expect(normalizeStockNeedQuantity(3.9)).toBe(3);
+    expect(normalizeStockNeedQuantity("12")).toBe(12);
+  });
+});
+
+describe("parseStockNeed", () => {
+  it("returns null when id or name is missing", () => {
+    expect(parseStockNeed({ name: "Tents" })).toBeNull();
+    expect(parseStockNeed({ id: "n1" })).toBeNull();
+    expect(parseStockNeed(null)).toBeNull();
+  });
+
+  it("parses a full need and normalizes quantity + flags", () => {
+    expect(
+      parseStockNeed({
+        id: "n1",
+        name: "  Tents  ",
+        quantity: "5",
+        note: "waterproof",
+        fulfilled: true,
+        requested: true,
+        requestedPostId: "post-1",
+      }),
+    ).toEqual({
+      id: "n1",
+      name: "Tents",
+      quantity: 5,
+      note: "waterproof",
+      fulfilled: true,
+      requested: true,
+      requestedPostId: "post-1",
+    });
+  });
+
+  it("omits optional flags when absent", () => {
+    expect(parseStockNeed({ id: "n2", name: "Water" })).toEqual({
+      id: "n2",
+      name: "Water",
+      quantity: MIN_STOCK_NEED_QUANTITY,
+      note: "",
+      fulfilled: false,
+    });
+  });
+});
+
+describe("extractStockNeeds", () => {
+  it("returns an empty array for missing/invalid metadata", () => {
+    expect(extractStockNeeds(null)).toEqual([]);
+    expect(extractStockNeeds({})).toEqual([]);
+    expect(extractStockNeeds({ stockNeeds: "nope" })).toEqual([]);
+  });
+
+  it("drops malformed entries and keeps valid ones", () => {
+    const needs = extractStockNeeds({
+      stockNeeds: [
+        { id: "a", name: "Rope", quantity: 2 },
+        { name: "no id" },
+        { id: "b", name: "Nails", quantity: 100, fulfilled: true },
+      ],
+    });
+    expect(needs).toHaveLength(2);
+    expect(needs[0]).toMatchObject({ id: "a", name: "Rope", quantity: 2 });
+    expect(needs[1]).toMatchObject({ id: "b", name: "Nails", fulfilled: true });
+  });
+});
+
+describe("toStockInventoryItem", () => {
+  it("resolves image from imageUrl, then images[0], then image", () => {
+    expect(toStockInventoryItem({ id: "1", name: "A", type: "asset", metadata: { imageUrl: "u1" } }).imageUrl).toBe("u1");
+    expect(toStockInventoryItem({ id: "2", name: "B", type: "asset", metadata: { images: ["u2"] } }).imageUrl).toBe("u2");
+    expect(toStockInventoryItem({ id: "3", name: "C", type: "asset", metadata: { image: "u3" } }).imageUrl).toBe("u3");
+    expect(toStockInventoryItem({ id: "4", name: "D", type: "asset", metadata: {} }).imageUrl).toBeNull();
+  });
+
+  it("reads quantity from metadata.quantity then stockQuantity", () => {
+    expect(toStockInventoryItem({ id: "1", name: "A", type: "resource", metadata: { quantity: 7 } }).quantity).toBe(7);
+    expect(toStockInventoryItem({ id: "2", name: "B", type: "resource", metadata: { stockQuantity: 3 } }).quantity).toBe(3);
+    expect(toStockInventoryItem({ id: "3", name: "C", type: "resource", metadata: {} }).quantity).toBeNull();
+  });
+
+  it("only links to marketplace when listingType is present", () => {
+    expect(toStockInventoryItem({ id: "x", name: "A", type: "resource", metadata: { listingType: "product" } }).href).toBe("/marketplace/x");
+    expect(toStockInventoryItem({ id: "y", name: "B", type: "resource", metadata: {} }).href).toBeNull();
+  });
+});
+
+describe("toStockInventory", () => {
+  it("keeps only tangible stock types", () => {
+    const items = toStockInventory([
+      { id: "1", name: "Asset", type: "asset", metadata: {} },
+      { id: "2", name: "Resource", type: "resource", metadata: {} },
+      { id: "3", name: "Post", type: "post", metadata: {} },
+      { id: "4", name: "Event", type: "event", metadata: {} },
+    ]);
+    expect(items.map((i) => i.id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("buildNeedRequestText", () => {
+  it("omits the count prefix when quantity is 1", () => {
+    expect(buildNeedRequestText({ name: "Water", quantity: 1, note: "" })).toBe("Need: Water");
+  });
+
+  it("includes an Nx prefix when quantity exceeds 1", () => {
+    expect(buildNeedRequestText({ name: "Tents", quantity: 4, note: "" })).toBe("Need: 4x Tents");
+  });
+
+  it("appends the note with an em-dash when present", () => {
+    expect(buildNeedRequestText({ name: "Tents", quantity: 4, note: "waterproof" })).toBe("Need: 4x Tents — waterproof");
+  });
+
+  it("normalizes an invalid quantity to the minimum (no prefix)", () => {
+    expect(buildNeedRequestText({ name: "Rope", quantity: 0, note: "" })).toBe("Need: Rope");
+  });
+});

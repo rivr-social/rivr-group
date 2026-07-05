@@ -16,8 +16,10 @@
  * @module jobs/[id]/page
  */
 import { auth } from "@/auth"
-import { getJobById, getShifts, getProjects, getUserBadgeIds } from "@/lib/queries/resources"
+import { getJobById, getShifts, getProjects, getUserBadgeIds, getResource, getResourcesByJobId } from "@/lib/queries/resources"
 import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
+import { hasGroupWriteAccess } from "@/app/actions/create-resources"
+import { extractStockNeeds, toStockInventory } from "@/lib/stock"
 import { JobDetailClient } from "./job-detail"
 
 export default async function JobPage(props: { params: Promise<{ id: string }> }) {
@@ -28,13 +30,25 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
 
   // Fetch the job DIRECTLY by id (type job OR legacy shift). Resolving via
   // getShifts() alone capped at 100 rows and 404'd every older job.
-  const [job, jobShifts, projects, userBadgeIds, claimPanel] = await Promise.all([
+  const [job, jobShifts, projects, userBadgeIds, claimPanel, jobResource, stockResources] = await Promise.all([
     getJobById(jobId),
     getShifts(),
     getProjects(),
     currentUserId ? getUserBadgeIds(currentUserId) : Promise.resolve<string[]>([]),
     getJobClaimPanelData(jobId),
+    getResource(jobId).catch(() => null),
+    getResourcesByJobId(jobId).catch(() => []),
   ])
+
+  // ── Stock tab data ── inventory linked to this job (metadata.jobId), the
+  // editable Needs list on the job's own resource metadata, and whether the
+  // viewer may manage it (job owner OR content-write on the owning group).
+  const stockInventory = toStockInventory(stockResources)
+  const stockNeeds = extractStockNeeds((jobResource?.metadata ?? {}) as Record<string, unknown>)
+  const stockCanManage = currentUserId
+    ? job?.createdBy === currentUserId ||
+      (!!job?.groupId && (await hasGroupWriteAccess(currentUserId, job.groupId)))
+    : false
 
   return (
     <JobDetailClient
@@ -45,6 +59,9 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       userBadgeIds={userBadgeIds}
       currentUserId={currentUserId}
       claimPanel={claimPanel}
+      stockInventory={stockInventory}
+      stockNeeds={stockNeeds}
+      stockCanManage={stockCanManage}
     />
   )
 }
