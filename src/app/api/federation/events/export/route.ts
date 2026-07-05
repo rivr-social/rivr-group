@@ -22,6 +22,7 @@ import {
   markEventsExported,
   queueExportEvents,
 } from "@/lib/federation";
+import { buildEnvelopeToSign, signPayload } from "@/lib/federation-crypto";
 import { STATUS_UNAUTHORIZED } from "@/lib/http-status";
 
 interface ExportPayload {
@@ -95,17 +96,48 @@ export async function POST(request: NextRequest) {
   // Prevent re-export duplication by marking returned events as exported immediately.
   await markEventsExported(events.map((event) => event.id));
 
+  // Envelope signing (F6/#138): emit a full-envelope Ed25519 signature at the
+  // wire boundary (not persisted) alongside the legacy payload signature, plus
+  // the envelope fields (originNodeId/entityId/nonce/eventVersion) the receiver
+  // needs to reconstruct and verify it. Phase 1 is emit-only.
+  const nodePrivateKey = localNode.privateKey;
   return NextResponse.json({
     success: true,
     queued: queued.queued,
     exported: events.length,
-    events: events.map((event) => ({
-      id: event.id,
-      entityType: event.entityType,
-      eventType: event.eventType,
-      visibility: event.visibility,
-      payload: event.payload,
-      createdAt: event.createdAt,
-    })),
+    events: events.map((event) => {
+      const createdAt = event.createdAt?.toISOString();
+      const envelopeSignature = nodePrivateKey
+        ? signPayload(
+            buildEnvelopeToSign({
+              id: event.id,
+              originNodeId: event.originNodeId,
+              entityType: event.entityType,
+              entityId: event.entityId,
+              eventType: event.eventType,
+              visibility: event.visibility,
+              nonce: event.nonce,
+              eventVersion: event.eventVersion,
+              createdAt,
+              payload: event.payload as Record<string, unknown> | null,
+            }),
+            nodePrivateKey,
+          )
+        : undefined;
+      return {
+        id: event.id,
+        originNodeId: event.originNodeId,
+        entityId: event.entityId,
+        entityType: event.entityType,
+        eventType: event.eventType,
+        visibility: event.visibility,
+        payload: event.payload,
+        signature: event.signature ?? undefined,
+        envelopeSignature,
+        nonce: event.nonce ?? undefined,
+        eventVersion: event.eventVersion ?? undefined,
+        createdAt,
+      };
+    }),
   });
 }

@@ -141,3 +141,72 @@ export function verifyPayloadSignature(
     return false;
   }
 }
+
+/**
+ * Loose shape of a federation event (or wire object) that carries the envelope
+ * fields. Every field is optional/nullable so both the emit side (a persisted
+ * DB row) and the verify side (a received wire object) can pass their native
+ * shapes without pre-normalization.
+ */
+export interface EnvelopeToSignInput {
+  id?: string | null;
+  originNodeId?: string | null;
+  entityType?: string | null;
+  entityId?: string | null;
+  eventType?: string | null;
+  visibility?: string | null;
+  nonce?: string | null;
+  eventVersion?: number | null;
+  createdAt?: string | Date | null;
+  payload?: Record<string, unknown> | null;
+}
+
+/**
+ * Build the canonical federation ENVELOPE object to sign (F6/#138).
+ *
+ * The legacy {@link signPayload} signs only `event.payload`, leaving the
+ * envelope fields (`id`, `originNodeId`, `entityType`, `entityId`, `eventType`,
+ * `visibility`, `nonce`, `eventVersion`, `createdAt`) unauthenticated. This
+ * helper assembles the full envelope — INCLUDING the payload object itself so
+ * the payload is cryptographically bound to the envelope without a separate
+ * hash — so it can be signed/verified with the existing generic JCS signers.
+ *
+ * Determinism / cross-node reconstructability:
+ * - `createdAt` is coerced to its ISO-8601 string form so a `Date` (emit side,
+ *   from a DB row) and an ISO string (verify side, from the wire) produce the
+ *   IDENTICAL canonical bytes.
+ * - `null`/`undefined` fields collapse to "dropped" (via `?? undefined`), so a
+ *   field that is `null` on the sender and `undefined`/absent on the receiver
+ *   still canonicalizes identically. Every field the sender includes MUST be
+ *   transmitted on the wire and read back verbatim by the receiver.
+ *
+ * @param evt Object carrying the envelope fields (a DB row or a received wire event).
+ * @returns The plain object to hand to {@link signPayload}/{@link verifyPayloadSignature}.
+ * @example
+ * ```ts
+ * const sig = signPayload(buildEnvelopeToSign(row), nodePrivateKey);
+ * const ok = verifyPayloadSignature(buildEnvelopeToSign(received), sig, peerPublicKey);
+ * ```
+ */
+export function buildEnvelopeToSign(
+  evt: EnvelopeToSignInput
+): Record<string, unknown> {
+  // Coerce Date → ISO string so emit (Date) and verify (string) canonicalize identically.
+  const createdAt =
+    evt.createdAt instanceof Date
+      ? evt.createdAt.toISOString()
+      : evt.createdAt ?? undefined;
+
+  return {
+    id: evt.id ?? undefined,
+    originNodeId: evt.originNodeId ?? undefined,
+    entityType: evt.entityType ?? undefined,
+    entityId: evt.entityId ?? undefined,
+    eventType: evt.eventType ?? undefined,
+    visibility: evt.visibility ?? undefined,
+    nonce: evt.nonce ?? undefined,
+    eventVersion: evt.eventVersion ?? undefined,
+    createdAt,
+    payload: evt.payload ?? undefined,
+  };
+}

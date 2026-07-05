@@ -19,6 +19,7 @@ import {
 } from "@/db/schema";
 import { isGroupAgentType } from "@/lib/agent-types";
 import {
+  buildEnvelopeToSign,
   generateNodeKeyPair,
   signPayload,
   verifyPayloadSignature,
@@ -1068,6 +1069,24 @@ async function reconcileImportedGroupMembership(params: {
 }
 
 /**
+ * Envelope-signature verification phase (F6/#138). Controls whether inbound
+ * events must carry a valid `envelopeSignature` over the full envelope (not
+ * just the payload). Read from `FEDERATION_ENVELOPE_VERIFY`:
+ * - `off` (default): no envelope check. Phase 1 — purely additive; every
+ *   instance EMITS envelope sigs but nobody rejects on them yet.
+ * - `when-present`: verify the envelope signature when the event carries one;
+ *   accept envelope-unsigned events from not-yet-upgraded peers (grace window).
+ * - `require`: reject any event lacking a valid envelope signature.
+ */
+type EnvelopeVerifyMode = "off" | "when-present" | "require";
+
+function resolveEnvelopeVerifyMode(): EnvelopeVerifyMode {
+  const raw = (process.env.FEDERATION_ENVELOPE_VERIFY ?? "off").trim().toLowerCase();
+  if (raw === "when-present" || raw === "require") return raw;
+  return "off";
+}
+
+/**
  * Import inbound federation events from a trusted peer, enforcing signature,
  * replay, version, and age checks before persistence.
  *
@@ -1088,12 +1107,20 @@ export async function importFederationEvents(params: {
   fromPeerSlug: string;
   events: Array<{
     id?: string;
+    /**
+     * The ORIGIN node's own id for itself (the sender's `nodes.id`), carried on
+     * the wire so the receiver can reconstruct the exact envelope the sender
+     * signed. This is NOT the receiver's local id for that peer.
+     */
+    originNodeId?: string | null;
     entityId?: string | null;
     entityType: string;
     eventType: string;
     visibility: VisibilityLevel;
     payload: Record<string, unknown>;
     signature?: string;
+    /** Ed25519 signature over the full envelope (F6/#138). Verified per-phase. */
+    envelopeSignature?: string;
     nonce?: string;
     eventVersion?: number;
     createdAt?: string;
@@ -1135,6 +1162,8 @@ export async function importFederationEvents(params: {
 
   const imports: NewFederationEventRecord[] = [];
   const rejected: Array<{ index: number; reason: string }> = [];
+  // Resolve the envelope-verification phase once per batch (env-driven).
+  const envelopeVerifyMode = resolveEnvelopeVerifyMode();
 
   for (let i = 0; i < params.events.length; i++) {
     const event = params.events[i];
@@ -1162,6 +1191,52 @@ export async function importFederationEvents(params: {
         `[federation] Rejected event ${i} from ${params.fromPeerSlug}: invalid signature`
       );
       continue;
+    }
+
+    // Envelope-signature verification (F6/#138), phase-gated so the rollout is
+    // a config flip, not a redeploy. The legacy `signature` above only covers
+    // `event.payload`; the envelope signature additionally binds id/originNodeId/
+    // entityType/entityId/eventType/visibility/nonce/eventVersion/createdAt so a
+    // relay cannot mutate any envelope field while keeping the payload sig valid.
+    // The envelope is reconstructed from the RECEIVED wire fields — it must byte-
+    // match what the sender signed (see `buildEnvelopeToSign`).
+    if (envelopeVerifyMode !== "off") {
+      const envelopeSignature = event.envelopeSignature;
+      if (!envelopeSignature) {
+        // `require` rejects envelope-unsigned events; `when-present` tolerates
+        // them (a not-yet-upgraded peer during the grace window).
+        if (envelopeVerifyMode === "require") {
+          rejected.push({ index: i, reason: "missing envelope signature" });
+          console.warn(
+            `[federation] Rejected event ${i} from ${params.fromPeerSlug}: missing envelope signature`
+          );
+          continue;
+        }
+      } else {
+        const envelopeValid = verifyPayloadSignature(
+          buildEnvelopeToSign({
+            id: event.id,
+            originNodeId: event.originNodeId,
+            entityType: event.entityType,
+            entityId: event.entityId,
+            eventType: event.eventType,
+            visibility: event.visibility,
+            nonce: event.nonce,
+            eventVersion: event.eventVersion,
+            createdAt: event.createdAt,
+            payload: event.payload,
+          }),
+          envelopeSignature,
+          peerNode.publicKey
+        );
+        if (!envelopeValid) {
+          rejected.push({ index: i, reason: "invalid envelope signature" });
+          console.warn(
+            `[federation] Rejected event ${i} from ${params.fromPeerSlug}: invalid envelope signature`
+          );
+          continue;
+        }
+      }
     }
 
     // Replay protection: reject duplicate nonces (idempotent)

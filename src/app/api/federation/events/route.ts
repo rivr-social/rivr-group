@@ -4,6 +4,7 @@ import { federationEvents } from "@/db/schema";
 import { gt, and, eq } from "drizzle-orm";
 import { authorizeFederationRequest } from "@/lib/federation-auth";
 import { ensureLocalNode } from "@/lib/federation";
+import { buildEnvelopeToSign, signPayload } from "@/lib/federation-crypto";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
@@ -60,21 +61,49 @@ export async function GET(request: Request) {
         ? Math.max(...events.map((e) => e.sequence || 0))
         : since;
 
+    // Envelope signing (F6/#138): compute a full-envelope Ed25519 signature at
+    // the wire boundary (not persisted) alongside the legacy payload signature.
+    // `originNodeId` + `eventVersion` are added to the wire so the puller can
+    // reconstruct the exact envelope for verification. Phase 1 is emit-only.
+    const nodePrivateKey = localNode.privateKey;
     return NextResponse.json({
       success: true,
-      events: events.map((e) => ({
-        id: e.id,
-        sequence: e.sequence,
-        eventType: e.eventType,
-        entityType: e.entityType,
-        entityId: e.entityId,
-        actorId: e.actorId,
-        visibility: e.visibility,
-        payload: e.payload,
-        signature: e.signature,
-        nonce: e.nonce,
-        createdAt: e.createdAt?.toISOString(),
-      })),
+      events: events.map((e) => {
+        const createdAt = e.createdAt?.toISOString();
+        const envelopeSignature = nodePrivateKey
+          ? signPayload(
+              buildEnvelopeToSign({
+                id: e.id,
+                originNodeId: e.originNodeId,
+                entityType: e.entityType,
+                entityId: e.entityId,
+                eventType: e.eventType,
+                visibility: e.visibility,
+                nonce: e.nonce,
+                eventVersion: e.eventVersion,
+                createdAt,
+                payload: e.payload as Record<string, unknown> | null,
+              }),
+              nodePrivateKey,
+            )
+          : undefined;
+        return {
+          id: e.id,
+          sequence: e.sequence,
+          originNodeId: e.originNodeId,
+          eventType: e.eventType,
+          entityType: e.entityType,
+          entityId: e.entityId,
+          actorId: e.actorId,
+          visibility: e.visibility,
+          payload: e.payload,
+          signature: e.signature,
+          envelopeSignature,
+          nonce: e.nonce,
+          eventVersion: e.eventVersion,
+          createdAt,
+        };
+      }),
       cursor: highWaterMark,
       hasMore: events.length === limit,
     });

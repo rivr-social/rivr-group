@@ -37,11 +37,15 @@ import {
 
 interface ImportEvent {
   id?: string;
+  /** Origin node's own id (sender's `nodes.id`), needed to reconstruct the signed envelope. */
+  originNodeId?: string | null;
   entityType: string;
   eventType: string;
   visibility: VisibilityLevel;
   payload: Record<string, unknown>;
   signature?: string;
+  /** Full-envelope Ed25519 signature (F6/#138); verified per-phase in importFederationEvents. */
+  envelopeSignature?: string;
 }
 
 interface ImportPayload {
