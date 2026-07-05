@@ -597,6 +597,21 @@ export async function getShifts(limit = 100): Promise<JobShift[]> {
 }
 
 /**
+ * Returns a single job/shift resource by id, mapped to the domain type, or
+ * null when it does not exist (or is deleted). Used by the job detail page so
+ * a job link resolves regardless of how many jobs exist — the previous
+ * load-all-then-find approach capped at 100 and 404'd every older job.
+ */
+export async function getJobById(id: string): Promise<JobShift | null> {
+  const row = await db.query.resources.findFirst({
+    where: and(eq(resources.id, id), inArray(resources.type, ["job", "shift"]), isNull(resources.deletedAt)),
+    with: { owner: true },
+  });
+  return row ? resourceToJobShift(row) : null;
+}
+
+
+/**
  * Returns all badge definitions from the resources table, mapped to domain type.
  *
  * @param limit Max rows to return. Defaults to `100`.

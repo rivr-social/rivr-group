@@ -15,18 +15,19 @@ import { JobTimerTab } from "@/components/job-timer-tab"
 
 interface JobDetailClientProps {
   jobId: string
+  initialJob?: JobShift | null
   jobShifts: JobShift[]
   projects: ProjectRecord[]
   userBadgeIds: string[]
   currentUserId: string | null
 }
 
-export function JobDetailClient({ jobId, jobShifts, projects, userBadgeIds, currentUserId }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
   // Derive initial job and parentProject from jobId (pure lookup)
-  const initialJob = useMemo(() => jobShifts.find((j) => j.id === jobId) || null, [jobId, jobShifts])
+  const initialJob = useMemo(() => serverJob ?? jobShifts.find((j) => j.id === jobId) ?? null, [serverJob, jobId, jobShifts])
   const parentProject = useMemo(() => {
     if (!initialJob) return null
     return projects.find(p => p.jobs && p.jobs.includes(jobId)) || null

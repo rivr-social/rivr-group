@@ -16,7 +16,7 @@
  * @module jobs/[id]/page
  */
 import { auth } from "@/auth"
-import { getShifts, getProjects, getUserBadgeIds } from "@/lib/queries/resources"
+import { getJobById, getShifts, getProjects, getUserBadgeIds } from "@/lib/queries/resources"
 import { JobDetailClient } from "./job-detail"
 
 export default async function JobPage(props: { params: Promise<{ id: string }> }) {
@@ -25,7 +25,10 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   const session = await auth()
   const currentUserId = session?.user?.id ?? null
 
-  const [jobShifts, projects, userBadgeIds] = await Promise.all([
+  // Fetch the job DIRECTLY by id (type job OR legacy shift). Resolving via
+  // getShifts() alone capped at 100 rows and 404'd every older job.
+  const [job, jobShifts, projects, userBadgeIds] = await Promise.all([
+    getJobById(jobId),
     getShifts(),
     getProjects(),
     currentUserId ? getUserBadgeIds(currentUserId) : Promise.resolve<string[]>([]),
@@ -34,6 +37,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   return (
     <JobDetailClient
       jobId={jobId}
+      initialJob={job}
       jobShifts={jobShifts}
       projects={projects}
       userBadgeIds={userBadgeIds}
