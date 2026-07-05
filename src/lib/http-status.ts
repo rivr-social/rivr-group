@@ -43,3 +43,5 @@ export const STATUS_TOO_MANY_REQUESTS = 429;
 // 5xx — Server errors
 /** Unhandled server failure for unexpected runtime/storage/dependency errors. */
 export const STATUS_INTERNAL_ERROR = 500;
+/** Server is temporarily unable to handle the request (missing config, dependency offline). */
+export const STATUS_SERVICE_UNAVAILABLE = 503;

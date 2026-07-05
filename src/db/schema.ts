@@ -2259,3 +2259,56 @@ export const sitePublications = pgTable(
 
 export type SitePublication = typeof sitePublications.$inferSelect;
 export type NewSitePublication = typeof sitePublications.$inferInsert;
+
+/**
+ * x402 paid-access receipts.
+ *
+ * One row per settled x402 payment that unlocked a resource. RIVR persists its
+ * own receipt (independent of the facilitator) so that:
+ * - a settled payment is idempotent/replay-safe — the unique settlement
+ *   transaction hash blocks a second unlock from the same onchain transfer, and
+ * - access can be re-granted on subsequent requests without re-charging.
+ *
+ * This is deliberately separate from `wallet_transactions`: x402 settles a
+ * single onchain transfer to one `payTo` and carries no RIVR fee-split or
+ * capital accounting — it is an access proof, not a treasury movement.
+ */
+export const x402Receipts = pgTable(
+  'x402_receipts',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    resourceId: uuid('resource_id').notNull().references(() => resources.id, { onDelete: 'cascade' }),
+    /** Local actor when the payer was an authenticated principal; null for anonymous peer payers. */
+    payerAgentId: uuid('payer_agent_id').references(() => agents.id, { onDelete: 'set null' }),
+    /** Onchain payer address reported by the facilitator. */
+    payerAddress: text('payer_address'),
+    /** Settlement transaction hash — unique, the replay-protection key. */
+    settlementTx: text('settlement_tx').notNull(),
+    network: text('network').notNull(),
+    asset: text('asset').notNull(),
+    amountCents: integer('amount_cents').notNull(),
+    payTo: text('pay_to').notNull(),
+    metadata: jsonb('metadata').default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('x402_receipts_settlement_tx_idx').on(table.settlementTx),
+    index('x402_receipts_resource_id_idx').on(table.resourceId),
+    index('x402_receipts_payer_agent_id_idx').on(table.payerAgentId),
+    index('x402_receipts_created_at_idx').on(table.createdAt),
+  ]
+);
+
+export const x402ReceiptsRelations = relations(x402Receipts, ({ one }) => ({
+  resource: one(resources, {
+    fields: [x402Receipts.resourceId],
+    references: [resources.id],
+  }),
+  payer: one(agents, {
+    fields: [x402Receipts.payerAgentId],
+    references: [agents.id],
+  }),
+}));
+
+export type X402ReceiptRecord = typeof x402Receipts.$inferSelect;
+export type NewX402ReceiptRecord = typeof x402Receipts.$inferInsert;
