@@ -1,0 +1,35 @@
+# Governance
+
+## What it is
+
+Group-level decision-making: proposals, votes/decisions, and the rules by which a
+group or org coordinates authority. Governance is tied to membership, badges, and
+points-based stake.
+
+## Where it lives
+
+- Group governance surfaces within `/groups/[id]` org tabs · `src/app/groups/[id]/**`
+- Related: stake and badges (`/badges`, `/points`)
+
+<Callout type="todo" title="Needs live verification">
+  The exact governance routes, proposal lifecycle, and decision mechanics are not
+  yet confirmed against the live app. This page is a scaffold — verify the live
+  governance tab/surface set and fill the interaction list before treating it as
+  product-truth.
+</Callout>
+
+## Every interaction
+
+- **Create a proposal** — _TODO(verify)._
+- **Vote / decide** — _TODO(verify): voting model, quorum, badge/stake weighting._
+- **View decisions / history** — _TODO(verify)._
+
+## Permissions / gating
+
+- Governance participation is membership-scoped; proposal/decision authority is
+  likely admin- or stake-weighted. _TODO(verify) against the capability matrix._
+
+## Cross-links
+
+- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Badges & stake](/docs/wiki/badges-stake) · [Projects & jobs](/docs/wiki/projects-jobs)
+- API/MCP: [Groups tools](/docs/api) · [Moderation tools](/docs/api)

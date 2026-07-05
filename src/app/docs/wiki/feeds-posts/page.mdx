@@ -1,0 +1,41 @@
+# Feeds & posts
+
+## What it is
+
+The social core of RIVR: the home feed of posts from people, groups, and places
+the actor follows or is scoped into, the individual post detail view, and the
+composer used to create posts (including group-authored and place-scoped posts).
+
+## Where it lives
+
+- `/` — home feed · `src/app/(main)/page.tsx` (→ `home-or-instance.tsx` / `home-client.tsx`)
+- `/posts/[id]` — post detail · `src/app/posts/[id]/page.tsx`
+- `/create` — composer · `src/app/(main)/create/page.tsx`
+
+## Every interaction
+
+- **Compose a post** — title (optional), body, post type; URLs in the body are
+  auto-extracted into rich link embeds. Result: a `post` resource owned by the
+  actor (or by a group, when posting as a group).
+- **Post as a group** — choose a group the actor administers; the group becomes
+  the owner and the actor is recorded as provenance.
+- **Scope to a place** — attach a locale/chapter and/or region so the post shows
+  in that place's feed as well as the global feed.
+- **React** — toggle a reaction on a post; reaction counts are aggregated per user.
+- **Comment** — add a threaded comment. _TODO(verify): confirm live comment
+  affordances and edit/delete controls._
+- **Open detail / share** — navigate to `/posts/[id]`; share surfaces a link.
+
+## Permissions / gating
+
+- **Guests** can read public posts and post detail; composing requires a session.
+- **Hosted users / sovereign persons** can compose their own posts.
+- **Group admins** can author posts as the group.
+- Home feed content is permission-filtered per actor (private/group-scoped posts
+  only appear to eligible viewers).
+
+## Cross-links
+
+- API/MCP: [`rivr.posts.create`, `rivr.posts.create_live_invite`, `rivr.posts.list`](/docs/api) · [Social tools](/docs/api) · [`/api/link-preview` REST](/docs/api)
+- Wiki: [Explore & search](/docs/wiki/explore-search) · [Groups & subgroups](/docs/wiki/groups) · [Calendar & events](/docs/wiki/calendar-events)
+- Federation: posts created on a sovereign instance project to global as signed `post.created` events.

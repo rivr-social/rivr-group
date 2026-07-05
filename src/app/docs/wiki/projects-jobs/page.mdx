@@ -1,0 +1,48 @@
+# Projects & jobs
+
+## What it is
+
+The work-graph surfaces. Projects are coordination containers (with treasury and
+deliverables); jobs/tasks are claimable units of work, often gated on badges.
+Together they model who is doing what and how contribution is rewarded.
+
+## Where it lives
+
+- `/projects` — project directory · `src/app/(main)/projects/page.tsx`
+- `/projects/[id]` — project detail · `src/app/(main)/projects/[id]/page.tsx`
+- `/jobs` — job board · `src/app/jobs/page.tsx`
+- `/jobs/[id]` — job detail · `src/app/jobs/[id]/page.tsx` (`JobDetailClient`)
+
+## Every interaction
+
+- **Browse / open** a project or job.
+- **Create / update a project** — name, description, treasury, deliverables, and
+  a timeframe set through the unified date-time range selector (start/end in one
+  popover) on both the create form and the owner edit dialog.
+- **Claim a job** — take a job; claiming may require a qualifying badge.
+- **Update job status** — progress a job through its lifecycle.
+- **Link to project** — jobs and events can link to a parent project.
+
+## Stock (Inventory + Needs)
+
+Orgs, projects, and jobs each have a **Stock** tab with two subtabs:
+
+- **Inventory** — the material resources (REA `resource`/`asset` items) associated
+  with that object (an org's owned assets, a project's `projectId`-linked stock, a
+  job's `jobId`-linked stock).
+- **Needs** — a simple editable shopping list on the object (name, quantity, note,
+  fulfilled). Each item can be **posted as a request** (a `Request` post) so the
+  community can help fill it. Editing needs and posting requests is limited to
+  the object's owner/admins.
+
+## Permissions / gating
+
+- **Guests** can view public projects/jobs.
+- **Members / contributors** can claim and update work where authorized; job
+  claim can be **badge-gated**.
+- Project/treasury management is owner/admin-scoped.
+
+## Cross-links
+
+- API/MCP: [Work Graph tools](/docs/api) (21 tools — projects, jobs, deliverables) · [Grants tools](/docs/api)
+- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Badges & stake](/docs/wiki/badges-stake) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Governance](/docs/wiki/governance)

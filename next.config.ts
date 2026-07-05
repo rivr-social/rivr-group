@@ -1,6 +1,8 @@
+import createMDX from "@next/mdx";
 import type { NextConfig } from "next";
 import path from "path";
 import { fileURLToPath } from "url";
+import remarkGfm from "remark-gfm";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDomain = process.env.NEXT_PUBLIC_DOMAIN;
@@ -43,6 +45,10 @@ const staticRemotePatterns = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   output: "standalone",
+  // Render `.md`/`.mdx` files as first-class routes for the /docs site. The
+  // hand-authored wiki is committed as MDX and rendered through the shared
+  // `src/mdx-components.tsx` component map.
+  pageExtensions: ["ts", "tsx", "md", "mdx"],
   experimental: {
     // Client-side router cache (Wave A, perf #69/#92). Previously {0,0} which
     // forced every back/forward/tab-switch to re-fetch the RSC payload from the
@@ -117,4 +123,11 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+const withMDX = createMDX({
+  options: {
+    remarkPlugins: [remarkGfm],
+    rehypePlugins: [],
+  },
+});
+
+export default withMDX(nextConfig);

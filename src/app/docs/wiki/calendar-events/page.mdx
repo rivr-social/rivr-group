@@ -1,0 +1,42 @@
+# Calendar & events
+
+## What it is
+
+The scheduling surfaces: a calendar of events, event detail with RSVP and
+ticketing, financials for paid events, and a scheduling/find-time helper. Events
+can be place-scoped and (for groups) tied to meeting/transcript documents.
+
+## Where it lives
+
+- `/calendar` — calendar · `src/app/(main)/calendar/page.tsx`
+- `/events`, `/events/[id]` — list + detail · `src/app/events/**`
+- `/events/[id]/tickets`, `/registered`, `/financials`, `/edit` — event sub-surfaces
+- `/events/find-time` — scheduling helper · `src/app/events/find-time/page.tsx`
+- `/create` — event composer (event mode)
+
+## Every interaction
+
+- **Browse the calendar** — jobs and events appear on their real dates; filter by
+  kind, group, and member.
+- **Create an event** — title, location, place scope; optional ticketing. A
+  single date-time range selector sets the event's start and end (a range
+  calendar plus start/end times in one popover) on both the create and edit
+  surfaces, replacing the old separate date + time inputs.
+- **RSVP** — set status going / interested / none.
+- **Buy tickets / view registered** — paid events route to tickets and a
+  registered-attendee view; organizers see financials.
+- **Edit** — organizers edit event details.
+- **Append transcript** — group meeting events accrue a linked transcript document.
+
+## Permissions / gating
+
+- **Public** event pages (`/events` is a public prefix); `/calendar` is public.
+- **RSVP / ticket purchase** require a session.
+- **Edit / financials** are organizer/admin-scoped.
+- Location detail may be gated per event settings.
+
+## Cross-links
+
+- API/MCP: [Events tools](/docs/api) · [`rivr.events.rsvp`, `rivr.events.append_transcript`](/docs/api) · [`/api/transcription` REST](/docs/api) · [`/api/live-invitations`](/docs/api)
+- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Feeds & posts](/docs/wiki/feeds-posts) (live invites) · [Wallet & treasury](/docs/wiki/wallet-treasury)
+- Integrations: Google Calendar pull via the `gcal-pull` cron.

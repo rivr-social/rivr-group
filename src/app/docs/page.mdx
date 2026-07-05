@@ -1,0 +1,37 @@
+# RIVR Documentation
+
+This is a **sovereign group instance** of RIVR — a federated social/civic
+coordination platform. It runs independently and federates into the hosted
+**global** app (`app.rivr.social`) for cross-instance discovery, marketplace,
+and credentialing. This site documents what this instance does and how to build
+against it.
+
+It has two tabs:
+
+## 📖 [Wiki](/docs/wiki)
+
+Every user-facing surface, documented at click level: what each screen is, where
+it lives in the app, every interaction (buttons, menus, forms) and its result,
+who can see or do it, and how it connects to the rest of the platform.
+
+Start with the [Wiki index](/docs/wiki) for the full surface list.
+
+## 🔌 [API](/docs/api)
+
+Developer reference for building against this instance:
+
+- **[Auth models](/docs/api/auth)** — the three principals RIVR authenticates:
+  session, MCP token, and peer signature.
+- **[Federation protocol](/docs/api/federation)** — the Ed25519-signed event +
+  peer-registry endpoints this instance federates through.
+- **MCP + REST surface** — the tool surface over `/api/mcp` (advertised by
+  `/.well-known/mcp` and `/llms.txt`) plus the `/api/**` route tree. See the
+  [API overview](/docs/api).
+
+<Callout type="note" title="This site stays in parity with the code">
+  The wiki is maintained under the standing docs-parity rule: any change to a
+  user-facing surface updates its wiki page in the same commit. The hosted global
+  app additionally emits a machine-generated per-tool / per-endpoint reference
+  from source; that generator is not run on this sovereign build yet, so the API
+  tab documents auth + federation and points at the live discovery endpoints.
+</Callout>

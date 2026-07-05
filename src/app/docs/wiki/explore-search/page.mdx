@@ -1,0 +1,35 @@
+# Explore & search
+
+## What it is
+
+The discovery surfaces: a browsable explore view, full-text/entity search across
+agents and resources, a geographic map, and a people directory. These are the
+primary public entry points into RIVR.
+
+## Where it lives
+
+- `/explore` — discovery · `src/app/(main)/explore/page.tsx`
+- `/search` — search · `src/app/(main)/search/page.tsx`
+- `/map` — map · `src/app/(main)/map/page.tsx`
+- `/people` — people directory · `src/app/(main)/people/page.tsx`
+
+## Every interaction
+
+- **Search** — type a query; results span people, groups, events, listings, and
+  posts. _TODO(verify): confirm result facets and ranking._
+- **Filter / browse explore** — browse curated/discovery collections.
+- **Pan/zoom the map** — map tiles are served from the instance's own style/tile
+  routes (`/api/map-style`, `/api/map-tilesets`, `/api/map-style-tiles`); pins
+  resolve to place-scoped and located resources.
+- **Open a person** — navigate to their profile.
+
+## Permissions / gating
+
+- **Public.** `/`, `/explore`, `/search`, and `/map` are in `PUBLIC_PAGE_PATHS`;
+  `/people` is browsable. Guests can discover without an account. Personalized
+  ranking and private results require a session.
+
+## Cross-links
+
+- API/MCP: [`rivr.places.list`](/docs/api) · map REST groups ([`/api/map-style`](/docs/api), [`/api/map-tilesets`](/docs/api), [`/api/map-neighborhoods`](/docs/api)) · [`/api/murmurations`](/docs/api)
+- Wiki: [Locales & regions](/docs/wiki/locales-regions) · [Feeds & posts](/docs/wiki/feeds-posts) · [Groups & subgroups](/docs/wiki/groups)

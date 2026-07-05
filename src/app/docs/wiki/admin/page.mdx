@@ -1,0 +1,36 @@
+# Admin
+
+## What it is
+
+Operator surfaces for platform administrators: user management, task/queue
+inspection, the knowledge/graph explorer, badge administration, and integration
+debug tooling. These are gated to platform/admin actors.
+
+## Where it lives
+
+- `/admin` — admin dashboard · `src/app/admin/page.tsx`
+- `/admin/users` — user management · `src/app/admin/users/page.tsx`
+- `/admin/tasks` — tasks/queues · `src/app/admin/tasks/page.tsx`
+- `/admin/graph` — graph explorer · `src/app/admin/graph/page.tsx`
+- `/admin/badges` — badge administration · `src/app/admin/badges/page.tsx`
+- `/admin/integrations/debug` — integration debug · `src/app/admin/integrations/debug/page.tsx`
+
+## Every interaction
+
+- **Manage users** — inspect/administer accounts. _TODO(verify): enumerate exact admin actions live._
+- **Inspect tasks** — view background/cron task state (federation-sync,
+  gcal-pull, trial-reminders, etc.).
+- **Explore the graph** — browse the agent/resource/ledger graph.
+- **Administer badges** — issue/revoke badges (see [Badges & stake](/docs/wiki/badges-stake)).
+- **Debug integrations** — SMTP config/test and connector diagnostics.
+
+## Permissions / gating
+
+- **Admin-gated.** These routes require an operator/admin actor; they are not
+  public and are not part of the ordinary user surface. Admin API routes (e.g.
+  `/api/admin/smtp-config`) enforce their own checks.
+
+## Cross-links
+
+- API: [`/api/admin` REST](/docs/api) · [`/api/cron` REST](/docs/api) · [`/api/debug` REST](/docs/api) · [`/api/runtime`](/docs/api)
+- Wiki: [Badges & stake](/docs/wiki/badges-stake) · [Autobot & agents](/docs/wiki/autobot-agents) · [Federation & SSO identity](/docs/wiki/federation-identity)
