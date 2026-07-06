@@ -3,7 +3,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, resources } from "@/db/schema";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
-import { resolveHomeInstance } from "@/lib/federation/resolution";
+import { resolveHomeInstance, resolveLocalActorId } from "@/lib/federation/resolution";
 import {
   authorizeFederationRequest,
   bindAuthorizedFederationActor,
@@ -666,7 +666,8 @@ async function handleLegacyMutation(
   remoteId: string,
   routedFrom?: RoutingProvenance | null,
 ): Promise<NextResponse> {
-  const { type, actorId, targetAgentId, payload } = body;
+  const { type, actorId, payload } = body;
+  let { targetAgentId } = body;
 
   if (!type || !actorId || !targetAgentId) {
     return NextResponse.json(
@@ -674,6 +675,13 @@ async function handleLegacyMutation(
       { status: 400 },
     );
   }
+
+  // Normalize the TARGET through the entity map before the locality gate -
+  // identity-normalized agents carry DIFFERENT ids per instance, so the raw
+  // forwarded id can be unknown here and would 421 as "not local" even though
+  // the target IS this instance's own agent. Read-only; unmapped ids pass
+  // through unchanged.
+  targetAgentId = await resolveLocalActorId(targetAgentId);
 
   const homeInstance = await resolveHomeInstance(targetAgentId);
   if (!homeInstance.isLocal) {

@@ -62,8 +62,31 @@ vi.mock("@/lib/queries/agents", () => ({
   getAgent: vi.fn().mockResolvedValue({ name: "Test Agent", image: null }),
 }));
 
+vi.mock("@/lib/federation/write-router", () => ({
+  routeWrite: vi.fn(),
+}));
+
+// Keep every other export real; resolveHomeInstance defaults to LOCAL so the
+// pre-existing delete tests exercise the local path unchanged.
+vi.mock("@/lib/federation/resolution", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/federation/resolution")>();
+  return {
+    ...actual,
+    resolveHomeInstance: vi.fn().mockResolvedValue({
+      nodeId: "",
+      instanceType: "local",
+      slug: "local",
+      baseUrl: "",
+      isLocal: true,
+      migrationStatus: "active",
+    }),
+  };
+});
+
 // Import AFTER mocks
 import { auth } from "@/auth";
+import { routeWrite } from "@/lib/federation/write-router";
+import { resolveHomeInstance } from "@/lib/federation/resolution";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   updateResource,
@@ -593,6 +616,109 @@ describe("lifecycle actions", () => {
 
         expect(result.success).toBe(true);
         expect(result.resourceId).toBeDefined();
+      }));
+  });
+  // ===========================================================================
+  // deleteResource — mirror-delete forward (owner homed on a peer)
+  // ===========================================================================
+
+  describe("deleteResource — mirror-delete forward", () => {
+    const remoteHome = {
+      nodeId: "peer-node",
+      instanceType: "global",
+      slug: "dev-global",
+      baseUrl: "https://dev.rivr.social",
+      isLocal: false,
+      migrationStatus: "active",
+    };
+
+    it("forwards the delete with the home id and retires the local mirror", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        const resource = await createTestPost(db, user.id);
+        const homeResourceId = "5f5f5f5f-6a6a-4b7b-8c8c-9d9d9d9d9d9d";
+        await db
+          .update(resources)
+          .set({ metadata: { externalEntityId: homeResourceId } })
+          .where(eq(resources.id, resource.id));
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(resolveHomeInstance).mockResolvedValueOnce(remoteHome);
+        vi.mocked(routeWrite).mockResolvedValue({
+          success: true,
+          data: { success: true, message: "Deleted successfully" },
+          executedOn: "remote",
+          homeInstance: remoteHome,
+        });
+
+        const result = await deleteResource(resource.id);
+
+        expect(result.success).toBe(true);
+        const forwarded = vi.mocked(routeWrite).mock.calls[0][0];
+        expect(forwarded.type).toBe("deleteResource");
+        expect((forwarded.payload as Record<string, unknown>).resourceId).toBe(homeResourceId);
+        const [mirror] = await db
+          .select()
+          .from(resources)
+          .where(eq(resources.id, resource.id));
+        expect(mirror.deletedAt).not.toBeNull();
+      }));
+
+    it("falls back to the local row id when no externalEntityId exists", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        const resource = await createTestPost(db, user.id);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(resolveHomeInstance).mockResolvedValueOnce(remoteHome);
+        vi.mocked(routeWrite).mockResolvedValue({
+          success: true,
+          data: { success: true, message: "Deleted successfully" },
+          executedOn: "remote",
+          homeInstance: remoteHome,
+        });
+
+        const result = await deleteResource(resource.id);
+
+        expect(result.success).toBe(true);
+        expect(
+          (vi.mocked(routeWrite).mock.calls[0][0].payload as Record<string, unknown>).resourceId,
+        ).toBe(resource.id);
+      }));
+
+    it("surfaces the remote refusal and leaves the mirror intact", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        const resource = await createTestPost(db, user.id);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(resolveHomeInstance).mockResolvedValueOnce(remoteHome);
+        vi.mocked(routeWrite).mockResolvedValue({
+          success: false,
+          error: "You do not have permission to delete this object.",
+          errorCode: "REMOTE_EXECUTION_FAILED",
+          executedOn: "remote",
+          homeInstance: remoteHome,
+        });
+
+        const result = await deleteResource(resource.id);
+
+        expect(result.success).toBe(false);
+        expect(result.error?.code).toBe("REMOTE_EXECUTION_FAILED");
+        const [mirror] = await db
+          .select()
+          .from(resources)
+          .where(eq(resources.id, resource.id));
+        expect(mirror.deletedAt).toBeNull();
+      }));
+
+    it("keeps the pure-local path when the owner resolves locally (default)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        const resource = await createTestPost(db, user.id);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+
+        const result = await deleteResource(resource.id);
+
+        expect(result.success).toBe(true);
+        expect(vi.mocked(routeWrite)).not.toHaveBeenCalled();
       }));
   });
 });
