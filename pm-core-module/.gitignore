@@ -1,0 +1,9 @@
+# Real per-instance env carries LIVE secrets (federation/cron/Stripe/MCP) — never
+# commit. Only the sanitized *.EXAMPLE templates are tracked.
+instances/*.env
+!instances/*.env.EXAMPLE
+# File-based docker secrets never live in git; they live on the host secret store.
+secrets/
+.env
+# Re-include the operator template even when a parent .gitignore blocks .env.*
+!.env.example

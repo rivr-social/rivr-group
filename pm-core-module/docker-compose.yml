@@ -1,0 +1,156 @@
+# RIVR Group App — pm-core module (FULL-PARITY with live overlays)
+#
+# DRIFT-PROOF BY DESIGN:
+#   - image is a digest-pinned reference (${RIVR_IMAGE}) sourced from image.lock.
+#     A @sha256: digest is byte-identical on every host, so there is NO per-host
+#     `build:` and no source-tree drift is possible.
+#   - one module serves every MAIN-HOST group instance (mab, spirit); the
+#     per-instance differences (DOMAIN / INSTANCE_SLUG / RIVR_DB_NAME / MATRIX_* /
+#     STRIPE_* / FEDERATION_* / GOOGLE_* / per-instance secret file names) live
+#     ONLY in the instance .env (instances/<slug>.env), never in source.
+#
+# PARITY (derived 2026-07-05 from the LIVE pmdl_rivr_group_mab +
+# pmdl_rivr_group_boulder containers, not hand-authored):
+#   The live overlay OVERRIDES the image's default entrypoint with an inline
+#   script that constructs DATABASE_URL (url-encoded), AUTH_SECRET/NEXTAUTH_SECRET,
+#   MinIO access/secret keys, NODE_ADMIN_KEY, SMTP_PASS, and MATRIX_ADMIN_TOKEN
+#   from mounted /run/secrets/* files, runs migrations (`pnpm db:migrate`,
+#   non-fatal), then execs the Group server (`pnpm start`). This module reproduces
+#   that EXACT script so no subsystem (DB/auth/MinIO/federation/Matrix/SMTP)
+#   silently regresses.
+#   The runtime runs as the image's default `nextjs` user and is NOT read_only —
+#   matching the proven live containers (the overlay never applied read_only /
+#   cap_drop / user override; adding them here is an unproven divergence and is
+#   intentionally omitted).
+#
+#   NOTE — regenhub (group PROD) DIVERGES from this module (full-URL secret model
+#   `regen_hub_database_url`/`regen_hub_redis_url` + /bootstrap, off-host on
+#   /opt/pm-core). It has its OWN module (rivr-group-regen-hub) and is NOT served
+#   here. spirit carries REAL Stripe money — cut over with money-rail verification.
+#
+# Required .env keys: see .env.example. Required secrets: see secrets-required.txt.
+
+services:
+  rivr-group:
+    image: ${RIVR_IMAGE:?set RIVR_IMAGE via image.lock / deploy script}
+    container_name: ${RIVR_CONTAINER:?set RIVR_CONTAINER via tools/rivr-deploy.sh (exact live container name from rivr-instances.tsv)}
+    profiles:
+      - rivr-group
+      - full
+    # MODULE_SLUG is the UNIQUE module-instance key (rivr-instances.tsv `slug`,
+    # e.g. mutual-aid-boulder / group-boulder). It is used only for the
+    # per-instance file, container, and Traefik router names, and is distinct from
+    # the app-level INSTANCE_SLUG env.
+    env_file:
+      - instances/${MODULE_SLUG:?set MODULE_SLUG (rivr-instances.tsv slug) via deploy script}.env
+    # Reproduce the live overlay entrypoint verbatim (generalised secret targets).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "=== RIVR Group Startup (module) ==="
+        if [ -f /run/secrets/rivr_db_password ]; then
+          POSTGRES_PASSWORD=$$(cat /run/secrets/rivr_db_password)
+          DB_HOST="$${DATABASE_HOST:-postgres}"
+          DB_PORT="$${DATABASE_PORT:-5432}"
+          DB_NAME="$${DATABASE_NAME:-rivr_group_mab}"
+          DB_USER="$${DATABASE_USER:-rivr}"
+          ENCODED_PW=$$(node -e "process.stdout.write(encodeURIComponent(process.argv[1]))" "$$POSTGRES_PASSWORD")
+          export DATABASE_URL="postgresql://$${DB_USER}:$${ENCODED_PW}@$${DB_HOST}:$${DB_PORT}/$${DB_NAME}"
+          echo "[secrets] DATABASE_URL constructed from rivr_db_password"
+        fi
+        if [ -f /run/secrets/rivr_auth_secret ]; then
+          AUTH_VALUE=$$(cat /run/secrets/rivr_auth_secret)
+          export AUTH_SECRET="$$AUTH_VALUE"
+          export NEXTAUTH_SECRET="$$AUTH_VALUE"
+          echo "[secrets] Auth secret loaded"
+        fi
+        if [ -f /run/secrets/minio_root_password ]; then
+          export MINIO_SECRET_KEY=$$(cat /run/secrets/minio_root_password)
+          export MINIO_ROOT_PASSWORD=$$(cat /run/secrets/minio_root_password)
+          if [ -f /run/secrets/minio_root_user ]; then
+            export MINIO_ACCESS_KEY=$$(cat /run/secrets/minio_root_user)
+            export MINIO_ROOT_USER=$$(cat /run/secrets/minio_root_user)
+          fi
+          echo "[secrets] MinIO secrets loaded"
+        fi
+        if [ -f /run/secrets/rivr_federation_admin_key ]; then
+          export NODE_ADMIN_KEY=$$(cat /run/secrets/rivr_federation_admin_key)
+          echo "[secrets] Federation admin key loaded"
+        fi
+        if [ -f /run/secrets/rivr_google_smtp_password ]; then
+          export SMTP_PASS=$$(cat /run/secrets/rivr_google_smtp_password)
+          echo "[secrets] SMTP password loaded"
+        fi
+        if [ -s /run/secrets/matrix_admin_token ]; then
+          export MATRIX_ADMIN_TOKEN=$$(cat /run/secrets/matrix_admin_token)
+          echo "[secrets] Matrix admin token loaded"
+        elif [ -f /run/secrets/synapse_registration_shared_secret ]; then
+          export MATRIX_ADMIN_TOKEN=$$(cat /run/secrets/synapse_registration_shared_secret)
+          export MATRIX_REGISTRATION_SHARED_SECRET=$$(cat /run/secrets/synapse_registration_shared_secret)
+          echo "[secrets] Matrix admin token loaded from registration shared secret"
+        fi
+        echo "[migrate] Running database migrations..."
+        pnpm db:migrate || echo "[migrate] Migration failed (continuing)"
+        echo "[start] Starting Group Next.js production server..."
+        exec pnpm start
+    secrets:
+      - rivr_db_password
+      - rivr_auth_secret
+      - rivr_federation_admin_key
+      - rivr_google_smtp_password
+      - minio_root_user
+      - minio_root_password
+      - matrix_admin_token
+      - synapse_registration_shared_secret
+    networks:
+      - proxy-external
+      - db-internal
+      - app-internal
+    # Matches the live container's healthcheck EXACTLY: the image has no wget;
+    # it uses node fetch. A wget-based check marks a working container unhealthy.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)throw r.status;process.exit(0)}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rivr-${MODULE_SLUG}.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.rivr-${MODULE_SLUG}.entrypoints=websecure"
+      - "traefik.http.routers.rivr-${MODULE_SLUG}.tls=true"
+      - "traefik.http.routers.rivr-${MODULE_SLUG}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.rivr-${MODULE_SLUG}.service=rivr-${MODULE_SLUG}"
+      - "traefik.http.services.rivr-${MODULE_SLUG}.loadbalancer.server.port=3000"
+      - "com.centurylinklabs.watchtower.enable=false"
+
+secrets:
+  rivr_db_password:
+    file: ../../secrets/rivr_db_password
+  rivr_auth_secret:
+    file: ../../secrets/rivr_auth_secret
+  rivr_federation_admin_key:
+    file: ../../secrets/rivr_federation_admin_key
+  rivr_google_smtp_password:
+    file: ../../secrets/rivr_google_smtp_password
+  minio_root_user:
+    file: ../../secrets/minio_root_user
+  minio_root_password:
+    file: ../../secrets/minio_root_password
+  # Per-instance Matrix secret SOURCE files, mounted at a fixed target name.
+  matrix_admin_token:
+    file: ../../secrets/${MATRIX_TOKEN_SRC:-matrix_admin_token_mab}
+  synapse_registration_shared_secret:
+    file: ../../secrets/${SYNAPSE_REG_SRC:-synapse_mab_registration_shared_secret}
+
+networks:
+  proxy-external:
+    external: true
+    name: pmdl_proxy-external
+  db-internal:
+    external: true
+    name: pmdl_db-internal
+  app-internal:
+    external: true
+    name: pmdl_app-internal
