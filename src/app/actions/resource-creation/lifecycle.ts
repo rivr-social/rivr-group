@@ -25,6 +25,8 @@ import {
   createResourceWithLedger,
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
+import { routeWrite } from "@/lib/federation/write-router";
+import { resolveHomeInstance } from "@/lib/federation/resolution";
 import { syncResourceToGoogle } from "@/lib/google/calendar-sync";
 import type { ActionResult, UpdateResourceInput } from "./types";
 import { normalizeEventTickets } from "./types";
@@ -326,6 +328,43 @@ export async function deleteResource(resourceId: string): Promise<ActionResult> 
       message: "You do not have permission to delete this object.",
       error: { code: "FORBIDDEN" },
     };
+  }
+
+  // Owner-routed cross-instance DELETE (mirror parity, 2026-07-06): when the
+  // resource's owner is homed on a PEER instance, this local row is a federated
+  // mirror - deleting only it would fork state from the authoritative home.
+  // Forward the delete over the signed mutation rail; the home re-authorizes
+  // the entity-map-normalized actor, soft-deletes, and emits RESOURCE_DELETED.
+  // On confirmed success the local mirror is retired immediately so this
+  // viewer's surfaces update without waiting for the returning event.
+  const mirrorOwnerId = permission.resource.ownerId;
+  const mirrorHome = await resolveHomeInstance(mirrorOwnerId).catch(() => null);
+  if (mirrorHome && !mirrorHome.isLocal) {
+    const mirrorMetadata = (permission.resource.metadata ?? null) as Record<string, unknown> | null;
+    const homeResourceId =
+      mirrorMetadata && typeof mirrorMetadata.externalEntityId === "string" && mirrorMetadata.externalEntityId.trim()
+        ? mirrorMetadata.externalEntityId.trim()
+        : resourceId;
+    const routedDelete = await routeWrite<{ resourceId: string }, ActionResult>(
+      {
+        type: "deleteResource",
+        actorId: userId,
+        targetAgentId: mirrorOwnerId,
+        payload: { resourceId: homeResourceId },
+      },
+      async () => {
+        throw new Error("Mirror delete must not run the local executor");
+      },
+    );
+    if (!routedDelete.success) {
+      return {
+        success: false,
+        message: routedDelete.error ?? "Failed to delete resource on its home instance",
+        error: { code: routedDelete.errorCode ?? "REMOTE_EXECUTION_FAILED" },
+      };
+    }
+    await db.update(resources).set({ deletedAt: new Date() }).where(eq(resources.id, resourceId));
+    return { success: true, message: "Deleted on its home instance", resourceId };
   }
 
   const verifiedDeleteResource = permission.resource!;
