@@ -70,7 +70,10 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
   transpilePackages: ["@rivr/db", "@rivr/federation", "@rivr/lib", "@rivr/ui"],
-  outputFileTracingRoot: path.join(__dirname, "../../"),
+  // Single-repo Docker build: trace within this app root so the standalone
+  // output lands at .next/standalone/server.js (the "../../" monorepo root was
+  // a leftover that nested the trace and forced the fat whole-/app image).
+  outputFileTracingRoot: path.join(__dirname, "./"),
   images: {
     dangerouslyAllowSVG: true,
     remotePatterns: [
