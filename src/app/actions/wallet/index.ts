@@ -68,3 +68,20 @@ export type {
   GroupTreasuryBankingOverview,
   SubgroupBankingRow,
 } from './treasury-banking';
+
+export {
+  createFundAction,
+  updateFundAction,
+  assignSubgroupToFundAction,
+  unassignSubgroupFromFundAction,
+  transferFundBalanceAction,
+  provisionFundFinancialAccountAction,
+  issueFundCardAction,
+  getGroupTreasuryFundsOverviewAction,
+} from './treasury-funds';
+export type {
+  FundTransferDirection,
+  TreasuryFundRow,
+  FundSubgroupOption,
+  GroupTreasuryFundsOverview,
+} from './treasury-funds';
