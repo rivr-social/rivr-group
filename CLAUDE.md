@@ -240,6 +240,45 @@ per-agent failure isolation, re-run safe) — also exposed as the
 `rivr.payments.backfill_connect_accounts` MCP/assistant tool. Tests:
 `wallet/__tests__/connect-backfill.test.ts` (pnpm test:db).
 
+## Treasury funds (2026-07-07)
+
+Named sub-pools of the group's main treasury ("Operations Fund", "Land
+Fund"). A fund is a `resources` row with `type: 'resource'` +
+`metadata.resourceKind: 'fund'` (the pg enum has no `fund` value — no
+migration) owned by the group, with a resource-bound wallet via
+`getOrCreateProjectWallet` (wallet `type: 'project'`,
+`metadata.walletKind: 'fund'`). Subgroups are assigned to at most one fund
+(`metadata.assignedSubgroupIds` on the fund). Money moves main ↔ fund over
+`transferP2P` (internal ledger; `MAX_TRANSFER_CENTS` per move). Each fund is
+FinancialAccount-READY: `provisionFundFinancialAccountAction` /
+`issueFundCardAction` mirror the subgroup banking lane (ids on the fund
+wallet metadata) and stay dormant behind `STRIPE_TREASURY_ENABLED` /
+`STRIPE_ISSUING_ENABLED`. Actions: `actions/wallet/treasury-funds.ts`; UI:
+`treasury-funds-card.tsx` in the Treasury tab (admins). Tests:
+`wallet/__tests__/treasury-funds.test.ts` (pnpm test:db).
+
+## Job cash pay + completion payout (2026-07-07)
+
+Jobs carry cash compensation alongside task points: `metadata.payKind`
+(`'fixed' | 'hourly' | null`), `payAmountCents`, `hourlyRateCents` — threaded
+through `JobShift`, `resourceToJobShift`, project creation, the create-page
+job composer, and `rivr.jobs.update`. `markJobDoneAction`
+(`actions/job-completion.ts`, also `rivr.jobs.mark_done`) is admin/owner
+gated: flips the job to completed, records a `job-contribution` edge per
+assignee (active `job-claim` holders, legacy `metadata.assignees` fallback),
+and settles cash from the group settlement wallet via `transferP2P` (fixed =
+equal split, deterministic remainder; hourly = rate × stopped `time_entry`
+ledger segments). Idempotent per assignee via the `job-cash-payout` earn
+edge; underfunded-treasury payouts park as `pending_funds` and re-running
+retries them. Structural adds post-creation: `actions/job-management.ts` —
+`addJobToProjectAction` / `addTaskToJobAction` (mirror the lifecycle nested
+inserts, inherit parent visibility/scope; MCP `rivr.jobs.create` /
+`rivr.tasks.create`). UI: `job-admin-panel.tsx` above the job tabs (edit
+pay/details, add task, mark done) and `ProjectActions` gains server-computed
+`canManage`, a budget field, and an Add-job dialog. IMPORTANT: admin
+surfaces gate on SERVER-computed authority passed as props — the client
+user-context cannot see federated remote-viewer sessions.
+
 ## Stake distribution (points-based, 2026-07-02)
 
 Org stake is proportional to TASK POINTS earned across the group and its
