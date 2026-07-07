@@ -423,6 +423,37 @@ describe("visibility check", () => {
       expect(result.allowed).toBe(false);
     }));
 
+  // Ordering guard for the public read fast-path: it must never outrun ABAC
+  // deny precedence.
+  it("ABAC DENY policy overrides public visibility", () =>
+    withTestTransaction(async (db) => {
+      const owner = await createTestAgent(db);
+      const denied = await createTestAgent(db);
+      const resource = await createTestResource(db, owner.id, {
+        visibility: "public" as VisibilityLevel,
+      });
+
+      const policyMetadata: PermissionPolicyMetadata = {
+        targetId: resource.id,
+        targetType: "resource",
+        effect: "deny",
+        allowedActions: ["view" as VerbType],
+        conditions: [{ key: "id", operator: "equals", value: denied.id }],
+        logicalOperator: "AND",
+        label: "Deny public read for test",
+      };
+      await createTestResource(db, owner.id, {
+        name: "Deny public policy",
+        type: "permission_policy",
+        visibility: "private" as VisibilityLevel,
+        metadata: policyMetadata as unknown as Record<string, unknown>,
+      });
+
+      const result = await check(denied.id, "view", resource.id, "resource");
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("abac_deny");
+    }));
+
   it("locale resource allows view when actor shares locale with owner", () =>
     withTestTransaction(async (db) => {
       const locale = await createTestPlace(db);

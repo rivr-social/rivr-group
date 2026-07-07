@@ -32,6 +32,12 @@ import { RelativeTime } from "@/components/relative-time"
 
 const STABLE_FALLBACK_TIMESTAMP = "1970-01-01T00:00:00.000Z"
 
+// Windowed-rendering bounds: how many feed cards mount initially and how many
+// each "Show more" click adds. Cards are stateful (edit/comment/reaction
+// state), so the initial window is what bounds hydration cost on feed pages.
+const FEED_INITIAL_WINDOW = 15
+const FEED_WINDOW_INCREMENT = 15
+
 /**
  * Unified social feed renderer used by feed/home-style pages to display posts, plus optional
  * event and group cards in one stream.
@@ -250,6 +256,17 @@ export function PostFeed({
     }
   }, [posts])
 
+  // Windowed rendering: mounting every card at once (each with its own
+  // edit/comment/reaction state) dominates hydration cost, so render an
+  // initial window and grow it on demand. Reaction summaries are still
+  // batch-fetched for the full list above, so expanding the window never
+  // triggers per-card fetches.
+  const [visibleCount, setVisibleCount] = useState(FEED_INITIAL_WINDOW)
+  useEffect(() => {
+    // A new search or chapter filter is a new list; restart the window.
+    setVisibleCount(FEED_INITIAL_WINDOW)
+  }, [query, chapterId])
+
   const feedItems = useMemo(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- feedItems is a heterogeneous array mixing Post, event, and group wrapper objects
     const items: any[] = [...sortedPosts]
@@ -312,9 +329,11 @@ export function PostFeed({
     return chapterId
   }
 
+  const visibleFeedItems = feedItems.slice(0, visibleCount)
+
   return (
     <div className="space-y-4 mt-4">
-      {feedItems.map((item) => {
+      {visibleFeedItems.map((item) => {
         // Conditional rendering picks the correct card component for each heterogeneous feed item.
         if (item.type === "event") {
           return (
@@ -355,6 +374,17 @@ export function PostFeed({
           )
         }
       })}
+
+      {feedItems.length > visibleCount && (
+        <div className="flex justify-center py-2">
+          <Button
+            variant="outline"
+            onClick={() => setVisibleCount((count) => count + FEED_WINDOW_INCREMENT)}
+          >
+            Show more ({feedItems.length - visibleCount} remaining)
+          </Button>
+        </div>
+      )}
 
       {feedItems.length === 0 && <div className="text-center py-8 text-muted-foreground">No posts found</div>}
     </div>

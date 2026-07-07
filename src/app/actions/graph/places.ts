@@ -1,5 +1,6 @@
 "use server";
 
+import { unstable_cache } from "next/cache";
 import type { Agent } from "@/db/schema";
 import {
   serializeAgent,
@@ -31,14 +32,29 @@ import { dedupeAgentsById } from "./types";
  * ```
  */
 export async function fetchBasins(limit = 50): Promise<SerializedAgent[]> {
-  // Place nodes (basins/regions) are public directory entries — skip per-agent
-  // permission checks to avoid O(n) DB round trips on every page load.
-  const allAgents = dedupeAgentsById([
-    ...(await getPlacesByPlaceType("basin", limit)),
-    ...(await getPlacesByPlaceType("region", limit)),
-  ]);
-  return allAgents.map(serializeAgent);
+  return getCachedBasins(limit);
 }
+
+// Place directories are public, viewer-independent, and change on admin
+// cadence (new basins/locales are rare), so they are served from the data
+// cache instead of re-querying on every feed load. TTL bounds staleness; the
+// tag allows explicit revalidation if a creation flow ever needs it.
+const PLACE_DIRECTORY_TTL_SECONDS = 300;
+const PLACE_DIRECTORY_CACHE_TAG = "place-directory";
+
+const getCachedBasins = unstable_cache(
+  async (limit: number): Promise<SerializedAgent[]> => {
+    // Place nodes (basins/regions) are public directory entries — skip per-agent
+    // permission checks to avoid O(n) DB round trips on every page load.
+    const [basins, regions] = await Promise.all([
+      getPlacesByPlaceType("basin", limit),
+      getPlacesByPlaceType("region", limit),
+    ]);
+    return dedupeAgentsById([...basins, ...regions]).map(serializeAgent);
+  },
+  ["fetch-basins"],
+  { revalidate: PLACE_DIRECTORY_TTL_SECONDS, tags: [PLACE_DIRECTORY_CACHE_TAG] },
+);
 
 /**
  * Lists locale/chapter place nodes with duplicate ids removed.
@@ -52,14 +68,22 @@ export async function fetchBasins(limit = 50): Promise<SerializedAgent[]> {
  * ```
  */
 export async function fetchLocales(limit = 50): Promise<SerializedAgent[]> {
-  // Place nodes (chapters/locales) are public directory entries — skip per-agent
-  // permission checks to avoid O(n) DB round trips on every page load.
-  const allAgents = dedupeAgentsById([
-    ...(await getPlacesByPlaceType("chapter", limit)),
-    ...(await getPlacesByPlaceType("locale", limit)),
-  ]);
-  return allAgents.map(serializeAgent);
+  return getCachedLocales(limit);
 }
+
+const getCachedLocales = unstable_cache(
+  async (limit: number): Promise<SerializedAgent[]> => {
+    // Place nodes (chapters/locales) are public directory entries — skip per-agent
+    // permission checks to avoid O(n) DB round trips on every page load.
+    const [chapters, locales] = await Promise.all([
+      getPlacesByPlaceType("chapter", limit),
+      getPlacesByPlaceType("locale", limit),
+    ]);
+    return dedupeAgentsById([...chapters, ...locales]).map(serializeAgent);
+  },
+  ["fetch-locales"],
+  { revalidate: PLACE_DIRECTORY_TTL_SECONDS, tags: [PLACE_DIRECTORY_CACHE_TAG] },
+);
 
 /**
  * Fetches chapter/locale agents and maps them to the frontend `Chapter` shape.

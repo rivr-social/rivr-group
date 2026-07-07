@@ -18,6 +18,7 @@
  * - `toContainsLikePattern` for escaped `ILIKE` contains matching.
  */
 
+import { cache } from "react";
 import { db } from "@/db";
 import { agents, ledger } from "@/db/schema";
 import { eq, and, or, ilike, isNull, sql, desc, inArray } from "drizzle-orm";
@@ -65,12 +66,16 @@ function rowToAgent(row: Record<string, unknown>): Agent {
  * const agent = await getAgent("9d9b2a3e-2ff8-49e9-a944-ead67c888111");
  * ```
  */
-export async function getAgent(id: string): Promise<Agent | undefined> {
+// Request-scoped memoization: viewability filters call this once per list item
+// with the SAME actor id (see actions/graph/helpers.ts), so without cache() a
+// 50-item feed issues 50 identical actor lookups. Outside an RSC request scope
+// `cache()` degrades to a plain pass-through (no memoization, same semantics).
+export const getAgent = cache(async (id: string): Promise<Agent | undefined> => {
   return await db.query.agents.findFirst({
     // Business rule: soft-deleted agents are excluded from all read paths.
     where: and(eq(agents.id, id), isNull(agents.deletedAt)),
   });
-}
+});
 
 /**
  * Returns a single non-deleted agent by case-insensitive name match.

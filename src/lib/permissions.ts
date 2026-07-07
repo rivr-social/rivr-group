@@ -264,16 +264,46 @@ export async function check(
     return { allowed: true, reason: "self", via: "self_access" };
   }
 
-  // 2. Direct grant — active ledger entry with this verb on this target
-  const directGrant = await findActiveEdge(actorId, verb, targetId, now);
-  if (directGrant) {
-    return { allowed: true, reason: "direct_grant", via: `ledger:${directGrant.id}` };
+  // 1b. Public read fast-path — for READ verbs on a public target the allow is
+  //     decided by the target row alone, and ABAC deny (the only overriding
+  //     deny in this engine) has already run above. Returning here skips the
+  //     ledger-edge queries that dominate check() latency on public content.
+  const targetMeta = (target as { metadata?: Record<string, unknown> }).metadata;
+  const visibility = (target as { visibility?: VisibilityLevel }).visibility || "private";
+  if (visibility === "public" && READ_VERBS.has(verb)) {
+    return { allowed: true, reason: "public_visibility", via: "visibility=public" };
   }
 
-  // 3. Verb implication — check if actor has a higher-level verb
-  for (const [higherVerb, implied] of Object.entries(VERB_IMPLICATIONS)) {
-    if (implied.includes(verb)) {
-      const higherGrant = await findActiveEdge(actorId, higherVerb as VerbType, targetId, now);
+  // 2 + 3. Direct grant and verb implication, resolved from a single query.
+  //
+  // The requested verb plus every verb that implies it (in VERB_IMPLICATIONS
+  // declaration order) form the candidate set. We pull all matching active
+  // edges at once, then apply the original priority in JS so the decision,
+  // `reason`, and `via` are byte-identical to the previous per-verb loop:
+  //   (a) a direct edge for the requested verb wins first ("direct_grant"),
+  //   (b) otherwise the first implying verb (in declaration order) with an
+  //       active edge wins ("implied_permission").
+  const implyingVerbs = Object.entries(VERB_IMPLICATIONS)
+    .filter(([, implied]) => implied.includes(verb))
+    .map(([higherVerb]) => higherVerb as VerbType);
+
+  const candidateEdges = await findActiveEdgesForVerbs(
+    actorId,
+    [verb, ...implyingVerbs],
+    targetId,
+    now
+  );
+
+  if (candidateEdges.length > 0) {
+    // 2. Direct grant — active ledger entry with this verb on this target
+    const directGrant = candidateEdges.find((edge) => edgeSatisfies(edge, verb));
+    if (directGrant) {
+      return { allowed: true, reason: "direct_grant", via: `ledger:${directGrant.id}` };
+    }
+
+    // 3. Verb implication — check if actor has a higher-level verb
+    for (const higherVerb of implyingVerbs) {
+      const higherGrant = candidateEdges.find((edge) => edgeSatisfies(edge, higherVerb));
       if (higherGrant) {
         return {
           allowed: true,
@@ -284,7 +314,6 @@ export async function check(
     }
   }
 
-  const targetMeta = (target as { metadata?: Record<string, unknown> }).metadata;
   const scopedUserIds = Array.isArray(targetMeta?.scopedUserIds) ? targetMeta.scopedUserIds as string[] : [];
   if (READ_VERBS.has(verb) && scopedUserIds.includes(actorId)) {
     return { allowed: true, reason: "scoped_user_visibility", via: `scoped_user:${actorId}` };
@@ -304,13 +333,8 @@ export async function check(
     }
   }
 
-  // 4. Visibility check
-  const visibility = (target as { visibility?: VisibilityLevel }).visibility || "private";
-
-  if (visibility === "public" && READ_VERBS.has(verb)) {
-    return { allowed: true, reason: "public_visibility", via: "visibility=public" };
-  }
-
+  // 4. Visibility check — the public READ allow returned at the 1b fast-path
+  //    above; only the conditional visibilities remain here.
   if (visibility === "locale" && READ_VERBS.has(verb)) {
     // Check for strict locale scoping via scopedLocaleIds in metadata
     const scopedLocaleIds = Array.isArray(targetMeta?.scopedLocaleIds) ? targetMeta.scopedLocaleIds as string[] : [];
@@ -969,6 +993,69 @@ async function fetchResource(id: string) {
 /** Find an active ledger edge between subject and object with the given verb.
  *  Also matches grant-style entries (verb="grant") where metadata.action equals the requested verb,
  *  since grantPermission() stores grants with verb="grant" and the actual permission in metadata.action. */
+/**
+ * Does a ledger edge satisfy `verb`? True for a direct verb match or a
+ * `grant` row whose `metadata.action` names the verb — the same predicate the
+ * per-verb `findActiveEdge` query encodes in SQL.
+ */
+function edgeSatisfies(
+  edge: { verb: string; metadata: unknown },
+  verb: VerbType
+): boolean {
+  if (edge.verb === verb) return true;
+  if (edge.verb === "grant") {
+    const action = (edge.metadata as Record<string, unknown> | null)?.action;
+    return action === verb;
+  }
+  return false;
+}
+
+/**
+ * Fetch every active edge between `subjectId` and `objectId` whose verb is one
+ * of `verbs` (or a `grant` row whose `metadata.action` is one of `verbs`).
+ *
+ * This is the batched form of {@link findActiveEdge}: the direct-grant check
+ * (step 2) and the implied-verb loop (step 3) of {@link check} previously
+ * issued one query per candidate verb (up to ~10 sequential round-trips per
+ * non-public item on the render hot path). Pulling the whole candidate set in
+ * one query and resolving priority in JS via {@link edgeSatisfies} preserves
+ * the exact short-circuit ordering and `reason`/`via` outputs while turning
+ * N queries into one. The row count is naturally tiny (edges between a single
+ * subject/object pair), so there is no `limit`.
+ */
+async function findActiveEdgesForVerbs(
+  subjectId: string,
+  verbs: VerbType[],
+  objectId: string,
+  now: Date
+) {
+  return db
+    .select({ id: ledger.id, verb: ledger.verb, metadata: ledger.metadata })
+    .from(ledger)
+    .where(
+      and(
+        eq(ledger.subjectId, subjectId),
+        eq(ledger.objectId, objectId),
+        eq(ledger.isActive, true),
+        or(
+          inArray(ledger.verb, verbs),
+          and(
+            eq(ledger.verb, "grant"),
+            or(
+              ...verbs.map(
+                (v) => sql`${ledger.metadata}->>'action' = ${v}`
+              )
+            )
+          )
+        ),
+        or(
+          isNull(ledger.expiresAt),
+          sql`${ledger.expiresAt} > ${now}`
+        )
+      )
+    );
+}
+
 async function findActiveEdge(
   subjectId: string,
   verb: VerbType,
