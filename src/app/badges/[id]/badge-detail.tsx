@@ -312,6 +312,13 @@ export function BadgeDetailClient({ badgeId, allBadges, isEarned, jobShifts }: B
                 <Calendar className="h-4 w-4 mr-2" />
                 Schedule Live Class
               </Button>
+            ) : totalModules === 0 ? (
+              // No modules exist: a live "Start Training" that lands on an
+              // empty tab reads as a silent no-op (persona finding,
+              // 2026-07-07). Explain instead.
+              <Button disabled variant="outline">
+                No training modules yet
+              </Button>
             ) : (
               <Button onClick={() => setActiveTab("training")}>
                 Start Training

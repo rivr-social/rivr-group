@@ -59,6 +59,7 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
   const [badgeCategory, setBadgeCategory] = useState("community")
   const [badgeDescription, setBadgeDescription] = useState("")
   const [badgeRequirements, setBadgeRequirements] = useState([""])
+  const [badgeModules, setBadgeModules] = useState<Array<{ title: string; duration: string }>>([])
 
   useEffect(() => {
     const toBadge = (b: { id: string; name: string; description: string | null; metadata: Record<string, unknown> | null }): UserBadge => {
@@ -86,12 +87,19 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
 
   const handleCreateBadge = async () => {
     const requirements = badgeRequirements.map((item) => item.trim()).filter(Boolean)
+    const trainingModules = badgeModules
+      .map((module) => ({
+        title: module.title.trim(),
+        duration: Number.parseInt(module.duration, 10) || undefined,
+      }))
+      .filter((module) => module.title.length > 0)
     const result = await createBadgeResourceAction({
       groupId,
       name: badgeName,
       description: badgeDescription,
       category: badgeCategory,
       requirements,
+      trainingModules,
     })
 
     if (!result.success) {
@@ -110,7 +118,17 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
         requirements,
         holders: [],
         jobsUnlocked: [],
-        trainingModules: [],
+        // Optimistic mirror of the server-sanitized modules so the new card
+        // immediately shows the right CTA; router.refresh() reconciles.
+        trainingModules: trainingModules.map((module, index) => ({
+          id: `module-${index + 1}`,
+          title: module.title,
+          description: "",
+          type: "reading" as const,
+          content: "",
+          duration: module.duration ?? 10,
+          order: index,
+        })),
         liveClass: undefined,
       },
       ...current,
@@ -119,6 +137,7 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
     setBadgeDescription("")
     setBadgeCategory("community")
     setBadgeRequirements([""])
+    setBadgeModules([])
     setIsCreateModalOpen(false)
     toast({ title: "Badge created", description: "The badge is now available in this group." })
     router.refresh()
@@ -263,12 +282,18 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
                   View Badge Details
                 </span>
               </Button>
-            ) : (
+            ) : (badge.trainingModules?.length ?? 0) > 0 ? (
               <Button variant="default" size="sm" className="w-full" asChild>
                 <span>
                   <Target className="mr-2 h-4 w-4" />
                   Start Training
                 </span>
+              </Button>
+            ) : (
+              // No modules: "Start Training" is a dead invitation (persona
+              // finding, 2026-07-07) — neutral CTA instead.
+              <Button variant="outline" size="sm" className="w-full" asChild>
+                <span>View Badge</span>
               </Button>
             )}
           </div>
@@ -294,7 +319,7 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
                 Create Badge
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Create New Badge</DialogTitle>
               </DialogHeader>
@@ -337,6 +362,38 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
                     <Button variant="outline" size="sm" onClick={() => setBadgeRequirements((current) => [...current, ""])}>
                       <Plus className="mr-2 h-4 w-4" />
                       Add Requirement
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <Label>Training modules</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Members run these in order on the badge page to earn it. Leave empty for a badge without online training.
+                  </p>
+                  <div className="space-y-2 mt-2">
+                    {badgeModules.map((module, index) => (
+                      <div key={`module-${index}`} className="flex gap-2">
+                        <Input
+                          placeholder={`Module ${index + 1} title`}
+                          value={module.title}
+                          onChange={(event) => setBadgeModules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))}
+                        />
+                        <Input
+                          className="w-28"
+                          type="number"
+                          min={1}
+                          placeholder="mins"
+                          value={module.duration}
+                          onChange={(event) => setBadgeModules((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, duration: event.target.value } : item))}
+                        />
+                        <Button variant="ghost" size="sm" onClick={() => setBadgeModules((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                    <Button variant="outline" size="sm" onClick={() => setBadgeModules((current) => [...current, { title: "", duration: "10" }])}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Training Module
                     </Button>
                   </div>
                 </div>

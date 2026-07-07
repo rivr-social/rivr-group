@@ -189,10 +189,11 @@ export function GroupFeed({
   return (
     <div className="space-y-4 mt-4">
       {filteredGroups.map((group) => {
+        // Feed groups carry the live ledger count in memberCount (annotated
+        // server-side); the members ARRAY is only populated on detail views.
         const memberCount =
-          group.type === GroupType.Ring
-            ? group.members?.length || 0
-            : group.members?.length || 0
+          group.members?.length ||
+          ("memberCount" in group && typeof group.memberCount === "number" ? group.memberCount : 0)
         const memberAvatars = getMembersFunction((group.members || []).slice(0, 3))
         const isJoined = joinedGroups.includes(group.id)
 

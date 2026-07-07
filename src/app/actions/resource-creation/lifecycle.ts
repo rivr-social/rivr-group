@@ -498,6 +498,10 @@ export async function createBadgeResourceAction(input: {
   level?: "beginner" | "intermediate" | "advanced" | "expert";
   icon?: string;
   requirements?: string[];
+  /** Optional training curriculum authored with the badge (title required;
+   *  duration in minutes). Server-sanitized: capped count/length, ids and
+   *  order assigned here — never trusted from the client. */
+  trainingModules?: Array<{ title: string; description?: string; duration?: number }>;
 }): Promise<ActionResult> {
   if (!input.groupId?.trim() || !input.name?.trim() || !input.description?.trim()) {
     return {
@@ -524,6 +528,25 @@ export async function createBadgeResourceAction(input: {
       error: { code: "FORBIDDEN" },
     };
   }
+
+  const MAX_TRAINING_MODULES = 20;
+  const sanitizedTrainingModules = (input.trainingModules ?? [])
+    .slice(0, MAX_TRAINING_MODULES)
+    .map((module, index) => ({
+      id: `module-${index + 1}`,
+      title: String(module.title ?? "").trim().slice(0, 200),
+      description: String(module.description ?? "").trim().slice(0, 2000),
+      // Authored modules are self-paced reading by default; richer types
+      // (video/quiz) come with the full designer.
+      type: "reading",
+      content: String(module.description ?? "").trim().slice(0, 2000),
+      duration:
+        Number.isFinite(module.duration) && (module.duration as number) > 0
+          ? Math.min(Math.round(module.duration as number), 480)
+          : 10,
+      order: index,
+    }))
+    .filter((module) => module.title.length > 0);
 
   const badgeFacadeResult = await updateFacade.execute(
     {
@@ -552,7 +575,7 @@ export async function createBadgeResourceAction(input: {
           requirements: input.requirements ?? [],
           holders: [],
           jobsUnlocked: [],
-          trainingModules: [],
+          trainingModules: sanitizedTrainingModules,
         },
       });
 
