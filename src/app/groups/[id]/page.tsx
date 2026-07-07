@@ -64,11 +64,27 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const rawGroupType = String(groupMeta.groupType ?? "").toLowerCase()
   const agentGroupType = String(detail.group.type ?? "").toLowerCase()
   const fallbackGroupType = ["organization", "org", "ring", "family", "guild", "community"].includes(agentGroupType) ? "organization" : "basic"
-  // Parent lineage (root-first). Powers the subgroup breadcrumb under the
-  // group name AND org-tab inheritance: a subgroup anywhere under an
-  // organization gets the FULL org tab set (jobs, treasury, governance, …)
-  // even when its own groupType is unset or "basic".
-  const groupLineage = detail.group.parentId ? await fetchGroupLineage(group.id) : []
+  const ownerId = typeof groupMeta.creatorId === "string" ? groupMeta.creatorId : undefined
+  const currentUserId = session ?? null
+  // Independent lookups batched into one round instead of four sequential hops
+  // on the instance-home hot path:
+  // - Parent lineage (root-first) powers the subgroup breadcrumb under the
+  //   group name AND org-tab inheritance: a subgroup anywhere under an
+  //   organization gets the FULL org tab set even when its own groupType is
+  //   unset or "basic".
+  // - isGroupAdmin uses the canonical cascading admin gate (a Spirit admin
+  //   administers its circles) rather than an inline creatorId/adminIds check.
+  // - activeGroupPlanId lets the About tab hide the already-subscribed plan's
+  //   Subscribe CTA (B2).
+  // - memberCanCreate feeds the Stock tab's manage gate further below.
+  const [groupLineage, isGroupAdmin, activeGroupPlanId, memberCanCreate] = await Promise.all([
+    detail.group.parentId ? fetchGroupLineage(group.id) : Promise.resolve([]),
+    currentUserId ? isGroupAdminCascade(currentUserId, id) : Promise.resolve(false),
+    currentUserId
+      ? getActiveGroupSubscriptionPlanId(currentUserId, group.id).catch(() => null)
+      : Promise.resolve(null),
+    currentUserId ? canPostToGroup(currentUserId, id, "create").catch(() => false) : Promise.resolve(false),
+  ])
   const hasOrgAncestor = groupLineage.some(
     (a) => ["organization", "org"].includes(String(a.groupType ?? "").toLowerCase()) ||
            ["organization", "org", "ring", "family", "guild", "community"].includes(a.type.toLowerCase()),
@@ -85,19 +101,8 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     ownGroupType === "basic" && !hasOrgAncestor ? await hasOrgGradeAffiliation(group.id) : false
   const canonicalGroupType =
     (hasOrgAncestor || hasOrgAffiliation) && ownGroupType === "basic" ? "organization" : ownGroupType
-  const ownerId = typeof groupMeta.creatorId === "string" ? groupMeta.creatorId : undefined
-  const currentUserId = session ?? null
-  // Use the canonical admin gate so parent-group admin status cascades to
-  // subgroups (a Spirit admin administers its circles) rather than an inline
-  // per-group creatorId/adminIds check.
-  const isGroupAdmin = currentUserId ? await isGroupAdminCascade(currentUserId, id) : false
   const isMember = !!(currentUserId && members.some((m) => m.id === currentUserId))
   const membershipPlans = readGroupMembershipPlans(groupMeta)
-  // Resolve the viewer's current group-subscription plan (if any) so the About
-  // tab can hide/disable the already-subscribed plan's Subscribe CTA (B2).
-  const activeGroupPlanId = currentUserId
-    ? await getActiveGroupSubscriptionPlanId(currentUserId, group.id).catch(() => null)
-    : null
   const affiliatedGroupsRaw = (
     (groupMeta.affiliatedGroups as unknown[]) ??
     (groupMeta.affiliations as unknown[]) ??
@@ -152,12 +157,21 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         )
     )
   )
-  // Resolve via the public/optional path so logged-out visitors on this
+  // Chapter-tag UUIDs resolve to human names so the header renders "Boulder"
+  // instead of an opaque id. Unresolved UUIDs are dropped at render time by
+  // GroupProfileHeader's UUID guard.
+  const chapterTags = (group.chapterTags ?? []) as string[]
+  const chapterTagUuids = chapterTags.filter((tag) => isUuid(tag))
+  // Both hydrations depend only on `detail`; resolve in parallel. Author
+  // identities go via the public/optional path so logged-out visitors on this
   // anonymously-viewable group page still get author identities. The
   // auth-required variant throws for anonymous viewers, and the `.catch`
-  // below would then silently degrade every non-member (group-owned or
-  // federated) post author to the "Unknown User" fallback.
-  const authorAgents = authorIds.length > 0 ? await fetchPublicAgentsByIds(authorIds).catch(() => []) : []
+  // would then silently degrade every non-member (group-owned or federated)
+  // post author to the "Unknown User" fallback.
+  const [authorAgents, chapterTagAgents] = await Promise.all([
+    authorIds.length > 0 ? fetchPublicAgentsByIds(authorIds).catch(() => []) : Promise.resolve([]),
+    chapterTagUuids.length > 0 ? fetchPublicAgentsByIds(chapterTagUuids).catch(() => []) : Promise.resolve([]),
+  ])
   const authors = authorAgents.map(agentToUser).map((u) => ({
     id: u.id,
     name: u.name,
@@ -165,14 +179,6 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     image: u.avatar,
   }))
 
-  // Resolve raw place-agent UUIDs in chapterTags to human names so the header
-  // renders "Boulder" instead of an opaque id. Unresolved UUIDs are dropped at
-  // render time by GroupProfileHeader's UUID guard.
-  const chapterTags = (group.chapterTags ?? []) as string[]
-  const chapterTagUuids = chapterTags.filter((tag) => isUuid(tag))
-  const chapterTagAgents = chapterTagUuids.length > 0
-    ? await fetchPublicAgentsByIds(chapterTagUuids).catch(() => [])
-    : []
   const tagLabels: Record<string, string> = {}
   for (const agentRow of chapterTagAgents) {
     if (agentRow?.id && agentRow.name) tagLabels[agentRow.id] = agentRow.name
@@ -282,9 +288,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   // org's own metadata. Managing needs requires admin or group content-write.
   const stockResources = detail.resources.filter((r) => isStockInventoryType(r.type))
   const stockNeeds = extractStockNeeds(groupMeta)
-  const stockCanManage = currentUserId
-    ? isGroupAdmin || (await canPostToGroup(currentUserId, id, "create"))
-    : false
+  const stockCanManage = currentUserId ? isGroupAdmin || memberCanCreate : false
 
   // ── Activity filters ──
   const activityEntries = (activity as Array<{ id: string; verb: string; timestamp: string; [key: string]: unknown }>)
