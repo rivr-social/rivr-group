@@ -48,6 +48,7 @@ import {
 import { STATUS_BAD_REQUEST, STATUS_INTERNAL_ERROR } from '@/lib/http-status';
 import { consumeBookingSlot, isBookingSlotAvailable } from '@/lib/booking-slots';
 import { assertAmountReconciled } from '@/lib/stripe-reconcile';
+import { ensureConnectAccountForAgent } from '@/lib/connect-account';
 
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const MONTHLY_SUBSCRIPTION_THANKS_GRANT = 100;
@@ -1177,6 +1178,23 @@ async function handleSubscriptionUpsert(stripeSub: Stripe.Subscription) {
       await mintSubscriptionThanksGrant(tx, agentId, stripeSub);
     }
   });
+
+  // Every SUBSCRIBING member gets a Stripe Connect account: provision it the
+  // moment the membership subscription is live. Idempotent (an existing
+  // wallet-metadata id short-circuits Stripe) and deliberately NON-FATAL —
+  // the subscription upsert above is already committed, so a Stripe hiccup
+  // here must not make the webhook 500/retry; `backfillConnectAccountsAction`
+  // re-covers any agent this call misses.
+  if (stripeSub.status === 'active' || stripeSub.status === 'trialing') {
+    try {
+      await ensureConnectAccountForAgent(agentId);
+    } catch (error) {
+      console.error(
+        `[stripe-webhook] ensureConnectAccountForAgent failed for subscriber ${agentId} (subscription ${stripeSub.id}):`,
+        error,
+      );
+    }
+  }
 }
 
 async function mintSubscriptionThanksGrant(

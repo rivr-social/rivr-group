@@ -68,3 +68,11 @@ export type {
   GroupTreasuryBankingOverview,
   SubgroupBankingRow,
 } from './treasury-banking';
+
+export {
+  backfillConnectAccountsAction,
+} from './connect-backfill';
+export type {
+  ConnectBackfillFailure,
+  ConnectBackfillResult,
+} from './connect-backfill';

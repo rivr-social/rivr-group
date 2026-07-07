@@ -42,6 +42,10 @@ vi.mock("@/app/actions/interactions/project-team", () => ({
   recordJobContributionAction: vi.fn(),
 }));
 
+vi.mock("@/app/actions/wallet/connect-backfill", () => ({
+  backfillConnectAccountsAction: vi.fn(),
+}));
+
 vi.mock("@/lib/queries/resources", () => ({
   getResourcesByOwnerAndType: (...args: unknown[]) => mockGetResourcesByOwnerAndType(...args),
 }));

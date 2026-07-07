@@ -37,6 +37,7 @@ import {
   claimJobAction,
   recordJobContributionAction,
 } from "@/app/actions/interactions/project-team";
+import { backfillConnectAccountsAction } from "@/app/actions/wallet/connect-backfill";
 import { getResourcesByOwnerAndType } from "@/lib/queries/resources";
 
 // ---------------------------------------------------------------------------
@@ -805,6 +806,28 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       properties: { jobId: { type: "string" } },
     },
     run: (args) => claimJobAction(requireStr(args, "jobId")),
+  },
+  {
+    name: "rivr.payments.backfill_connect_accounts",
+    description:
+      "Ensure every SUBSCRIBING member has a Stripe Connect payment account: local agents holding an active/trialing " +
+      "membership subscription, plus the group agent itself (the sovereign group is an Organization-grade subscriber). " +
+      "New activations are provisioned automatically by the Stripe webhook — this backfills members who subscribed before " +
+      "that wiring, and retries activation-time failures. Idempotent and re-run safe — agents that already have an account " +
+      "are counted as existing, and one agent failing does not abort the batch (per-agent failures are returned). " +
+      "Requires admin authority.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        groupId: {
+          type: "string",
+          description:
+            "Optional: include this group agent in the batch instead of the primary group. Subscribing members are always included.",
+        },
+      },
+    },
+    run: (args, ctx) => backfillConnectAccountsAction(str(args.groupId) ?? ctx.groupId),
   },
   {
     name: "rivr.jobs.record_contribution",
