@@ -29,6 +29,7 @@ import {
 import { getGroupWalletAction, getTransactionHistoryAction } from "@/app/actions/wallet"
 import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
 import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
+import { TreasuryFundsCard } from "@/components/treasury-funds-card"
 import type { WalletBalance, WalletTransactionView } from "@/types"
 
 interface TreasuryTabProps {
@@ -184,6 +185,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
       />
 
       {canManageStripe && <SubgroupBankingCard groupId={groupId} />}
+
+      {canManageStripe && <TreasuryFundsCard groupId={groupId} />}
 
       {/* Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
