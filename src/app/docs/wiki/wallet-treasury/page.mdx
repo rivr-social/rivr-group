@@ -30,6 +30,25 @@ demurrage (decay) mechanic.
 - Billing actions derive the subject from the session; membership entitlements
   gate certain create/sell capabilities (seller/host/organizer/steward tiers).
 
+## Group treasury banking (flag-gated, not yet live)
+
+Group admins will find a **Banking** area in the group Treasury tab once the
+platform's Stripe Treasury/Issuing programs are enabled. Built and shipped
+dormant; until the `STRIPE_TREASURY_ENABLED` / `STRIPE_ISSUING_ENABLED` flags
+are on, the tab explains the state instead of showing dead controls.
+
+- **Group payment account** — a group can hold its own Stripe Connect account
+  (set up from the Treasury tab's payments card by an admin).
+- **Per-subgroup financial accounts** — each subgroup treasury can get its own
+  Stripe Treasury financial account, hosted on the parent group's payment
+  account, with its own balance.
+- **Subgroup cards** — a spending-limited virtual card can be issued per
+  subgroup, funded only by that subgroup's financial account (default cap
+  $500/month; admins set the limit).
+- **Connected bank balances** — a group can link its real-world bank account
+  (Financial Connections) and see its live external balance alongside the
+  Stripe balances in the Treasury tab.
+
 ## Cross-links
 
 - API/MCP: [Wallet tools](/docs/api) · [Mutual Economy tools](/docs/api) · [`rivr.points.balance`](/docs/api) · [`/api/billing` REST](/docs/api) · [`/api/stripe` REST](/docs/api)
