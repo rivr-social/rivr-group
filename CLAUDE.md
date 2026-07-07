@@ -202,6 +202,23 @@ connectors).
   `updateProfileAction` via `validateSocialLinks` (`src/lib/social-links.ts`).
 - **Tab visibility (P-G3):** already present (predates this port).
 
+## Subgroup banking lane (Treasury FA per subgroup + Issuing, 2026-07-06)
+
+Extends the dormant Stripe Treasury foundation (architecture doc §3.3–3.5,
+Phases 2–3): `actions/wallet/treasury-banking.ts` adds
+`provisionSubgroupFinancialAccountAction` (one FinancialAccount per subgroup,
+HOSTED on the parent group's Custom Connect account; ids persist on the
+subgroup wallet metadata incl. `stripeHostConnectAccountId`),
+`issueSubgroupCardAction` (company cardholder per subgroup + virtual card
+tethered to the subgroup FA, mandatory spending limit, default $500/month),
+and `getGroupTreasuryBankingOverviewAction` (group Connect balance + group FA
++ linked external bank + per-subgroup FA balances/cards). UI:
+`subgroup-banking-card.tsx` in the Treasury tab (admins only). Issuing
+helpers live in `lib/stripe-treasury.ts` behind the NEW
+`STRIPE_ISSUING_ENABLED` flag (separate Stripe program approval from
+Treasury). Tests: `wallet/__tests__/treasury-banking.test.ts` (pnpm test:db,
+Node ≥22).
+
 ## Stake distribution (points-based, 2026-07-02)
 
 Org stake is proportional to TASK POINTS earned across the group and its

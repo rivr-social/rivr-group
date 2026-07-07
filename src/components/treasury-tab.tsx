@@ -28,6 +28,7 @@ import {
 } from "lucide-react"
 import { getGroupWalletAction, getTransactionHistoryAction } from "@/app/actions/wallet"
 import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
+import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
 import type { WalletBalance, WalletTransactionView } from "@/types"
 
 interface TreasuryTabProps {
@@ -181,6 +182,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         returnPath={`/groups/${groupId}?tab=treasury`}
         canManage={canManageStripe}
       />
+
+      {canManageStripe && <SubgroupBankingCard groupId={groupId} />}
 
       {/* Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

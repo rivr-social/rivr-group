@@ -234,6 +234,151 @@ export async function getExternalBankBalance(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Issuing — cards tethered to a Treasury FinancialAccount
+// ---------------------------------------------------------------------------
+
+/**
+ * Issuing requires its own Stripe program approval, separate from Treasury
+ * (the 2026-07-01 enablement probe: "card_issuing can only be requested if
+ * your platform has been onboarded on Stripe Issuing already"). Until
+ * approved AND this flag is set, card helpers refuse instead of erroring
+ * opaquely at the Stripe API.
+ */
+export function isIssuingEnabled(): boolean {
+  return process.env.STRIPE_ISSUING_ENABLED === "true";
+}
+
+export interface CreateIssuingCardholderInput {
+  /** Connected account hosting the card program (the parent group's account). */
+  connectedAccountId: string;
+  /** Display name — the subgroup/circle name. */
+  name: string;
+  email?: string;
+  /** Billing address is REQUIRED by Issuing; default to the platform address envs. */
+  billingAddress?: {
+    line1: string;
+    city: string;
+    state: string;
+    postal_code: string;
+    country: string;
+  };
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Create a company-type Issuing cardholder representing a treasury
+ * (subgroup/circle/project) on the hosting connected account. One cardholder
+ * per treasury; cards attach to it.
+ */
+export async function createIssuingCardholder(
+  input: CreateIssuingCardholderInput,
+): Promise<Stripe.Issuing.Cardholder> {
+  if (!isIssuingEnabled()) {
+    throw new Error("Stripe Issuing is not enabled on this platform (STRIPE_ISSUING_ENABLED).");
+  }
+  const stripe = getStripe();
+  const billing = input.billingAddress ?? {
+    line1: process.env.PLATFORM_BILLING_LINE1 ?? "1 Main St",
+    city: process.env.PLATFORM_BILLING_CITY ?? "Boulder",
+    state: process.env.PLATFORM_BILLING_STATE ?? "CO",
+    postal_code: process.env.PLATFORM_BILLING_POSTAL ?? "80302",
+    country: "US",
+  };
+  return stripe.issuing.cardholders.create(
+    {
+      type: "company",
+      name: input.name,
+      email: input.email,
+      billing: { address: billing },
+      metadata: input.metadata,
+    },
+    { stripeAccount: input.connectedAccountId },
+  );
+}
+
+export interface IssueTreasuryCardInput {
+  /** Connected account hosting the FinancialAccount + cardholder. */
+  connectedAccountId: string;
+  cardholderId: string;
+  /** The Treasury FinancialAccount the card draws from (funds isolation). */
+  financialAccountId: string;
+  /** Spend ceiling per interval, in cents. Platform liability control — always set. */
+  spendingLimitCents: number;
+  spendingLimitInterval?: "daily" | "weekly" | "monthly" | "yearly" | "all_time";
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Issue a VIRTUAL card tethered to a treasury FinancialAccount. The card can
+ * only spend that FA's balance, and the mandatory spending limit caps
+ * platform liability (per-connected-account caps are required by the
+ * architecture doc §4.2).
+ */
+export async function createTreasuryIssuingCard(
+  input: IssueTreasuryCardInput,
+): Promise<Stripe.Issuing.Card> {
+  if (!isIssuingEnabled()) {
+    throw new Error("Stripe Issuing is not enabled on this platform (STRIPE_ISSUING_ENABLED).");
+  }
+  if (!Number.isInteger(input.spendingLimitCents) || input.spendingLimitCents <= 0) {
+    throw new Error("A positive integer spendingLimitCents is required for issued cards.");
+  }
+  const stripe = getStripe();
+  return stripe.issuing.cards.create(
+    {
+      cardholder: input.cardholderId,
+      currency: "usd",
+      type: "virtual",
+      financial_account: input.financialAccountId,
+      status: "active",
+      spending_controls: {
+        spending_limits: [
+          {
+            amount: input.spendingLimitCents,
+            interval: input.spendingLimitInterval ?? "monthly",
+          },
+        ],
+      },
+      metadata: input.metadata,
+    } as Stripe.Issuing.CardCreateParams,
+    { stripeAccount: input.connectedAccountId },
+  );
+}
+
+export interface IssuedCardSummary {
+  id: string;
+  last4: string;
+  status: string;
+  type: string;
+  spendingLimitCents: number | null;
+  spendingLimitInterval: string | null;
+}
+
+/** List cards issued under a cardholder (a treasury), newest first. */
+export async function listIssuingCardsForCardholder(
+  connectedAccountId: string,
+  cardholderId: string,
+): Promise<IssuedCardSummary[]> {
+  if (!isIssuingEnabled()) return [];
+  const stripe = getStripe();
+  const cards = await stripe.issuing.cards.list(
+    { cardholder: cardholderId, limit: 20 },
+    { stripeAccount: connectedAccountId },
+  );
+  return cards.data.map((card) => {
+    const limit = card.spending_controls?.spending_limits?.[0];
+    return {
+      id: card.id,
+      last4: card.last4,
+      status: card.status,
+      type: card.type,
+      spendingLimitCents: limit?.amount ?? null,
+      spendingLimitInterval: limit?.interval ?? null,
+    };
+  });
+}
+
 /** True when the platform Stripe key is present (so callers can no-op cleanly). */
 export function isPaymentsConfigured(): boolean {
   return isStripeConfigured();
