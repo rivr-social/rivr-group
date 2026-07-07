@@ -1,14 +1,37 @@
 'use server';
 
 import { eq } from 'drizzle-orm';
-import { auth } from '@/auth';
 import { db } from '@/db';
 import { agents } from '@/db/schema';
+import { getSession } from '@/lib/auth/get-session';
+import { getFederationExecutionContext } from '@/lib/federation/execution-context';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { getSettlementWalletForAgent } from '@/lib/wallet';
 
+/**
+ * Unified viewer resolution for all wallet/treasury actions, mirroring
+ * `interactions/helpers.getCurrentUserId`: MCP/federation execution context,
+ * a local NextAuth session, or a federated remote-viewer cookie — with
+ * federated ids normalized to THIS instance's local agent id
+ * (`resolveLocalActorId`, GRP-DSN-001). Plain `auth()` made every treasury
+ * surface invisible to sovereign-homed group admins viewing via SSO.
+ */
 export async function getCurrentUserId(): Promise<string | null> {
-  const session = await auth();
-  return session?.user?.id ?? null;
+  const federationContext = getFederationExecutionContext();
+  if (federationContext?.actorId) {
+    return federationContext.actorId;
+  }
+
+  const session = await getSession();
+  if (!session?.user?.id) {
+    return null;
+  }
+
+  if (session.user.authMethod === 'federated') {
+    return resolveLocalActorId(session.user.id);
+  }
+
+  return session.user.id;
 }
 
 export async function getAgentRecord(agentId: string): Promise<{

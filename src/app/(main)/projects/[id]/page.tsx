@@ -37,7 +37,7 @@ import {
   Users,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
-import { auth } from "@/auth"
+import { getCurrentUserId } from "@/app/actions/interactions/helpers"
 import { fetchAgent, fetchAgentChildren, fetchAgentFeed, fetchGroupDetail, fetchGroupRelationships, fetchProjectEvents, fetchResourcesByOwner } from "@/app/actions/graph"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
 import { agentToProject } from "@/lib/graph-adapters"
@@ -382,9 +382,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     ownerName: owner?.name ?? null,
   })
 
-  // Resolve current user ID and admin status for the jobs tab.
-  const session = await auth()
-  const currentUserId = session?.user?.id ?? null
+  // Resolve current user ID (unified: local or federated remote-viewer,
+  // normalized to a local agent id) and admin status for the jobs tab.
+  const currentUserId = await getCurrentUserId()
   const projectMeta2 = (agent.metadata ?? {}) as Record<string, unknown>
   const projectGroupId = typeof projectMeta2.groupId === "string" ? projectMeta2.groupId : null
   const isAdmin = currentUserId

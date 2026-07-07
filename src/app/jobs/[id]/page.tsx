@@ -15,7 +15,7 @@
  *
  * @module jobs/[id]/page
  */
-import { auth } from "@/auth"
+import { getCurrentUserId } from "@/app/actions/interactions/helpers"
 import { getJobById, getShifts, getProjects, getUserBadgeIds, getResource, getResourcesByJobId } from "@/lib/queries/resources"
 import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
@@ -25,8 +25,9 @@ import { JobDetailClient } from "./job-detail"
 export default async function JobPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params
   const jobId = params.id as string
-  const session = await auth()
-  const currentUserId = session?.user?.id ?? null
+  // Unified session (local or federated remote-viewer, normalized to a local
+  // agent id) so sovereign-homed admins get their claim/edit affordances.
+  const currentUserId = await getCurrentUserId()
 
   // Fetch the job DIRECTLY by id (type job OR legacy shift). Resolving via
   // getShifts() alone capped at 100 rows and 404'd every older job.

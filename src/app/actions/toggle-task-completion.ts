@@ -30,10 +30,11 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
  * @returns Toggle result with the new completed state.
  */
 export async function toggleTaskCompletion(taskId: string): Promise<ToggleResult> {
-  // Lazy auth import to avoid circular deps in the actions barrel.
-  const { auth } = await import("@/auth");
-  const session = await auth();
-  const userId = session?.user?.id;
+  // Unified session (local, remote-viewer, or MCP execution context) so
+  // sovereign-homed admins can complete tasks; lazy import avoids circular
+  // deps in the actions barrel.
+  const { getCurrentUserId } = await import("@/app/actions/interactions/helpers");
+  const userId = await getCurrentUserId();
   if (!userId) {
     return { success: false, message: "You must be logged in to complete tasks." };
   }

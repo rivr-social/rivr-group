@@ -47,9 +47,10 @@ interface TimerStatusResult {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 async function getAuthUserId(): Promise<string | null> {
-  const { auth } = await import("@/auth");
-  const session = await auth();
-  return session?.user?.id ?? null;
+  // Unified session (local, remote-viewer, or MCP execution context) so
+  // sovereign-homed admins can act here; lazy import avoids circular deps.
+  const { getCurrentUserId } = await import("@/app/actions/interactions/helpers");
+  return getCurrentUserId();
 }
 
 function isRunningTimerEntry(metadata: Record<string, unknown>): boolean {
