@@ -15,26 +15,14 @@ import { CreatePost } from "@/components/create-post"
 import { CreateOfferingModal } from "@/components/create-offering-modal"
 import { GroupSubgroups } from "@/components/group-subgroups"
 import { GroupAffiliates } from "@/components/group-affiliates"
-import { GovernanceTab } from "@/components/governance-tab"
-import { StakeTab } from "@/components/stake-tab"
-import { TreasuryTab } from "@/components/treasury-tab"
-import { JobBoardTab } from "@/components/job-board-tab"
-import { BadgesTab } from "@/components/badges-tab"
-import { PressTab } from "@/components/press-tab"
-import { StockTab } from "@/components/stock-tab"
 import { PostFeed } from "@/components/post-feed"
-import { EventFeed } from "@/components/event-feed"
 import { PeopleFeed } from "@/components/people-feed"
-import { GroupCalendar } from "@/components/group-calendar"
 import { resourceToPost, resourceToMarketplaceListing } from "@/lib/graph-adapters"
 import { GroupPlanCard } from "@/components/group-plan-card"
 import { collectGalleryItems, type GallerySourcePost, type GallerySourceResource } from "@/lib/gallery"
 import { createGovernanceProposalAction } from "@/app/actions/create-resources"
 import { AboutDocumentsCard } from "@/components/about-documents-card"
 import { AgentGraph } from "@/components/agent-graph"
-import { DocumentsTab } from "@/components/documents-tab"
-import { GroupAdminManager } from "@/components/group-admin-manager"
-import { GroupRelationshipManager } from "@/components/group-relationship-manager"
 import { FlowPassModal } from "@/components/flow-pass-modal"
 import { GroupAccessDialog } from "@/components/group-access-dialog"
 import type {
@@ -47,6 +35,27 @@ import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel
 import { ProposalStatus, GROUP_TAB_KEYS, DEFAULT_TAB_VISIBILITY } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
 import { toStockInventory, type StockNeed } from "@/lib/stock"
+import dynamic from "next/dynamic"
+
+// Per-tab code splitting: each non-default tab panel loads as its own chunk
+// on activation instead of shipping in the route's first-load chunk. Radix
+// unmounts inactive tabs, so nothing below renders until selected. SSR stays
+// enabled so deep-linked tabs still server-render.
+const tabLoading = () => (
+  <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
+)
+const GovernanceTab = dynamic(() => import("@/components/governance-tab").then((m) => m.GovernanceTab), { loading: tabLoading })
+const StakeTab = dynamic(() => import("@/components/stake-tab").then((m) => m.StakeTab), { loading: tabLoading })
+const TreasuryTab = dynamic(() => import("@/components/treasury-tab").then((m) => m.TreasuryTab), { loading: tabLoading })
+const JobBoardTab = dynamic(() => import("@/components/job-board-tab").then((m) => m.JobBoardTab), { loading: tabLoading })
+const BadgesTab = dynamic(() => import("@/components/badges-tab").then((m) => m.BadgesTab), { loading: tabLoading })
+const PressTab = dynamic(() => import("@/components/press-tab").then((m) => m.PressTab), { loading: tabLoading })
+const StockTab = dynamic(() => import("@/components/stock-tab").then((m) => m.StockTab), { loading: tabLoading })
+const GroupCalendar = dynamic(() => import("@/components/group-calendar").then((m) => m.GroupCalendar), { loading: tabLoading })
+const DocumentsTab = dynamic(() => import("@/components/documents-tab").then((m) => m.DocumentsTab), { loading: tabLoading })
+const GroupAdminManager = dynamic(() => import("@/components/group-admin-manager").then((m) => m.GroupAdminManager), { loading: tabLoading })
+const GroupRelationshipManager = dynamic(() => import("@/components/group-relationship-manager").then((m) => m.GroupRelationshipManager), { loading: tabLoading })
+const EventFeed = dynamic(() => import("@/components/event-feed").then((m) => m.EventFeed), { loading: tabLoading })
 
 interface ActivityEntry {
   id: string
