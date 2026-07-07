@@ -37,6 +37,8 @@ import {
   claimJobAction,
   recordJobContributionAction,
 } from "@/app/actions/interactions/project-team";
+import { addJobToProjectAction, addTaskToJobAction } from "@/app/actions/job-management";
+import { markJobDoneAction } from "@/app/actions/job-completion";
 import { getResourcesByOwnerAndType } from "@/lib/queries/resources";
 
 // ---------------------------------------------------------------------------
@@ -463,6 +465,13 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         date: { type: "string", description: "ISO scheduled date." },
         status: { type: "string", description: "Job status, e.g. 'open', 'in_progress', 'completed'." },
         maxAssignees: { type: "number", description: "Maximum number of assignees (claim slots)." },
+        payKind: {
+          type: "string",
+          enum: ["fixed", "hourly", "none"],
+          description: "Cash pay model: 'fixed' (payAmountCents), 'hourly' (hourlyRateCents), or 'none' to clear.",
+        },
+        payAmountCents: { type: "number", description: "Fixed cash value in cents (payKind 'fixed')." },
+        hourlyRateCents: { type: "number", description: "Hourly rate in cents (payKind 'hourly')." },
       },
     },
     run: (args) => {
@@ -478,8 +487,27 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       if (status) metadataPatch.status = status;
       const maxAssignees = num(args.maxAssignees);
       if (maxAssignees !== undefined) metadataPatch.maxAssignees = maxAssignees;
+      if (args.payKind === "none") {
+        metadataPatch.payKind = null;
+        metadataPatch.payAmountCents = null;
+        metadataPatch.hourlyRateCents = null;
+      } else if (args.payKind === "fixed" || args.payKind === "hourly") {
+        metadataPatch.payKind = args.payKind;
+        const payAmountCents = num(args.payAmountCents);
+        const hourlyRateCents = num(args.hourlyRateCents);
+        metadataPatch.payAmountCents =
+          args.payKind === "fixed" && payAmountCents !== undefined && payAmountCents > 0
+            ? Math.round(payAmountCents)
+            : null;
+        metadataPatch.hourlyRateCents =
+          args.payKind === "hourly" && hourlyRateCents !== undefined && hourlyRateCents > 0
+            ? Math.round(hourlyRateCents)
+            : null;
+      }
       if (Object.keys(metadataPatch).length === 0) {
-        throw new Error("Provide at least one field to update (startDate, deadline, date, status, or maxAssignees).");
+        throw new Error(
+          "Provide at least one field to update (startDate, deadline, date, status, maxAssignees, or payKind/payAmountCents/hourlyRateCents).",
+        );
       }
       return updateResource({ resourceId, metadataPatch });
     },
@@ -824,6 +852,100 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         jobId: requireStr(args, "jobId"),
         contributorId: requireStr(args, "contributorId"),
       }),
+  },
+  {
+    name: "rivr.jobs.create",
+    description:
+      "Add a job to an EXISTING project (owner or group write/admin authority). The job inherits the project's " +
+      "visibility and scope. Optionally set cash compensation: payKind 'fixed' with payAmountCents, or 'hourly' " +
+      "with hourlyRateCents (both alongside task points, which live on tasks).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["projectId", "title"],
+      properties: {
+        projectId: { type: "string", description: "The project resource id to add the job under." },
+        title: { type: "string" },
+        description: { type: "string" },
+        category: { type: "string" },
+        location: { type: "string" },
+        priority: { type: "string", enum: ["low", "medium", "high"] },
+        maxAssignees: { type: "number" },
+        requiredBadges: { type: "array", items: { type: "string" } },
+        startDate: { type: "string", description: "ISO start date." },
+        deadline: { type: "string", description: "ISO deadline date." },
+        payKind: { type: "string", enum: ["fixed", "hourly"], description: "Cash pay model; omit for points-only." },
+        payAmountCents: { type: "number", description: "Fixed cash value in cents (payKind 'fixed')." },
+        hourlyRateCents: { type: "number", description: "Hourly rate in cents (payKind 'hourly')." },
+        claimApprovalRequired: { type: "boolean" },
+        claimGateMembership: { type: "boolean" },
+        claimGateAdmin: { type: "boolean" },
+      },
+    },
+    run: (args) =>
+      addJobToProjectAction(requireStr(args, "projectId"), {
+        title: requireStr(args, "title"),
+        description: str(args.description),
+        category: str(args.category) ?? null,
+        location: str(args.location) ?? null,
+        priority:
+          args.priority === "low" || args.priority === "medium" || args.priority === "high"
+            ? args.priority
+            : null,
+        maxAssignees: num(args.maxAssignees) ?? null,
+        requiredBadges: strArray(args.requiredBadges),
+        startDate: optionalIsoDate(args, "startDate") ?? null,
+        deadline: optionalIsoDate(args, "deadline") ?? null,
+        payKind: args.payKind === "fixed" || args.payKind === "hourly" ? args.payKind : null,
+        payAmountCents: num(args.payAmountCents) ?? null,
+        hourlyRateCents: num(args.hourlyRateCents) ?? null,
+        claimApprovalRequired: args.claimApprovalRequired === true,
+        claimGateMembership: args.claimGateMembership === true,
+        claimGateAdmin: args.claimGateAdmin === true,
+      }),
+  },
+  {
+    name: "rivr.tasks.create",
+    description:
+      "Add a task to an EXISTING job (owner or group write/admin authority). Tasks carry the points that assignees " +
+      "earn on completion; use this to populate jobs that shipped without tasks.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["jobId", "name"],
+      properties: {
+        jobId: { type: "string", description: "The job resource id to add the task under." },
+        name: { type: "string" },
+        description: { type: "string" },
+        points: { type: "number", description: "Points earned when this task is completed." },
+        estimatedTime: { type: "string", description: "Human estimate, e.g. '2h'." },
+        required: { type: "boolean", description: "Whether the task is required (default true)." },
+        assignedTo: { type: "string", description: "Optional agent id to pre-assign." },
+      },
+    },
+    run: (args) =>
+      addTaskToJobAction(requireStr(args, "jobId"), {
+        name: requireStr(args, "name"),
+        description: str(args.description),
+        points: num(args.points) ?? null,
+        estimatedTime: str(args.estimatedTime) ?? null,
+        required: args.required !== false,
+        assignedTo: str(args.assignedTo) ?? null,
+      }),
+  },
+  {
+    name: "rivr.jobs.mark_done",
+    description:
+      "Mark a job DONE and settle its compensation (owner or group admin authority). Flips the job to completed, " +
+      "records a contribution for every assignee, and pays cash compensation (fixed split or hourly × tracked time) " +
+      "from the group treasury wallet. Idempotent: re-run to retry payouts parked on an underfunded treasury.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["jobId"],
+      properties: { jobId: { type: "string" } },
+    },
+    run: (args) => markJobDoneAction(requireStr(args, "jobId")),
   },
 ];
 

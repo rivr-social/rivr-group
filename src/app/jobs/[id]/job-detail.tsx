@@ -10,6 +10,7 @@ import { Progress } from "@/components/ui/progress"
 import { ArrowLeft, MapPin, Clock, Users, Star, Calendar } from "lucide-react"
 import type { JobShift, ProjectRecord } from "@/types/domain"
 import { JobAboutTab } from "@/components/job-about-tab"
+import { JobAdminPanel } from "@/components/job-admin-panel"
 import { JobTasksTab } from "@/components/job-tasks-tab"
 import { JobTimerTab } from "@/components/job-timer-tab"
 import { JobClaimPanel } from "@/components/job-claim-panel"
@@ -31,9 +32,11 @@ interface JobDetailClientProps {
   stockNeeds: StockNeed[]
   /** Whether the viewer may edit stock needs (job owner or group content-write). */
   stockCanManage: boolean
+  /** Server-computed: viewer may manage the job (owner or group write access). */
+  canManage: boolean
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -196,6 +199,11 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
       {/* Claim / approval panel */}
       {claimPanel && <JobClaimPanel data={claimPanel} />}
+
+      {/* Admin controls — always available to owners/group admins, on every tab */}
+      <div className="mb-6">
+        <JobAdminPanel job={job} canManage={canManage} />
+      </div>
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>

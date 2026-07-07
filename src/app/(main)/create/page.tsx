@@ -597,6 +597,10 @@ export default function CreatePage() {
     claimGateMembership: false,
     claimGateAdmin: false,
     isGlobal: false,
+    // Cash compensation (alongside task points): "none" | "fixed" | "hourly".
+    payKind: "none" as "none" | "fixed" | "hourly",
+    payAmountDollars: "",
+    hourlyRateDollars: "",
   })
   const [currentTask, setCurrentTask] = useState({
     name: "",
@@ -1009,9 +1013,22 @@ export default function CreatePage() {
       return
     }
 
+    // Convert the dollar inputs to the integer-cent pay fields the server
+    // expects; inconsistent values are dropped rather than blocking the add.
+    const toCents = (value: string): number | null => {
+      const parsed = Number(value.trim().replace(/[^0-9.]/g, ""))
+      return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) : null
+    }
+    const payKind = currentJob.payKind === "none" ? null : currentJob.payKind
+    const payAmountCents = payKind === "fixed" ? toCents(currentJob.payAmountDollars) : null
+    const hourlyRateCents = payKind === "hourly" ? toCents(currentJob.hourlyRateDollars) : null
+
     const newJob = {
       id: `job-${Date.now()}`,
       ...currentJob,
+      payKind: payAmountCents || hourlyRateCents ? payKind : null,
+      payAmountCents,
+      hourlyRateCents,
       duration: calculateJobDuration(),
       totalPoints: calculateJobTotalPoints(),
       status: "open",
@@ -1020,7 +1037,7 @@ export default function CreatePage() {
     }
 
     setProjectJobs(prev => [...prev, newJob])
-    
+
     // Reset job form
     setCurrentJob({
       title: "",
@@ -1038,6 +1055,9 @@ export default function CreatePage() {
       claimGateMembership: false,
       claimGateAdmin: false,
       isGlobal: false,
+      payKind: "none",
+      payAmountDollars: "",
+      hourlyRateDollars: "",
     })
     setShowJobCreation(false)
 
@@ -2319,6 +2339,52 @@ export default function CreatePage() {
                             onChange={(e) => setCurrentJob({ ...currentJob, maxAssignees: Number.parseInt(e.target.value) || 1 })}
                           />
                         </div>
+                      </div>
+
+                      {/* Cash compensation (alongside task points) */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="job-pay-kind">Cash Compensation</Label>
+                          <Select
+                            value={currentJob.payKind}
+                            onValueChange={(value) =>
+                              setCurrentJob({ ...currentJob, payKind: value as "none" | "fixed" | "hourly" })
+                            }
+                          >
+                            <SelectTrigger id="job-pay-kind">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Points only (no cash)</SelectItem>
+                              <SelectItem value="fixed">Fixed amount for the job</SelectItem>
+                              <SelectItem value="hourly">Hourly rate × tracked time</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {currentJob.payKind === "fixed" && (
+                          <div className="space-y-2">
+                            <Label htmlFor="job-pay-amount">Cash Value (USD)</Label>
+                            <Input
+                              id="job-pay-amount"
+                              inputMode="decimal"
+                              placeholder="e.g. 250"
+                              value={currentJob.payAmountDollars}
+                              onChange={(e) => setCurrentJob({ ...currentJob, payAmountDollars: e.target.value })}
+                            />
+                          </div>
+                        )}
+                        {currentJob.payKind === "hourly" && (
+                          <div className="space-y-2">
+                            <Label htmlFor="job-hourly-rate">Hourly Rate (USD)</Label>
+                            <Input
+                              id="job-hourly-rate"
+                              inputMode="decimal"
+                              placeholder="e.g. 25"
+                              value={currentJob.hourlyRateDollars}
+                              onChange={(e) => setCurrentJob({ ...currentJob, hourlyRateDollars: e.target.value })}
+                            />
+                          </div>
+                        )}
                       </div>
 
                       {/* Tasks Section */}

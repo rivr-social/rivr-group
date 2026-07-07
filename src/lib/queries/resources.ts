@@ -579,6 +579,11 @@ function resourceToJobShift(resource: Resource): JobShift {
     location: (m.location as string) ?? "",
     duration: (m.duration as string) ?? "",
     totalPoints: (m.totalPoints as number) ?? 0,
+    payKind: m.payKind === "fixed" || m.payKind === "hourly" ? m.payKind : null,
+    payAmountCents:
+      typeof m.payAmountCents === "number" && m.payAmountCents > 0 ? m.payAmountCents : null,
+    hourlyRateCents:
+      typeof m.hourlyRateCents === "number" && m.hourlyRateCents > 0 ? m.hourlyRateCents : null,
     priority: (m.priority as JobShift["priority"]) ?? "medium",
     status: (m.status as JobShift["status"]) ?? "open",
     requiredBadges: (m.requiredBadges as string[]) ?? [],

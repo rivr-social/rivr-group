@@ -38,6 +38,16 @@ export interface JobShift {
   location: string
   duration: string
   totalPoints: number
+  /**
+   * How the job pays cash (alongside task points): a fixed amount for the
+   * whole job, an hourly rate against tracked job-timer time, or null for
+   * points-only jobs.
+   */
+  payKind: "fixed" | "hourly" | null
+  /** Fixed cash value for the whole job, in cents. Meaningful when payKind is "fixed". */
+  payAmountCents: number | null
+  /** Hourly rate in cents, paid against tracked time. Meaningful when payKind is "hourly". */
+  hourlyRateCents: number | null
   priority: "low" | "medium" | "high"
   status: "open" | "in-progress" | "completed" | "cancelled"
   requiredBadges: string[]

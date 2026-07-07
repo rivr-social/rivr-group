@@ -1149,6 +1149,17 @@ export async function createProjectResource(input: {
               maxAssignees: job.maxAssignees ?? null,
               requiredBadges: Array.isArray(job.requiredBadges) ? job.requiredBadges : [],
               skills: Array.isArray(job.skills) ? job.skills : [],
+              // Cash compensation (alongside task points): a fixed amount for
+              // the whole job or an hourly rate against tracked timer time.
+              payKind: job.payKind === "fixed" || job.payKind === "hourly" ? job.payKind : null,
+              payAmountCents:
+                job.payKind === "fixed" && Number.isInteger(job.payAmountCents) && (job.payAmountCents as number) > 0
+                  ? job.payAmountCents
+                  : null,
+              hourlyRateCents:
+                job.payKind === "hourly" && Number.isInteger(job.hourlyRateCents) && (job.hourlyRateCents as number) > 0
+                  ? job.hourlyRateCents
+                  : null,
               // Creator-selected claim gating (job-claim approval flow).
               claimApprovalRequired: job.claimApprovalRequired === true,
               claimGateMembership: job.claimGateMembership === true,

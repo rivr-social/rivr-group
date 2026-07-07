@@ -9,6 +9,14 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { updateResource, deleteResource } from "@/app/actions/create-resources"
+import { addJobToProjectAction } from "@/app/actions/job-management"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -48,6 +56,15 @@ interface ProjectActionsProps {
   /** Current project timeframe (datetime-local strings), for the range editor. */
   timeframeStart?: string | null
   timeframeEnd?: string | null
+  /** Current project budget in dollars, for the edit dialog. */
+  budget?: number | null
+  /**
+   * Server-computed authority (owner OR group write access). When provided it
+   * replaces the legacy client-context owner check — the client user-context
+   * cannot see federated remote-viewer sessions, so admin surfaces must not
+   * gate on it.
+   */
+  canManage?: boolean
 }
 
 /**
@@ -56,7 +73,7 @@ interface ProjectActionsProps {
  * @param props - Project identifiers and existing editable values.
  * @returns Edit/delete controls when current user owns the project; otherwise null.
  */
-export function ProjectActions({ projectId, projectName, projectDescription, ownerId, timeframeStart, timeframeEnd }: ProjectActionsProps) {
+export function ProjectActions({ projectId, projectName, projectDescription, ownerId, timeframeStart, timeframeEnd, budget, canManage }: ProjectActionsProps) {
   const router = useRouter()
   const { toast } = useToast()
   const { currentUser } = useUser()
@@ -68,6 +85,18 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
   const [draftDescription, setDraftDescription] = useState(projectDescription ?? "")
   const [draftStart, setDraftStart] = useState(timeframeStart ?? "")
   const [draftEnd, setDraftEnd] = useState(timeframeEnd ?? "")
+  const [draftBudget, setDraftBudget] = useState(budget != null && budget > 0 ? String(budget) : "")
+
+  // Add-job dialog state
+  const [isAddJobOpen, setIsAddJobOpen] = useState(false)
+  const [isAddingJob, setIsAddingJob] = useState(false)
+  const [jobTitle, setJobTitle] = useState("")
+  const [jobDescription, setJobDescription] = useState("")
+  const [jobPayKind, setJobPayKind] = useState<"none" | "fixed" | "hourly">("none")
+  const [jobPayAmount, setJobPayAmount] = useState("")
+  const [jobHourlyRate, setJobHourlyRate] = useState("")
+  const [jobMaxAssignees, setJobMaxAssignees] = useState("1")
+  const [jobDeadline, setJobDeadline] = useState("")
 
   /**
    * Syncs draft fields from latest server values when edit dialog opens.
@@ -78,7 +107,8 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
     setDraftDescription(projectDescription ?? "")
     setDraftStart(timeframeStart ?? "")
     setDraftEnd(timeframeEnd ?? "")
-  }, [isEditOpen, projectName, projectDescription, timeframeStart, timeframeEnd])
+    setDraftBudget(budget != null && budget > 0 ? String(budget) : "")
+  }, [isEditOpen, projectName, projectDescription, timeframeStart, timeframeEnd, budget])
 
   /**
    * Updates project name/description through shared resource action.
@@ -106,6 +136,7 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
         metadataPatch: {
           timeframe: draftStart || draftEnd ? { start: draftStart || null, end: draftEnd || null } : null,
           deadline: draftEnd || null,
+          budget: draftBudget.trim() && Number(draftBudget) > 0 ? Number(draftBudget) : null,
         },
       })
 
@@ -165,12 +196,165 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
   }
 
   /**
-   * Owner gate: only project owners can mutate project content.
+   * Creates a job under this project through the structural-add action.
    */
-  if (!ownerId || !currentUser?.id || currentUser.id !== ownerId) return null
+  const handleAddJob = async () => {
+    const trimmedTitle = jobTitle.trim()
+    if (!trimmedTitle) {
+      toast({ title: "Missing job title", description: "A job title is required.", variant: "destructive" })
+      return
+    }
+    const toCents = (value: string): number | null => {
+      const parsed = Number(value.trim().replace(/[^0-9.]/g, ""))
+      return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) : null
+    }
+    const payAmountCents = toCents(jobPayAmount)
+    const hourlyRateCents = toCents(jobHourlyRate)
+    if (jobPayKind === "fixed" && !payAmountCents) {
+      toast({ title: "Missing amount", description: "Set a cash value for fixed-pay jobs.", variant: "destructive" })
+      return
+    }
+    if (jobPayKind === "hourly" && !hourlyRateCents) {
+      toast({ title: "Missing rate", description: "Set an hourly rate for hourly jobs.", variant: "destructive" })
+      return
+    }
+    const maxAssignees = Number.parseInt(jobMaxAssignees, 10)
+
+    setIsAddingJob(true)
+    try {
+      const result = await addJobToProjectAction(projectId, {
+        title: trimmedTitle,
+        description: jobDescription.trim() || undefined,
+        payKind: jobPayKind === "none" ? null : jobPayKind,
+        payAmountCents: jobPayKind === "fixed" ? payAmountCents : null,
+        hourlyRateCents: jobPayKind === "hourly" ? hourlyRateCents : null,
+        maxAssignees: Number.isInteger(maxAssignees) && maxAssignees > 0 ? maxAssignees : 1,
+        deadline: jobDeadline || null,
+      })
+      if (!result.success) {
+        toast({ title: "Failed to add job", description: result.message, variant: "destructive" })
+        return
+      }
+      setJobTitle("")
+      setJobDescription("")
+      setJobPayKind("none")
+      setJobPayAmount("")
+      setJobHourlyRate("")
+      setJobMaxAssignees("1")
+      setJobDeadline("")
+      setIsAddJobOpen(false)
+      toast({ title: "Job added" })
+      router.refresh()
+    } catch {
+      toast({ title: "Failed to add job", description: "An unexpected error occurred.", variant: "destructive" })
+    } finally {
+      setIsAddingJob(false)
+    }
+  }
+
+  /**
+   * Authority gate: prefer the server-computed `canManage` (owner OR group
+   * write access, remote-viewer-aware); fall back to the legacy client-side
+   * owner check for callsites that don't pass it.
+   */
+  const allowed = canManage ?? Boolean(ownerId && currentUser?.id && currentUser.id === ownerId)
+  if (!allowed) return null
 
   return (
     <div className="flex items-center gap-2">
+      <Dialog open={isAddJobOpen} onOpenChange={setIsAddJobOpen}>
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            Add job
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add a job</DialogTitle>
+            <DialogDescription>
+              Create a work item under this project. It inherits the project&apos;s visibility.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor={`add-job-title-${projectId}`}>Title</Label>
+              <Input
+                id={`add-job-title-${projectId}`}
+                value={jobTitle}
+                onChange={(event) => setJobTitle(event.target.value)}
+                placeholder="Job title"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`add-job-description-${projectId}`}>Description</Label>
+              <Textarea
+                id={`add-job-description-${projectId}`}
+                value={jobDescription}
+                onChange={(event) => setJobDescription(event.target.value)}
+                placeholder="What is this job about?"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Cash compensation</Label>
+              <Select value={jobPayKind} onValueChange={(value) => setJobPayKind(value as typeof jobPayKind)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Points only (no cash)</SelectItem>
+                  <SelectItem value="fixed">Fixed amount for the job</SelectItem>
+                  <SelectItem value="hourly">Hourly rate × tracked time</SelectItem>
+                </SelectContent>
+              </Select>
+              {jobPayKind === "fixed" && (
+                <Input
+                  inputMode="decimal"
+                  placeholder="Cash value in USD, e.g. 250"
+                  value={jobPayAmount}
+                  onChange={(event) => setJobPayAmount(event.target.value)}
+                />
+              )}
+              {jobPayKind === "hourly" && (
+                <Input
+                  inputMode="decimal"
+                  placeholder="Hourly rate in USD, e.g. 25"
+                  value={jobHourlyRate}
+                  onChange={(event) => setJobHourlyRate(event.target.value)}
+                />
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor={`add-job-slots-${projectId}`}>Max assignees</Label>
+                <Input
+                  id={`add-job-slots-${projectId}`}
+                  inputMode="numeric"
+                  value={jobMaxAssignees}
+                  onChange={(event) => setJobMaxAssignees(event.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor={`add-job-deadline-${projectId}`}>Deadline</Label>
+                <Input
+                  id={`add-job-deadline-${projectId}`}
+                  type="date"
+                  value={jobDeadline}
+                  onChange={(event) => setJobDeadline(event.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAddJobOpen(false)} disabled={isAddingJob}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleAddJob()} disabled={isAddingJob}>
+              {isAddingJob ? "Adding..." : "Add job"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
         <DialogTrigger asChild>
           <Button variant="outline" size="sm">
@@ -200,6 +384,16 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
                 onChange={(event) => setDraftDescription(event.target.value)}
                 placeholder="Describe your project..."
                 className="min-h-[140px]"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`project-budget-${projectId}`}>Budget (USD)</Label>
+              <Input
+                id={`project-budget-${projectId}`}
+                inputMode="decimal"
+                value={draftBudget}
+                onChange={(event) => setDraftBudget(event.target.value)}
+                placeholder="e.g. 5000"
               />
             </div>
             <div className="space-y-2">

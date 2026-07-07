@@ -568,7 +568,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             </div>
           ) : null}
 
-          {/* Owner-only edit/delete actions */}
+          {/* Admin edit/add-job/delete actions (server-computed authority) */}
           <ProjectActions
             projectId={project.id}
             projectName={project.name}
@@ -576,6 +576,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             ownerId={ownerId}
             timeframeStart={typeof (projectMeta2.timeframe as { start?: string } | undefined)?.start === "string" ? (projectMeta2.timeframe as { start?: string }).start : null}
             timeframeEnd={typeof (projectMeta2.timeframe as { end?: string } | undefined)?.end === "string" ? (projectMeta2.timeframe as { end?: string }).end : null}
+            budget={typeof projectMeta2.budget === "number" ? projectMeta2.budget : null}
+            canManage={isAdmin}
           />
         </CardContent>
       </Card>

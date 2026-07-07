@@ -137,6 +137,16 @@ export function JobAboutTab({ job, currentUserId: _currentUserId }: JobAboutTabP
               <span className="font-medium">{job.totalPoints}</span>
             </div>
             <div className="flex justify-between">
+              <span className="text-sm text-gray-600">Compensation</span>
+              <span className="font-medium">
+                {job.payKind === "fixed" && job.payAmountCents
+                  ? `$${(job.payAmountCents / 100).toFixed(2)}`
+                  : job.payKind === "hourly" && job.hourlyRateCents
+                    ? `$${(job.hourlyRateCents / 100).toFixed(2)}/hr`
+                    : "Points only"}
+              </span>
+            </div>
+            <div className="flex justify-between">
               <span className="text-sm text-gray-600">Team Size</span>
               <span className="font-medium">
                 {job.assignees.length}/{job.maxAssignees}

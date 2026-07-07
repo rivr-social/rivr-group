@@ -50,6 +50,8 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
     ? job?.createdBy === currentUserId ||
       (!!job?.groupId && (await hasGroupWriteAccess(currentUserId, job.groupId)))
     : false
+  // Same authority set gates the admin panel (edit / add task / mark done).
+  const canManage = stockCanManage
 
   return (
     <JobDetailClient
@@ -63,6 +65,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       stockInventory={stockInventory}
       stockNeeds={stockNeeds}
       stockCanManage={stockCanManage}
+      canManage={canManage}
     />
   )
 }

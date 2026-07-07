@@ -80,7 +80,17 @@ export async function resolveAuthenticatedUserId(): Promise<string | null> {
     resolvedUserId = agent?.id ?? null;
   }
 
-  return resolvedUserId;
+  if (resolvedUserId) {
+    return resolvedUserId;
+  }
+
+  // Federated remote-viewer fallback (sovereign-homed admins viewing via SSO):
+  // plain auth() sees no NextAuth JWT for them, so resource creation/update was
+  // invisible to remote-homed group admins. Normalized to a local agent id via
+  // the interactions helper (GRP-DSN-001). Lazy import avoids a circular dep
+  // through the actions barrels.
+  const { getCurrentUserId } = await import("@/app/actions/interactions/helpers");
+  return getCurrentUserId();
 }
 
 /**
