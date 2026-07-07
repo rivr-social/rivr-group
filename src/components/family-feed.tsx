@@ -144,12 +144,14 @@ export function FamilyFeed({
                     <AvatarFallback>{family.name.substring(0, 2)}</AvatarFallback>
                   </Avatar>
                   <div>
-                    <Link href={`/families/${family.id}`} className="text-xl font-bold hover:underline">
+                    {/* Families are group-type agents; this instance renders them at /groups/[id]. */}
+                    <Link href={`/groups/${family.id}`} className="text-xl font-bold hover:underline">
                       {family.name}
                     </Link>
                     <p className="text-sm text-muted-foreground">
                       Part of{" "}
-                      <Link href={`/rings/${family.parentRingId}`} className="text-purple-600 hover:underline">
+                      {/* Rings are group-type agents; rendered locally at /groups/[id]. */}
+                      <Link href={`/groups/${family.parentRingId}`} className="text-purple-600 hover:underline">
                         {ringName}
                       </Link>
                     </p>

@@ -112,7 +112,8 @@ export function RingFeed({
                     <AvatarFallback>{ring.name.substring(0, 2)}</AvatarFallback>
                   </Avatar>
                   <div>
-                    <Link href={`/rings/${ring.id}`} className="text-xl font-bold hover:underline">
+                    {/* Rings are group-type agents; this instance renders them at /groups/[id]. */}
+                    <Link href={`/groups/${ring.id}`} className="text-xl font-bold hover:underline">
                       {ring.name}
                     </Link>
                   </div>
@@ -146,9 +147,10 @@ export function RingFeed({
                   <h4 className="text-sm font-medium mb-2">Families in this Ring:</h4>
                   <div className="flex flex-wrap gap-2">
                     {ringFamilies.slice(0, 3).map((family) => (
+                      // Families are group-type agents; rendered locally at /groups/[id].
                       <Link
                         key={family.id}
-                        href={`/families/${family.id}`}
+                        href={`/groups/${family.id}`}
                         className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-800 hover:bg-purple-200"
                       >
                         {family.name} ({family.members?.length || 0})

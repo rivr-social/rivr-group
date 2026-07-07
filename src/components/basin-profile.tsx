@@ -14,6 +14,7 @@ import {
 import Image from "next/image"
 import { Basin, Chapter } from "@/lib/types"
 import Link from "next/link"
+import { getGlobalUrl } from "@/lib/federation/global-url"
 
 /**
  * Basin detail profile panel used on watershed/basin detail pages.
@@ -233,7 +234,8 @@ export function BasinProfile({ basin, chapters, bioregionalCouncil }: BasinProfi
             <CardContent>
               <div className="grid gap-4">
                 {basinChapters.map((chapter) => (
-                  <Link key={chapter.id} href={`/locales/${chapter.id}`}>
+                  // Locales are global-discovery surfaces this instance doesn't serve; link out to the global hub.
+                  <Link key={chapter.id} href={getGlobalUrl(`/locales/${chapter.id}`)}>
                     <div className="flex items-center gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors">
                       {chapter.image && (
                         <Image

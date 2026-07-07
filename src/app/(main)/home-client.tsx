@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { useRouter } from "next/navigation"
 import { Search, ChevronRight } from "lucide-react"
 import Link from "next/link"
+import { getGlobalUrl } from "@/lib/federation/global-url"
 import { MarketplaceFeed } from "@/components/marketplace-feed"
 import { GigsFeed } from "@/components/gigs-feed"
 import { useToast } from "@/components/ui/use-toast"
@@ -420,7 +421,8 @@ export default function HomeClient({
     <div className="container max-w-4xl mx-auto px-4 py-6">
       <div className="mb-4">
         {selectedLocale !== "all" ? (
-          <Link href={`/locales/${selectedLocale}`} className="inline-flex items-center gap-2 group">
+          // Locales are global-discovery surfaces this instance doesn't serve; link out to the global hub.
+          <Link href={getGlobalUrl(`/locales/${selectedLocale}`)} className="inline-flex items-center gap-2 group">
             {localeData.locales.find((l) => l.id === selectedLocale)?.image && (
               <Image
                 src={localeData.locales.find((l) => l.id === selectedLocale)!.image}
