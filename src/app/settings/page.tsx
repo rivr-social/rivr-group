@@ -20,7 +20,8 @@ import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { db } from "@/db";
 import { agents } from "@/db/schema";
-import { SettingsForm, type SettingsInitialData } from "./settings-form";
+import type { SettingsInitialData } from "./settings-form";
+import { SettingsFormLazy } from "./settings-form-lazy";
 import { buildFederationIdentityStatus, type FederationIdentityStatus } from "@/lib/federation-identities";
 import { buildAppReleaseStatus, type AppReleaseStatus } from "@/lib/app-release";
 
@@ -112,26 +113,22 @@ export default async function SettingsPage() {
       : { pushNotifications: false, emailNotifications: true, eventReminders: true, newMessages: true },
   };
 
-  let initialFederationStatus: FederationIdentityStatus | null = null;
-  try {
-    initialFederationStatus = await buildFederationIdentityStatus(currentUser.id);
-  } catch {
-    initialFederationStatus = null;
-  }
-
-  let initialAppReleaseStatus: AppReleaseStatus | null = null;
-  try {
-    initialAppReleaseStatus = await buildAppReleaseStatus({
+  // Independent status lookups — resolve in parallel instead of two serial
+  // hops; each degrades to null on failure exactly as before.
+  const [initialFederationStatus, initialAppReleaseStatus]: [
+    FederationIdentityStatus | null,
+    AppReleaseStatus | null,
+  ] = await Promise.all([
+    buildFederationIdentityStatus(currentUser.id).catch(() => null),
+    buildAppReleaseStatus({
       appName: "rivr-group",
       defaultVersion: "0.1.0",
       defaultUpstreamRepo: "rivr-social/rivr-group",
-    });
-  } catch {
-    initialAppReleaseStatus = null;
-  }
+    }).catch(() => null),
+  ]);
 
   return (
-    <SettingsForm
+    <SettingsFormLazy
       initialData={initialData}
       initialFederationStatus={initialFederationStatus}
       initialAppReleaseStatus={initialAppReleaseStatus}
