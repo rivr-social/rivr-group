@@ -371,7 +371,7 @@ export default function HomeClient({
    * @returns Found user, first available user, or fallback placeholder user.
    */
   const getUser = (userId: string) => {
-    return activePeople.find((user) => user.id === userId) || activePeople[0] || fallbackUser
+    return activePeople.find((user) => user.id === userId) || fallbackUser
   }
 
   /**
@@ -381,7 +381,7 @@ export default function HomeClient({
    * @returns Found group, first available group, or fallback placeholder group.
    */
   const getGroup = (groupId: string) => {
-    return activeGroups.find((group) => group.id === groupId) || activeGroups[0] || ({
+    return activeGroups.find((group) => group.id === groupId) || ({
       id: "",
       name: "Unknown Group",
       description: "",
