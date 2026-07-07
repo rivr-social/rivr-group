@@ -85,3 +85,11 @@ export type {
   FundSubgroupOption,
   GroupTreasuryFundsOverview,
 } from './treasury-funds';
+
+export {
+  backfillConnectAccountsAction,
+} from './connect-backfill';
+export type {
+  ConnectBackfillFailure,
+  ConnectBackfillResult,
+} from './connect-backfill';

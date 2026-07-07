@@ -3,10 +3,14 @@
  *
  * Purpose:
  * After a membership subscription checkout completes, Stripe redirects here.
- * This route checks whether the user already has a Stripe Connect Express
- * account set up. If not, it creates one and redirects to Stripe's hosted
- * onboarding flow so the user can receive payments. If Connect is already
- * configured, it redirects to the profile page.
+ * This route checks whether the user already has a Stripe Connect account
+ * set up. If not, it provisions one via the shared core
+ * (`@/lib/connect-account` — Custom controller account when enabled, else
+ * Express) and redirects to Stripe's hosted onboarding flow so the member can
+ * receive payments. If Connect is already configured, it redirects to the
+ * profile page. The Stripe webhook (`handleSubscriptionUpsert`) provisions
+ * the same account server-side on activation; both paths share the
+ * idempotent core, so whichever runs first wins and the other reuses it.
  *
  * Auth: Requires an authenticated session to look up wallet/Connect state.
  */
@@ -14,9 +18,10 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { auth } from '@/auth';
 import { db } from '@/db';
-import { agents, wallets } from '@/db/schema';
+import { agents } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { createConnectAccount, createAccountLink } from '@/lib/stripe-connect';
+import { createAccountLink } from '@/lib/stripe-connect';
+import { ensureConnectAccountForWallet } from '@/lib/connect-account';
 import { getOrCreateWallet } from '@/lib/wallet';
 
 /**
@@ -56,22 +61,22 @@ export async function GET(request: NextRequest) {
       .where(eq(agents.id, userId))
       .limit(1);
 
-    const account = await createConnectAccount(userId, agent?.email ?? '');
+    // Shared provisioning core (Custom controller account when enabled, else
+    // Express) — persists the id on the wallet metadata and is idempotent, so
+    // a webhook-provisioned account is simply reused here.
+    const { connectAccountId: newAccountId } = await ensureConnectAccountForWallet({
+      walletId: wallet.id,
+      ownerId: userId,
+      ownerEmail: agent?.email ?? null,
+      walletType: wallet.type,
+      accountMetadata: { returnPath: resolvedReturnPath },
+    });
 
-    // Persist the Connect account ID in wallet metadata.
-    await db
-      .update(wallets)
-      .set({
-        metadata: { ...walletMeta, stripeConnectAccountId: account.id },
-        updatedAt: new Date(),
-      })
-      .where(eq(wallets.id, wallet.id));
-
-    // Redirect to Stripe's hosted Express onboarding.
+    // Redirect to Stripe's hosted onboarding.
     const onboardingUrl = await createAccountLink(
-      account.id,
-      `${baseUrl}/api/stripe/connect?account_id=${account.id}&return_path=${encodeURIComponent(resolvedReturnPath)}`,
-      `${baseUrl}/api/stripe/connect?account_id=${account.id}&return_path=${encodeURIComponent(resolvedReturnPath)}`,
+      newAccountId,
+      `${baseUrl}/api/stripe/connect?account_id=${newAccountId}&return_path=${encodeURIComponent(resolvedReturnPath)}`,
+      `${baseUrl}/api/stripe/connect?account_id=${newAccountId}&return_path=${encodeURIComponent(resolvedReturnPath)}`,
     );
 
     return NextResponse.redirect(onboardingUrl);

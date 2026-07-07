@@ -219,6 +219,27 @@ helpers live in `lib/stripe-treasury.ts` behind the NEW
 Treasury). Tests: `wallet/__tests__/treasury-banking.test.ts` (pnpm test:db,
 Node ≥22).
 
+## Connect accounts for subscribing members (2026-07-07)
+
+Connected accounts are provisioned when an agent becomes a SUBSCRIBING member
+(cooperative `subscriptions` rail, tiers basic/host/seller/organizer/steward),
+not for every agent. The shared idempotent core is
+`lib/connect-account.ts` (`ensureConnectAccountForAgent` /
+`ensureConnectAccountForWallet` — the account-creation logic extracted from
+`setupConnectAccountAction`; Custom controller account when
+`STRIPE_CUSTOM_ACCOUNTS_ENABLED=true`, else Express; id persists at
+settlement-wallet `metadata.stripeConnectAccountId`). Activation wiring: the
+Stripe webhook's `handleSubscriptionUpsert` calls it (non-fatal) when a
+membership subscription goes active/trialing, and
+`api/stripe/subscription-success` reuses the same core for the interactive
+onboarding redirect. Backfill for pre-wiring subscribers:
+`actions/wallet/connect-backfill.ts` → `backfillConnectAccountsAction`
+(admin-gated: platform `siteRole` or primary-group manage access; targets
+active/trialing local subscribers + the group agent; concurrency-capped,
+per-agent failure isolation, re-run safe) — also exposed as the
+`rivr.payments.backfill_connect_accounts` MCP/assistant tool. Tests:
+`wallet/__tests__/connect-backfill.test.ts` (pnpm test:db).
+
 ## Stake distribution (points-based, 2026-07-02)
 
 Org stake is proportional to TASK POINTS earned across the group and its

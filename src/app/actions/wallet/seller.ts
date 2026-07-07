@@ -6,22 +6,20 @@ import { wallets, walletTransactions } from '@/db/schema';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import {
   getConnectBalance,
-  createConnectAccount,
   createAccountLink,
   getAccountStatus,
   createPayout,
   createLoginLink,
 } from '@/lib/stripe-connect';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
+import { ensureConnectAccountForWallet } from '@/lib/connect-account';
 import { getCurrentUserId, resolveManagedWalletTarget } from './helpers';
 import { isPositiveInteger } from './types';
 import {
-  createCustomConnectAccount,
   createFinancialConnectionsSession,
   createTreasuryFinancialAccount,
   getExternalBankBalance,
   getTreasuryFinancialAccountBalance,
-  isCustomConnectEnabled,
   isFinancialConnectionsEnabled,
   isTreasuryEnabled,
   retrieveFinancialConnectionsAccount,
@@ -138,47 +136,20 @@ export async function setupConnectAccountAction(
     },
     async () => {
       const target = await resolveManagedWalletTarget(currentUserId, ownerId);
-      const [wallet] = await db
-        .select({ id: wallets.id, metadata: wallets.metadata })
-        .from(wallets)
-        .where(eq(wallets.id, target.walletId))
-        .limit(1);
 
-      if (!wallet) {
-        throw new Error('Treasury wallet not found.');
-      }
-
-      const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
-
-      let connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
-
-      if (!connectAccountId) {
-        const accountMetadata = {
-          walletId: wallet.id,
-          ownerId: target.ownerId,
-          walletType: target.walletType,
+      // Account-creation core shared with the backfill lane: Custom
+      // (controller-based) account when enabled — the only type that can host
+      // Treasury/Issuing + platform bank-balance reads — else Express.
+      // Idempotent: an existing wallet-metadata id short-circuits Stripe.
+      const { connectAccountId } = await ensureConnectAccountForWallet({
+        walletId: target.walletId,
+        ownerId: target.ownerId,
+        ownerEmail: target.email,
+        walletType: target.walletType,
+        accountMetadata: {
           returnPath: ownerId ? `/groups/${ownerId}?tab=treasury` : '/settings',
-        };
-        // Default account type: Custom (controller-based) when enabled — the only
-        // type that can host Treasury/Issuing + platform bank-balance reads.
-        // Hosted Account-Links onboarding works for both, so the flow below is shared.
-        const account = isCustomConnectEnabled()
-          ? await createCustomConnectAccount({
-              agentId: target.ownerId,
-              email: target.email ?? undefined,
-              metadata: accountMetadata,
-            })
-          : await createConnectAccount(target.ownerId, target.email ?? undefined, accountMetadata);
-        connectAccountId = account.id;
-
-        await db
-          .update(wallets)
-          .set({
-            metadata: { ...walletMeta, stripeConnectAccountId: connectAccountId },
-            updatedAt: new Date(),
-          })
-          .where(eq(wallets.id, wallet.id));
-      }
+        },
+      });
 
       const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
       const targetPath = returnPath || (ownerId ? `/groups/${ownerId}?tab=treasury` : '/settings');
