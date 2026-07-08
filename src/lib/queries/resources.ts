@@ -168,12 +168,16 @@ export async function getResourcesByOwnerAndType(
 export async function getTaskCountsByJob(jobIds: string[]): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (jobIds.length === 0) return counts;
+  const idList = sql.join(
+    jobIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
   const result = (await db.execute(sql`
     SELECT metadata->>'jobId' AS job_id, COUNT(*) AS c
     FROM resources
     WHERE type = 'task'
       AND deleted_at IS NULL
-      AND metadata->>'jobId' = ANY(${jobIds})
+      AND metadata->>'jobId' IN (${idList})
     GROUP BY metadata->>'jobId'
   `)) as Array<Record<string, unknown>>;
   for (const row of result) {
@@ -741,11 +745,15 @@ async function hydrateJobTasks(jobs: JobShift[]): Promise<JobShift[]> {
   const jobIds = jobs.map((job) => job.id);
   if (jobIds.length === 0) return jobs;
 
+  const jobIdList = sql.join(
+    jobIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
   const taskRows = await db.query.resources.findMany({
     where: and(
       eq(resources.type, "task"),
       isNull(resources.deletedAt),
-      sql`${resources.metadata}->>'jobId' = ANY(${jobIds})`,
+      sql`${resources.metadata}->>'jobId' IN (${jobIdList})`,
     ),
     orderBy: [asc(resources.createdAt)],
   });
