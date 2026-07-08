@@ -101,9 +101,24 @@ async function getActiveJobAssignees(jobId: string): Promise<string[]> {
     .sort();
 }
 
-/** Sum of an assignee's STOPPED job-timer segments on the job, in ms. */
+/**
+ * Sum of an assignee's tracked time on the job, in ms — completed `workperiod`
+ * records (the current timer) plus legacy `time_entry` ledger segments (the
+ * old timer), so no historical tracked time is dropped from hourly pay.
+ */
 async function getTrackedMsForAssignee(jobId: string, assigneeId: string): Promise<number> {
-  const rows = (await db.execute(sql`
+  const workPeriodRows = (await db.execute(sql`
+    SELECT COALESCE(SUM((metadata->>'durationMs')::bigint), 0) AS total_ms
+    FROM resources
+    WHERE type = 'resource'
+      AND deleted_at IS NULL
+      AND owner_id = ${assigneeId}::uuid
+      AND metadata->>'resourceKind' = 'workperiod'
+      AND metadata->>'jobId' = ${jobId}
+      AND metadata->>'durationMs' IS NOT NULL
+  `)) as Array<Record<string, unknown>>;
+
+  const legacyRows = (await db.execute(sql`
     SELECT COALESCE(SUM((metadata->>'durationMs')::bigint), 0) AS total_ms
     FROM ledger
     WHERE verb = 'work'
@@ -113,7 +128,8 @@ async function getTrackedMsForAssignee(jobId: string, assigneeId: string): Promi
       AND metadata->>'stoppedAt' IS NOT NULL
       AND metadata->>'durationMs' IS NOT NULL
   `)) as Array<Record<string, unknown>>;
-  return Number(rows[0]?.total_ms ?? 0);
+
+  return Number(workPeriodRows[0]?.total_ms ?? 0) + Number(legacyRows[0]?.total_ms ?? 0);
 }
 
 /** Whether an assignee already holds a cash-payout edge for this job. */
