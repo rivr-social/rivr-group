@@ -439,7 +439,12 @@ export async function getOrCreateWallet(
   }
 
   // Use ON CONFLICT DO NOTHING to handle concurrent inserts safely.
-  // The unique index on (ownerId, type) prevents duplicates.
+  // The unique index on (ownerId, type) is PARTIAL (`WHERE resource_id IS NULL`,
+  // migration 0042) so owner-scoped wallets never collide with resource-bound
+  // project/fund wallets. The ON CONFLICT arbiter MUST carry that same predicate
+  // via `where` — otherwise Postgres rejects with "no unique or exclusion
+  // constraint matching the ON CONFLICT specification" (Drizzle drops a bare
+  // target's inference against a partial index).
   const inserted = await db
     .insert(wallets)
     .values({
@@ -449,6 +454,7 @@ export async function getOrCreateWallet(
     })
     .onConflictDoNothing({
       target: [wallets.ownerId, wallets.type],
+      where: sql`${wallets.resourceId} IS NULL`,
     })
     .returning();
 
