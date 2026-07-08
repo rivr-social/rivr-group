@@ -161,6 +161,37 @@ export async function getResourcesByOwnerAndType(
 }
 
 /**
+ * Like {@link getResourcesByOwnerAndType} but aggregates the SUBGROUP SUBTREE:
+ * resources owned by `scopeId` OR by any descendant subgroup/circle agent
+ * (`agents.parent_id = scope` or `scope = ANY(agents.path_ids)`). This is what
+ * lets an org's projects/jobs board (and the assistant's projects list) surface
+ * work owned by its nested circles — direct owner-only queries miss them, since
+ * each circle owns its own project/job resources.
+ */
+export async function getResourcesByOwnerSubtreeAndType(
+  scopeId: string,
+  type: ResourceType,
+  limit = 200,
+): Promise<Resource[]> {
+  const result = await db.execute(sql`
+    SELECT r.*
+    FROM resources r
+    WHERE r.deleted_at IS NULL
+      AND r.type = ${type}
+      AND (
+        r.owner_id = ${scopeId}::uuid
+        OR r.owner_id IN (
+          SELECT a.id FROM agents a
+          WHERE a.parent_id = ${scopeId}::uuid OR ${scopeId}::uuid = ANY(a.path_ids)
+        )
+      )
+    ORDER BY r.created_at DESC
+    LIMIT ${limit}
+  `);
+  return (result as Record<string, unknown>[]).map(rowToResource);
+}
+
+/**
  * Returns resources associated with a group/ring/family identity.
  *
  * Association strategy:

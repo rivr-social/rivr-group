@@ -40,7 +40,7 @@ import {
 import { addJobToProjectAction, addTaskToJobAction } from "@/app/actions/job-management";
 import { markJobDoneAction } from "@/app/actions/job-completion";
 import { backfillConnectAccountsAction } from "@/app/actions/wallet/connect-backfill";
-import { getResourcesByOwnerAndType } from "@/lib/queries/resources";
+import { getResourcesByOwnerAndType, getResourcesByOwnerSubtreeAndType } from "@/lib/queries/resources";
 
 // ---------------------------------------------------------------------------
 // Coercion helpers
@@ -376,27 +376,40 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
   {
     name: "rivr.projects.list",
     description:
-      "List the group's projects, each with its jobs nested underneath (jobs are matched to a project by their metadata.projectId). " +
-      "For every project it returns id, name, status, and metadata.timeframe {start,end}; for every job it returns id, name, " +
-      "startDate/deadline/date, assignees, and maxAssignees. Use this to audit and repair project/job schedules. " +
-      "Defaults to the primary group; pass groupId to target a subgroup/circle the actor administers.",
+      "List the group's projects (INCLUDING those owned by its nested subgroups/circles by default), each with its jobs " +
+      "nested underneath (jobs are matched to a project by their metadata.projectId). For every project it returns id, name, " +
+      "status, and metadata.timeframe {start,end}; for every job it returns id, name, startDate/deadline/date, assignees, and " +
+      "maxAssignees. Use this to audit and repair project/job schedules across the whole org. Defaults to the primary group " +
+      "and its subtree; pass groupId to target a specific subgroup/circle, or scope:'group' to list only the target's own " +
+      "projects (exclude subgroups).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
         ...GROUP_ID_PROP,
-        limit: { type: "number", description: "Max projects to return. Defaults to 50." },
+        scope: {
+          type: "string",
+          enum: ["subtree", "group"],
+          description: "'subtree' (default) includes nested subgroups' projects; 'group' lists only the target group's own.",
+        },
+        limit: { type: "number", description: "Max projects to return. Defaults to 200." },
       },
     },
     run: async (args, ctx) => {
       const groupId = pickGroup(args, ctx);
-      const limit = num(args.limit) ?? 50;
-      const [projects, jobs] = await Promise.all([
-        getResourcesByOwnerAndType(groupId, "project", limit),
-        getResourcesByOwnerAndType(groupId, "job", PROJECT_LISTING_JOB_SCAN_CAP),
-      ]);
+      const includeSubtree = args.scope !== "group";
+      const limit = num(args.limit) ?? 200;
+      const [projects, jobs] = includeSubtree
+        ? await Promise.all([
+            getResourcesByOwnerSubtreeAndType(groupId, "project", limit),
+            getResourcesByOwnerSubtreeAndType(groupId, "job", PROJECT_LISTING_JOB_SCAN_CAP),
+          ])
+        : await Promise.all([
+            getResourcesByOwnerAndType(groupId, "project", limit),
+            getResourcesByOwnerAndType(groupId, "job", PROJECT_LISTING_JOB_SCAN_CAP),
+          ]);
       const listing = buildProjectListing(projects, jobs);
-      return { groupId, count: listing.length, projects: listing };
+      return { groupId, scope: includeSubtree ? "subtree" : "group", count: listing.length, projects: listing };
     },
   },
   {
