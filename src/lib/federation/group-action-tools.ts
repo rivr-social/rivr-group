@@ -40,7 +40,7 @@ import {
 import { addJobToProjectAction, addTaskToJobAction } from "@/app/actions/job-management";
 import { markJobDoneAction } from "@/app/actions/job-completion";
 import { backfillConnectAccountsAction } from "@/app/actions/wallet/connect-backfill";
-import { getResourcesByOwnerAndType, getResourcesByOwnerSubtreeAndType } from "@/lib/queries/resources";
+import { getResourcesByOwnerAndType, getResourcesByOwnerSubtreeAndType, getTaskCountsByJob } from "@/lib/queries/resources";
 
 // ---------------------------------------------------------------------------
 // Coercion helpers
@@ -121,6 +121,12 @@ export interface ProjectListingJob {
   date: string | null;
   assignees: string[];
   maxAssignees: number | null;
+  /** Number of child tasks on this job — lets a caller skip already-populated jobs. */
+  taskCount: number;
+  /** Cash pay model + amounts, so a caller can see which jobs still need a cost. */
+  payKind: "fixed" | "hourly" | null;
+  payAmountCents: number | null;
+  hourlyRateCents: number | null;
 }
 
 /** A project with its date range and nested jobs in the listing read model. */
@@ -155,12 +161,14 @@ function readNumber(value: unknown): number | null {
 export function buildProjectListing(
   projects: ListableResource[],
   jobs: ListableResource[],
+  taskCountByJob: Map<string, number> = new Map(),
 ): ProjectListingProject[] {
   const jobsByProject = new Map<string, ProjectListingJob[]>();
   for (const job of jobs) {
     const meta = metadataOf(job);
     const projectId = readString(meta.projectId);
     if (!projectId) continue;
+    const payKind = meta.payKind === "fixed" || meta.payKind === "hourly" ? meta.payKind : null;
     const entry: ProjectListingJob = {
       id: job.id,
       name: job.name,
@@ -169,6 +177,10 @@ export function buildProjectListing(
       date: readString(meta.date),
       assignees: strArray(meta.assignees),
       maxAssignees: readNumber(meta.maxAssignees),
+      taskCount: taskCountByJob.get(job.id) ?? 0,
+      payKind,
+      payAmountCents: payKind === "fixed" ? readNumber(meta.payAmountCents) : null,
+      hourlyRateCents: payKind === "hourly" ? readNumber(meta.hourlyRateCents) : null,
     };
     const bucket = jobsByProject.get(projectId);
     if (bucket) bucket.push(entry);
@@ -378,8 +390,10 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
     description:
       "List the group's projects (INCLUDING those owned by its nested subgroups/circles by default), each with its jobs " +
       "nested underneath (jobs are matched to a project by their metadata.projectId). For every project it returns id, name, " +
-      "status, and metadata.timeframe {start,end}; for every job it returns id, name, startDate/deadline/date, assignees, and " +
-      "maxAssignees. Use this to audit and repair project/job schedules across the whole org. Defaults to the primary group " +
+      "status, and metadata.timeframe {start,end}; for every job it returns id, name, startDate/deadline/date, assignees, " +
+      "maxAssignees, taskCount (skip jobs that already have tasks), and payKind/payAmountCents/hourlyRateCents (see which " +
+      "jobs still need a cost). Use this to audit and repair project/job schedules, tasks, and costs across the whole org. " +
+      "Defaults to the primary group " +
       "and its subtree; pass groupId to target a specific subgroup/circle, or scope:'group' to list only the target's own " +
       "projects (exclude subgroups).",
     inputSchema: {
@@ -408,7 +422,9 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
             getResourcesByOwnerAndType(groupId, "project", limit),
             getResourcesByOwnerAndType(groupId, "job", PROJECT_LISTING_JOB_SCAN_CAP),
           ]);
-      const listing = buildProjectListing(projects, jobs);
+      // Per-job task counts so callers can skip already-populated jobs.
+      const taskCounts = await getTaskCountsByJob(jobs.map((job) => job.id));
+      const listing = buildProjectListing(projects, jobs, taskCounts);
       return { groupId, scope: includeSubtree ? "subtree" : "group", count: listing.length, projects: listing };
     },
   },
@@ -474,6 +490,8 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       required: ["jobId"],
       properties: {
         jobId: { type: "string", description: "The job resource id to update." },
+        name: { type: "string", description: "New job title." },
+        description: { type: "string", description: "New job description (e.g. append a cost-estimate note here)." },
         startDate: { type: "string", description: "ISO start date." },
         deadline: { type: "string", description: "ISO deadline date." },
         date: { type: "string", description: "ISO scheduled date." },
@@ -490,6 +508,8 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
     },
     run: (args) => {
       const resourceId = requireStr(args, "jobId");
+      const name = str(args.name);
+      const description = str(args.description);
       const metadataPatch: Record<string, unknown> = {};
       const startDate = optionalIsoDate(args, "startDate");
       if (startDate !== undefined) metadataPatch.startDate = startDate;
@@ -518,12 +538,21 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
             ? Math.round(hourlyRateCents)
             : null;
       }
-      if (Object.keys(metadataPatch).length === 0) {
+      if (
+        Object.keys(metadataPatch).length === 0 &&
+        name === undefined &&
+        description === undefined
+      ) {
         throw new Error(
-          "Provide at least one field to update (startDate, deadline, date, status, maxAssignees, or payKind/payAmountCents/hourlyRateCents).",
+          "Provide at least one field to update (name, description, startDate, deadline, date, status, maxAssignees, or payKind/payAmountCents/hourlyRateCents).",
         );
       }
-      return updateResource({ resourceId, metadataPatch });
+      return updateResource({
+        resourceId,
+        name,
+        description,
+        metadataPatch: Object.keys(metadataPatch).length > 0 ? metadataPatch : undefined,
+      });
     },
   },
   {

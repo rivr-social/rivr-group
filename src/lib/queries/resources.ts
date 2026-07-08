@@ -161,6 +161,29 @@ export async function getResourcesByOwnerAndType(
 }
 
 /**
+ * Counts child `task` resources per job for a set of job ids (one grouped
+ * query). Lets callers see which jobs are already populated without a
+ * per-job round-trip. Jobs with no tasks are simply absent from the map.
+ */
+export async function getTaskCountsByJob(jobIds: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (jobIds.length === 0) return counts;
+  const result = (await db.execute(sql`
+    SELECT metadata->>'jobId' AS job_id, COUNT(*) AS c
+    FROM resources
+    WHERE type = 'task'
+      AND deleted_at IS NULL
+      AND metadata->>'jobId' = ANY(${jobIds})
+    GROUP BY metadata->>'jobId'
+  `)) as Array<Record<string, unknown>>;
+  for (const row of result) {
+    const jobId = row.job_id;
+    if (typeof jobId === "string") counts.set(jobId, Number(row.c ?? 0));
+  }
+  return counts;
+}
+
+/**
  * Like {@link getResourcesByOwnerAndType} but aggregates the SUBGROUP SUBTREE:
  * resources owned by `scopeId` OR by any descendant subgroup/circle agent
  * (`agents.parent_id = scope` or `scope = ANY(agents.path_ids)`). This is what
