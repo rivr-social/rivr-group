@@ -252,9 +252,26 @@ export function isIssuingEnabled(): boolean {
 export interface CreateIssuingCardholderInput {
   /** Connected account hosting the card program (the parent group's account). */
   connectedAccountId: string;
-  /** Display name — the subgroup/circle name. */
+  /** Display name — the subgroup/circle/fund name (used to derive the cardholder name). */
   name: string;
   email?: string;
+  /**
+   * The RESPONSIBLE PERSON for the treasury card. Stripe Issuing cardholders
+   * must be `individual` (a `company` cardholder cannot activate a card), and
+   * the person must clear KYC (name + dob) and accept the card-issuing terms
+   * before a card issued to them activates. A treasury card is therefore held
+   * by a designated steward, not the org entity. When omitted, the cardholder
+   * is created but its card stays pending until these are supplied.
+   */
+  responsiblePerson?: {
+    firstName: string;
+    lastName: string;
+    dob?: { day: number; month: number; year: number };
+    phoneNumber?: string;
+    email?: string;
+  };
+  /** IP recorded for the card-issuing terms acceptance (the issuing admin's). */
+  termsAcceptanceIp?: string;
   /** Billing address is REQUIRED by Issuing; default to the platform address envs. */
   billingAddress?: {
     line1: string;
@@ -266,10 +283,19 @@ export interface CreateIssuingCardholderInput {
   metadata?: Record<string, string>;
 }
 
+/** Splits a display name into first/last for an individual cardholder. */
+function splitPersonName(name: string): { first: string; last: string } {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return { first: parts[0] || "Treasury", last: "Steward" };
+  return { first: parts[0], last: parts.slice(1).join(" ") };
+}
+
 /**
- * Create a company-type Issuing cardholder representing a treasury
- * (subgroup/circle/project) on the hosting connected account. One cardholder
- * per treasury; cards attach to it.
+ * Create an INDIVIDUAL Issuing cardholder for a treasury card on the hosting
+ * connected account (Stripe requires `individual`, not `company` — a company
+ * cardholder cannot activate a card). The responsible steward's name + dob and
+ * the card-issuing terms acceptance are what let an issued card go active; the
+ * terms acceptance is recorded programmatically for the issuing admin.
  */
 export async function createIssuingCardholder(
   input: CreateIssuingCardholderInput,
@@ -285,12 +311,32 @@ export async function createIssuingCardholder(
     postal_code: process.env.PLATFORM_BILLING_POSTAL ?? "80302",
     country: "US",
   };
+  const person = input.responsiblePerson;
+  const derived = splitPersonName(input.name);
+  const firstName = person?.firstName ?? derived.first;
+  const lastName = person?.lastName ?? derived.last;
+  const email = person?.email ?? input.email;
+
+  const individual: Stripe.Issuing.CardholderCreateParams.Individual = {
+    first_name: firstName,
+    last_name: lastName,
+    card_issuing: {
+      user_terms_acceptance: {
+        date: Math.floor(Date.now() / 1000),
+        ip: input.termsAcceptanceIp ?? "0.0.0.0",
+      },
+    },
+    ...(person?.dob ? { dob: person.dob } : {}),
+  };
+
   return stripe.issuing.cardholders.create(
     {
-      type: "company",
-      name: input.name,
-      email: input.email,
+      type: "individual",
+      name: `${firstName} ${lastName}`.trim(),
+      email,
+      ...(person?.phoneNumber ? { phone_number: person.phoneNumber } : {}),
       billing: { address: billing },
+      individual,
       metadata: input.metadata,
     },
     { stripeAccount: input.connectedAccountId },
