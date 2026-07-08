@@ -70,11 +70,23 @@ export default async function UserProfilePage({ params }: { params: Promise<{ us
   }
 
   const meta = data.profile.metadata
-  const explicitHome =
+
+  // An explicit full canonical profile URL wins — it names the exact home
+  // profile (handles a home id/username that differs from this instance's).
+  const canonicalProfileUrl =
+    typeof meta.canonicalProfileUrl === "string" ? meta.canonicalProfileUrl.trim() : ""
+  if (/^https?:\/\/.+\/profile\//i.test(canonicalProfileUrl)) {
+    redirect(canonicalProfileUrl)
+  }
+
+  // Otherwise redirect to /profile/<identifier> on the person's home base
+  // (their homeBaseUrl/canonicalUrl if the row carries one, else the global
+  // hub, which homes people).
+  const homeBaseRaw =
     (typeof meta.homeBaseUrl === "string" && meta.homeBaseUrl.trim()) ||
     (typeof meta.canonicalUrl === "string" && meta.canonicalUrl.trim()) ||
     null
-  const homeBase = (explicitHome ?? getGlobalBaseUrl()).replace(/\/+$/, "")
+  const homeBase = (homeBaseRaw ?? getGlobalBaseUrl()).replace(/\/+$/, "")
   const identifier = data.profile.username?.trim() || data.agent.id
   redirect(`${homeBase}/profile/${encodeURIComponent(identifier)}`)
 }
