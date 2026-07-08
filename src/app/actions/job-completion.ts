@@ -68,6 +68,8 @@ export interface JobPayoutEntry {
    * `below_minimum`: computed amount is under the ledger's minimum transfer.
    */
   status: "paid" | "pending_funds" | "already_paid" | "no_tracked_time" | "below_minimum";
+  /** Payment-stub receipt resource id, set when status is `paid`. */
+  receiptId?: string;
 }
 
 export interface MarkJobDoneResult {
@@ -129,25 +131,31 @@ async function hasExistingPayout(jobId: string, assigneeId: string): Promise<boo
   return rows.length > 0;
 }
 
+/** An assignee's computed pay: amount owed plus tracked time (hourly jobs). */
+interface OwedPay {
+  amountCents: number;
+  trackedMs: number | null;
+}
+
 /**
- * Computes each assignee's owed cents for the job's pay model. Fixed pay
+ * Computes each assignee's owed pay for the job's pay model. Fixed pay
  * splits equally with the integer remainder going to the first assignee (ids
  * pre-sorted for determinism); hourly pay is rate × tracked time.
  */
-async function computeOwedCents(
+async function computeOwedPay(
   jobId: string,
   payKind: "fixed" | "hourly",
   payAmountCents: number | null,
   hourlyRateCents: number | null,
   assignees: string[],
-): Promise<Map<string, number>> {
-  const owed = new Map<string, number>();
+): Promise<Map<string, OwedPay>> {
+  const owed = new Map<string, OwedPay>();
   if (payKind === "fixed") {
     const total = payAmountCents ?? 0;
     const base = Math.floor(total / assignees.length);
     const remainder = total - base * assignees.length;
     assignees.forEach((assigneeId, index) => {
-      owed.set(assigneeId, base + (index === 0 ? remainder : 0));
+      owed.set(assigneeId, { amountCents: base + (index === 0 ? remainder : 0), trackedMs: null });
     });
     return owed;
   }
@@ -155,26 +163,36 @@ async function computeOwedCents(
   const rate = hourlyRateCents ?? 0;
   for (const assigneeId of assignees) {
     const trackedMs = await getTrackedMsForAssignee(jobId, assigneeId);
-    owed.set(assigneeId, Math.round((trackedMs / MS_PER_HOUR) * rate));
+    owed.set(assigneeId, {
+      amountCents: Math.round((trackedMs / MS_PER_HOUR) * rate),
+      trackedMs,
+    });
   }
   return owed;
 }
 
 /**
  * Transfers `amountCents` from the treasury wallet to the assignee's wallet in
- * MAX_TRANSFER_CENTS chunks (the ledger rail caps single transfers), then
- * records the `job-cash-payout` earn edge that anchors idempotency.
+ * MAX_TRANSFER_CENTS chunks (the ledger rail caps single transfers), records
+ * the `job-cash-payout` earn edge that anchors idempotency, and mints a
+ * payment-stub `receipt` resource for the payee (same receipt rail as
+ * marketplace purchases) so every payout has an invoice-like artifact.
+ *
+ * @returns The receipt resource id.
  */
 async function payAssignee(input: {
   jobId: string;
   jobName: string;
+  groupId: string;
   groupWalletId: string;
   assigneeId: string;
   amountCents: number;
   payKind: "fixed" | "hourly";
+  hourlyRateCents: number | null;
+  trackedMs: number | null;
   recordedBy: string;
   projectId: string | null;
-}): Promise<void> {
+}): Promise<string> {
   const assigneeWallet = await getSettlementWalletForAgent(input.assigneeId);
 
   let remaining = input.amountCents;
@@ -188,6 +206,45 @@ async function payAssignee(input: {
     );
     remaining -= chunk;
   }
+
+  const paidAt = new Date().toISOString();
+
+  // Payment stub: owned by the PAYEE (it's their earnings record), with the
+  // paying group + job linkage in metadata for the group's books.
+  const [receipt] = await db
+    .insert(resources)
+    .values({
+      name: `Payment stub: ${input.jobName}`,
+      type: "receipt",
+      ownerId: input.assigneeId,
+      description: `Job payout for "${input.jobName}"`,
+      visibility: "private",
+      metadata: {
+        receiptKind: "job-payout",
+        jobId: input.jobId,
+        projectId: input.projectId,
+        payerGroupId: input.groupId,
+        payeeAgentId: input.assigneeId,
+        amountCents: input.amountCents,
+        payKind: input.payKind,
+        ...(input.payKind === "hourly"
+          ? {
+              hourlyRateCents: input.hourlyRateCents,
+              trackedMs: input.trackedMs,
+              trackedHours:
+                input.trackedMs !== null
+                  ? Math.round((input.trackedMs / MS_PER_HOUR) * 100) / 100
+                  : null,
+            }
+          : {}),
+        approvedBy: input.recordedBy,
+        paidAt,
+        status: "completed",
+        paymentMethod: "wallet",
+        currency: "usd",
+      },
+    } as typeof resources.$inferInsert)
+    .returning({ id: resources.id });
 
   await db.insert(ledger).values({
     verb: "earn",
@@ -203,9 +260,12 @@ async function payAssignee(input: {
       amountCents: input.amountCents,
       payKind: input.payKind,
       recordedBy: input.recordedBy,
-      paidAt: new Date().toISOString(),
+      receiptId: receipt.id,
+      paidAt,
     },
   } as NewLedgerEntry);
+
+  return receipt.id;
 }
 
 // ─── Server Action ──────────────────────────────────────────────────────────
@@ -297,7 +357,7 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
 
       if (paysCash) {
         const groupWallet = await getSettlementWalletForAgent(job.ownerId);
-        const owed = await computeOwedCents(
+        const owed = await computeOwedPay(
           jobId,
           payKind,
           payAmountCents,
@@ -306,7 +366,8 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
         );
 
         for (const assigneeId of assignees) {
-          const amountCents = owed.get(assigneeId) ?? 0;
+          const pay = owed.get(assigneeId) ?? { amountCents: 0, trackedMs: null };
+          const amountCents = pay.amountCents;
 
           if (payKind === "hourly" && amountCents === 0) {
             entries.push({ assigneeId, amountCents: 0, status: "no_tracked_time" });
@@ -322,18 +383,21 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
           }
 
           try {
-            await payAssignee({
+            const receiptId = await payAssignee({
               jobId,
               jobName: job.name,
+              groupId: job.ownerId,
               groupWalletId: groupWallet.id,
               assigneeId,
               amountCents,
               payKind,
+              hourlyRateCents,
+              trackedMs: pay.trackedMs,
               recordedBy: userId,
               projectId,
             });
             totalPaidCents += amountCents;
-            entries.push({ assigneeId, amountCents, status: "paid" });
+            entries.push({ assigneeId, amountCents, status: "paid", receiptId });
           } catch (error) {
             // Insufficient treasury balance (or a frozen wallet) parks the
             // entry as pending_funds; a re-run after a deposit retries it.
