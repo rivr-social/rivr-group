@@ -20,7 +20,7 @@
 
 import { db } from "@/db";
 import { resources, ledger } from "@/db/schema";
-import { eq, and, isNull, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, isNull, asc, desc, sql, inArray } from "drizzle-orm";
 import type { Resource, ResourceType } from "@/db/schema";
 import { parseFacetedTagsFromMetadata } from "@/lib/parachute-doc";
 import type {
@@ -587,6 +587,8 @@ function resourceToJobShift(resource: Resource): JobShift {
     priority: (m.priority as JobShift["priority"]) ?? "medium",
     status: (m.status as JobShift["status"]) ?? "open",
     requiredBadges: (m.requiredBadges as string[]) ?? [],
+    // Legacy embedded tasks; child `task` resources (metadata.jobId) are
+    // hydrated over this by getJobById/getShifts (see hydrateJobTasks).
     tasks: (m.tasks as Task[]) ?? [],
     assignees: (m.assignees as string[]) ?? [],
     maxAssignees: (m.maxAssignees as number) ?? 1,
@@ -656,8 +658,66 @@ function resourceToProjectRecord(resource: Resource): ProjectRecord {
 
 // ─── Domain-Typed Query Functions ────────────────────────────────────────────
 
+/** Maps a `task` resource row to a domain Task. */
+function resourceToTask(resource: Resource): Task {
+  const m = (resource.metadata ?? {}) as Record<string, unknown>;
+  const status = (m.status as Task["status"]) ?? (m.completed === true ? "completed" : "not_started");
+  return {
+    id: resource.id,
+    name: resource.name,
+    description: resource.description ?? "",
+    points: typeof m.points === "number" ? m.points : 0,
+    completed: m.completed === true || status === "completed",
+    status,
+    assignedTo: typeof m.assignedTo === "string" ? m.assignedTo : undefined,
+    requiredBadge: typeof m.requiredBadge === "string" ? m.requiredBadge : undefined,
+    estimatedTime: typeof m.estimatedTime === "string" ? m.estimatedTime : "",
+  };
+}
+
 /**
- * Returns all job shifts from the resources table, mapped to domain type.
+ * Hydrates each job's `tasks` from its child `task` resources
+ * (`metadata.jobId`). Tasks are stored as first-class resource rows by the
+ * create flow AND by addTaskToJobAction — never as an embedded array — so the
+ * job detail page's Tasks tab and the timer's task picker were always empty
+ * without this join. Recomputes `totalPoints` from the loaded tasks. Jobs with
+ * no child tasks keep their legacy embedded `tasks`.
+ */
+async function hydrateJobTasks(jobs: JobShift[]): Promise<JobShift[]> {
+  const jobIds = jobs.map((job) => job.id);
+  if (jobIds.length === 0) return jobs;
+
+  const taskRows = await db.query.resources.findMany({
+    where: and(
+      eq(resources.type, "task"),
+      isNull(resources.deletedAt),
+      sql`${resources.metadata}->>'jobId' = ANY(${jobIds})`,
+    ),
+    orderBy: [asc(resources.createdAt)],
+  });
+
+  const jobIdSet = new Set(jobIds);
+  const tasksByJob = new Map<string, Task[]>();
+  for (const row of taskRows) {
+    const jobId = (row.metadata as Record<string, unknown> | null)?.jobId;
+    if (typeof jobId !== "string" || !jobIdSet.has(jobId)) continue;
+    const bucket = tasksByJob.get(jobId);
+    const task = resourceToTask(row);
+    if (bucket) bucket.push(task);
+    else tasksByJob.set(jobId, [task]);
+  }
+
+  return jobs.map((job) => {
+    const childTasks = tasksByJob.get(job.id);
+    if (!childTasks || childTasks.length === 0) return job;
+    const totalPoints = childTasks.reduce((sum, task) => sum + (task.points || 0), 0);
+    return { ...job, tasks: childTasks, totalPoints };
+  });
+}
+
+/**
+ * Returns all job shifts from the resources table, mapped to domain type,
+ * with their child tasks hydrated.
  *
  * @param limit Max rows to return. Defaults to `100`.
  * @returns JobShift array derived from 'shift' resources.
@@ -673,7 +733,7 @@ export async function getShifts(limit = 100): Promise<JobShift[]> {
     orderBy: [desc(resources.createdAt)],
     with: { owner: true },
   });
-  return rows.map(resourceToJobShift);
+  return hydrateJobTasks(rows.map(resourceToJobShift));
 }
 
 /**
@@ -687,7 +747,9 @@ export async function getJobById(id: string): Promise<JobShift | null> {
     where: and(eq(resources.id, id), inArray(resources.type, ["job", "shift"]), isNull(resources.deletedAt)),
     with: { owner: true },
   });
-  return row ? resourceToJobShift(row) : null;
+  if (!row) return null;
+  const [hydrated] = await hydrateJobTasks([resourceToJobShift(row)]);
+  return hydrated;
 }
 
 
