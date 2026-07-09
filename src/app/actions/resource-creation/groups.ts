@@ -12,7 +12,7 @@ import {
   type VisibilityLevel,
 } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { hash } from "@node-rs/bcrypt";
 import { embedAgent, scheduleEmbedding } from "@/lib/ai";
 import { ensureGroupMatrixRoom } from "@/lib/matrix-groups";
@@ -1379,7 +1379,7 @@ export async function checkGovernanceBadgeHolderAction(
           eq(ledger.subjectId, userId),
           eq(ledger.verb, "assign"),
           eq(ledger.isActive, true),
-          sql`${ledger.objectId} = ANY(${badgeIds})`,
+          inArray(ledger.objectId, badgeIds),
         ),
       );
 
@@ -1773,7 +1773,7 @@ export async function getProposalVotesAction(input: {
         ? await db
             .select({ id: agents.id, name: agents.name })
             .from(agents)
-            .where(sql`${agents.id} = ANY(${voterIds})`)
+            .where(inArray(agents.id, voterIds))
         : [];
     const voterMap = new Map(voterAgents.map((a) => [a.id, a.name]));
 

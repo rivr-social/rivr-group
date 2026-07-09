@@ -1,6 +1,6 @@
 'use server';
 
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import {
   wallets,
@@ -56,6 +56,13 @@ export interface RunProjectNetDistributionInput {
    * WITHOUT moving money (dry run). Only `true` performs the credit/debit.
    */
   confirm?: boolean;
+  /**
+   * Optional idempotency key. When set, a second execute with the SAME key for
+   * the SAME project does NOT move money again — it replays the original run's
+   * transaction ids. Guards against double-submit / retry on this real-money
+   * action (the dry-run default only guards accidental firing, not re-firing).
+   */
+  idempotencyKey?: string;
 }
 
 export interface RunProjectNetDistributionResult {
@@ -189,7 +196,7 @@ export async function runProjectNetDistributionAction(
   }
 
   try {
-    const transactionIds = await db.transaction(async (tx) => {
+    const outcome = await db.transaction(async (tx) => {
       // Lock the project wallet row before reading balance/frozen state.
       await tx.execute(sql`SELECT id FROM wallets WHERE id = ${projectWallet.id} FOR UPDATE`);
 
@@ -200,6 +207,30 @@ export async function runProjectNetDistributionAction(
         .limit(1);
       if (!locked) throw new Error('Project wallet disappeared mid-transaction.');
       if (locked.type !== 'project') throw new Error('Wallet is not a project treasury wallet.');
+
+      // Idempotency: if this key already distributed for this project, replay
+      // the original transaction ids instead of paying again. Checked BEFORE the
+      // frozen/balance guards — a replay must not be blocked by state the
+      // original run already changed (the treasury balance is now lower). Race-
+      // safe: every caller locks the project wallet above (FOR UPDATE), so a
+      // concurrent second confirm blocks until the first commits, then sees its
+      // rows here.
+      if (input.idempotencyKey) {
+        const prior = await tx
+          .select({ id: walletTransactions.id })
+          .from(walletTransactions)
+          .where(
+            and(
+              eq(walletTransactions.type, DISTRIBUTION_TX_TYPE),
+              eq(walletTransactions.referenceId, input.projectId),
+              sql`${walletTransactions.metadata}->>'idempotencyKey' = ${input.idempotencyKey}`,
+            ),
+          );
+        if (prior.length > 0) {
+          return { transactionIds: prior.map((t) => t.id), replayed: true };
+        }
+      }
+
       if (locked.isFrozen) throw new Error('Cannot distribute from a frozen treasury.');
       if (locked.balanceCents < plan.distributedCents) {
         throw new Error(
@@ -277,6 +308,7 @@ export async function runProjectNetDistributionAction(
               projectResourceId: input.projectId,
               recipientId: credit.recipientId,
               bps: credit.bps,
+              ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
             },
           })
           .returning({ id: walletTransactions.id });
@@ -298,29 +330,35 @@ export async function runProjectNetDistributionAction(
         createdTxIds.push(payoutTx.id);
       }
 
-      return createdTxIds;
+      return { transactionIds: createdTxIds, replayed: false };
     });
 
-    emitDomainEvent({
-      eventType: EVENT_TYPES.WALLET_PAYOUT,
-      entityType: 'wallet',
-      entityId: input.projectId,
-      actorId: userId,
-      payload: {
-        projectId: input.projectId,
-        groupId: input.groupId,
-        distributedCents: plan.distributedCents,
-        recipientCount: plan.credits.length,
-        distribution: true,
-      },
-    }).catch(() => {});
+    // Only emit a payout event for a real distribution, never on an idempotent
+    // replay (the funds moved once, on the original run).
+    if (!outcome.replayed) {
+      emitDomainEvent({
+        eventType: EVENT_TYPES.WALLET_PAYOUT,
+        entityType: 'wallet',
+        entityId: input.projectId,
+        actorId: userId,
+        payload: {
+          projectId: input.projectId,
+          groupId: input.groupId,
+          distributedCents: plan.distributedCents,
+          recipientCount: plan.credits.length,
+          distribution: true,
+        },
+      }).catch(() => {});
+    }
 
     return {
       success: true,
       executed: true,
-      message: `Distributed ${plan.distributedCents} cents across ${plan.credits.length} recipients.`,
+      message: outcome.replayed
+        ? `This distribution already ran under this idempotency key; returning the original ${outcome.transactionIds.length} transaction(s) without moving money again.`
+        : `Distributed ${plan.distributedCents} cents across ${plan.credits.length} recipients.`,
       plan,
-      transactionIds,
+      transactionIds: outcome.transactionIds,
     };
   } catch (err) {
     return {
