@@ -95,9 +95,12 @@ export {
   getOrgMembersAction,
   getOrgShareClasses,
   getShareClassMemberShares,
+} from './share-classes';
+export {
   SHARE_CLASS_GROUP_TYPE,
   CANONICAL_SHARE_CLASSES,
-} from './share-classes';
+} from './share-classes-types';
+export type { ShareClassRow, ShareHolder } from './share-classes-types';
 
 export {
   backfillConnectAccountsAction,

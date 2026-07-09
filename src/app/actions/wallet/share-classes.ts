@@ -34,35 +34,18 @@ import { hasGroupWriteAccess } from '@/app/actions/resource-creation/helpers';
 import { BPS_DIVISOR } from '@/lib/wallet-constants';
 import { getCurrentUserId } from './helpers';
 import { isUuid } from './types';
+import {
+  SHARE_CLASS_GROUP_TYPE,
+  type ShareClassRow,
+  type ShareHolder,
+} from './share-classes-types';
 
-/** metadata.groupType discriminator for a share-class subgroup. */
-export const SHARE_CLASS_GROUP_TYPE = 'share_class';
 /** Ledger verb + interaction marking a member's share holding in a class. */
 const SHARE_HOLD_VERB = 'belong';
 const SHARE_HOLD_INTERACTION = 'share-class-holding';
 const SHARE_CLASS_NAME_MAX = 120;
 /** Full pie in basis points (100%). */
 const FULL_PIE_BPS = BPS_DIVISOR;
-
-/** Canonical hidden class keys tied to the hidden membership tiers. */
-export const CANONICAL_SHARE_CLASSES: Record<'steward' | 'worker', string> = {
-  steward: 'Stewards',
-  worker: 'Workers',
-};
-
-interface ShareClassRow {
-  id: string;
-  name: string;
-  shareCount: number;
-  netBps: number;
-  hidden: boolean;
-  tierKey: string | null;
-}
-
-interface ShareHolder {
-  memberId: string;
-  shares: number;
-}
 
 function isIntInRange(v: unknown, min: number, max: number): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
