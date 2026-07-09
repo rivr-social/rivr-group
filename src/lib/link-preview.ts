@@ -22,6 +22,8 @@
 
 import { createHash } from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import type { ResourceEmbed } from '@/db/schema';
 
 /** Default TTL for cached external previews (24 hours). */
@@ -273,6 +275,30 @@ export function isPrivateIPv6(ip: string): boolean {
  * @throws `Error` with message `'private_host'` when any address is unsafe.
  */
 export async function assertSafeHost(hostname: string): Promise<void> {
+  await resolvePinnedAddress(hostname);
+}
+
+/** A DNS resolution result pinned to a single safe address. */
+export interface PinnedAddress {
+  /** The literal IP to connect to (defeats DNS-rebind: resolve once, dial that). */
+  address: string;
+  /** Socket family (4 or 6) for the connect call. */
+  family: 4 | 6;
+}
+
+/**
+ * Resolve `hostname` (A + AAAA), reject if ANY resolved address is private /
+ * loopback / link-local / multicast / reserved, and return ONE safe address to
+ * pin the connection to. Returning the exact address closes the DNS-rebind
+ * TOCTOU window: the caller dials this literal IP rather than re-resolving the
+ * name at connect time (when an attacker could have flipped it to a metadata
+ * address).
+ *
+ * @param hostname DNS name (or IP literal) to resolve.
+ * @returns A {@link PinnedAddress} the caller must connect to directly.
+ * @throws `Error('private_host')` when no address resolves or any is unsafe.
+ */
+export async function resolvePinnedAddress(hostname: string): Promise<PinnedAddress> {
   const records = await dnsLookup(hostname, { all: true, verbatim: true });
   if (!records.length) {
     throw new Error('private_host');
@@ -284,6 +310,171 @@ export async function assertSafeHost(hostname: string): Promise<void> {
       if (isPrivateIPv6(rec.address)) throw new Error('private_host');
     }
   }
+  const first = records[0];
+  return { address: first.address, family: first.family === 6 ? 6 : 4 };
+}
+
+/** Result of a successful {@link safeFetchHtml} call. */
+export interface SafeFetchResult {
+  /** Final URL after following (re-validated) redirects. */
+  finalUrl: string;
+  /** Response body, truncated to the byte cap. */
+  html: string;
+  /** Final HTTP status code. */
+  status: number;
+}
+
+/** Default cap on redirect hops followed by {@link safeFetchHtml}. */
+export const LINK_PREVIEW_MAX_REDIRECTS = 3;
+
+/**
+ * SSRF-hardened HTML fetch for link-preview unfurling.
+ *
+ * Every hop (the initial URL and each redirect target) is independently
+ * re-validated: protocol + blocked-hostname shape, then DNS resolution with a
+ * full private/link-local/metadata range rejection, and the connection is
+ * PINNED to the resolved IP (TLS SNI + Host header still carry the original
+ * hostname). Redirects are handled with `redirect: 'manual'` semantics — we
+ * read `Location` ourselves and re-run the whole guard on the next hop — so a
+ * public URL cannot 30x-bounce into `169.254.169.254` or a private host. The
+ * body is hard-capped at `maxBytes` and the whole exchange at `timeoutMs`.
+ *
+ * @param urlString Absolute http(s) URL to fetch.
+ * @param options Optional timeout / body cap / redirect budget / headers.
+ * @returns The final URL + truncated HTML + status.
+ * @throws `Error` with a short stable message: `private_host`, `blocked_host`,
+ *   `bad_protocol`, `too_many_redirects`, `fetch_timeout`, `oversize_redirect`,
+ *   `http_<status>`, or a network error message.
+ */
+export async function safeFetchHtml(
+  urlString: string,
+  options: {
+    timeoutMs?: number;
+    maxBytes?: number;
+    maxRedirects?: number;
+    headers?: Record<string, string>;
+  } = {},
+): Promise<SafeFetchResult> {
+  const timeoutMs = options.timeoutMs ?? LINK_PREVIEW_FETCH_TIMEOUT_MS;
+  const maxBytes = options.maxBytes ?? LINK_PREVIEW_MAX_BODY_BYTES;
+  const maxRedirects = options.maxRedirects ?? LINK_PREVIEW_MAX_REDIRECTS;
+
+  let current = urlString;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const shape = validateUrlShape(current);
+    if (!shape.ok) {
+      throw new Error(
+        shape.reason === URL_REJECTION_REASON.BLOCKED_HOST ? 'blocked_host' : 'bad_protocol',
+      );
+    }
+    const parsed = shape.url;
+    // Pin to a freshly-resolved, validated IP for THIS hop.
+    const pinned = await resolvePinnedAddress(parsed.hostname);
+
+    const hopResult = await fetchHopPinned(parsed, pinned, {
+      timeoutMs,
+      maxBytes,
+      headers: options.headers,
+    });
+
+    if (hopResult.kind === 'body') {
+      return { finalUrl: parsed.toString(), html: hopResult.html, status: hopResult.status };
+    }
+    // Redirect: resolve Location against the current URL and re-validate next loop.
+    if (hop === maxRedirects) {
+      throw new Error('too_many_redirects');
+    }
+    let nextUrl: URL;
+    try {
+      nextUrl = new URL(hopResult.location, parsed);
+    } catch {
+      throw new Error('oversize_redirect');
+    }
+    current = nextUrl.toString();
+  }
+  // Unreachable: the loop either returns a body or throws.
+  throw new Error('too_many_redirects');
+}
+
+/** Outcome of a single pinned hop: either a final body or a redirect target. */
+type HopResult =
+  | { kind: 'body'; html: string; status: number }
+  | { kind: 'redirect'; location: string; status: number };
+
+/**
+ * Perform one HTTP(S) request connecting directly to a pre-validated IP. Does
+ * NOT follow redirects — it surfaces a 3xx `Location` to the caller so the
+ * SSRF guard re-runs on the next hop.
+ */
+function fetchHopPinned(
+  url: URL,
+  pinned: PinnedAddress,
+  opts: { timeoutMs: number; maxBytes: number; headers?: Record<string, string> },
+): Promise<HopResult> {
+  const isHttps = url.protocol === 'https:';
+  const transport = isHttps ? https : http;
+  const port = url.port ? Number(url.port) : isHttps ? 443 : 80;
+
+  return new Promise<HopResult>((resolve, reject) => {
+    const req = transport.request(
+      {
+        host: pinned.address,
+        family: pinned.family,
+        port,
+        path: `${url.pathname}${url.search}`,
+        method: 'GET',
+        // Connect to the pinned IP but keep the real hostname for SNI + cert
+        // validation and for virtual-host routing via the Host header.
+        servername: isHttps ? url.hostname : undefined,
+        headers: {
+          Host: url.host,
+          'User-Agent': 'RivrLinkPreviewBot/1.0 (+https://rivr.social/bots)',
+          Accept: 'text/html,application/xhtml+xml',
+          ...(opts.headers ?? {}),
+        },
+        timeout: opts.timeoutMs,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const location = res.headers.location;
+        if (status >= 300 && status < 400 && typeof location === 'string') {
+          res.resume(); // drain
+          resolve({ kind: 'redirect', location, status });
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          res.resume();
+          reject(new Error(`http_${status}`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let received = 0;
+        res.on('data', (chunk: Buffer) => {
+          received += chunk.length;
+          if (received > opts.maxBytes) {
+            // Cap reached — keep what we have (OG tags live in <head>) and stop.
+            chunks.push(chunk);
+            res.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => {
+          resolve({ kind: 'body', html: Buffer.concat(chunks).toString('utf8'), status });
+        });
+        res.on('close', () => {
+          // Fired on our cap-triggered destroy(); resolve with the partial body.
+          if (chunks.length > 0) {
+            resolve({ kind: 'body', html: Buffer.concat(chunks).toString('utf8'), status });
+          }
+        });
+        res.on('error', (err) => reject(err));
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('fetch_timeout')));
+    req.on('error', (err) => reject(err));
+    req.end();
+  });
 }
 
 /**
