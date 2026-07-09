@@ -16,6 +16,7 @@ import {
   type JobClaimScope,
 } from "@/lib/project-team";
 import { getCurrentUserId } from "./helpers";
+import { hasCapability } from "@/lib/entitlements-server";
 import type { ActionResult } from "./types";
 import { isUuid } from "./types";
 
@@ -103,6 +104,21 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
     RATE_LIMITS.SOCIAL.windowMs,
   );
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
+
+  // Claiming jobs (and earning their badges/points) requires the
+  // claim_badges_jobs capability — any paid membership tier grants it.
+  const canClaim = await hasCapability(userId, "claim_badges_jobs");
+  if (!canClaim) {
+    return {
+      success: false,
+      message: "Claiming jobs requires a Collaborator membership (or higher).",
+      error: {
+        code: "SUBSCRIPTION_REQUIRED",
+        details: "Subscribe to Collaborator to claim jobs and earn badges in projects.",
+        requiredTier: "basic",
+      },
+    };
+  }
 
   const [job] = await db
     .select({ id: resources.id, ownerId: resources.ownerId, metadata: resources.metadata })

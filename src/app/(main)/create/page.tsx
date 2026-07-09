@@ -58,6 +58,7 @@ import { JoinQuestionEditor } from "@/components/join-question-editor"
 import { SubscriptionGateDialog } from "@/components/subscription-gate-dialog"
 import { FEATURE_TIER_REQUIREMENTS, FEATURE_DESCRIPTIONS } from "@/lib/subscription-constants"
 import type { MembershipTier } from "@/db/schema"
+import { tierHasCapability } from "@/lib/entitlements"
 
 const THANKS_VOUCHER_FLOW_KEY = "rivr:thanks-voucher-flow"
 const PENDING_ORG_CREATION_KEY = "rivr:pending-org-creation"
@@ -1480,15 +1481,10 @@ export default function CreatePage() {
 
     void (async () => {
       const subscription = await getSubscriptionStatusAction().catch(() => null)
-      const tierRank: Record<MembershipTier, number> = {
-        basic: 0,
-        host: 1,
-        seller: 2,
-        organizer: 3,
-        steward: 4,
-      }
 
-      if (!subscription || tierRank[subscription.tier] < tierRank.organizer) {
+      // Only resume organization creation if the active tier grants it
+      // (Organization / Steward / Worker).
+      if (!subscription || !tierHasCapability(subscription.tier, "create_org_group")) {
         hasResumedGroupCreationRef.current = false
         return
       }

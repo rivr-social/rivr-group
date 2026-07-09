@@ -9,7 +9,7 @@ import {
   type VisibilityLevel,
 } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
-import { hasEntitlement } from "@/lib/billing";
+import { hasCapability } from "@/lib/entitlements-server";
 
 import {
   resolveAuthenticatedUserId,
@@ -255,15 +255,16 @@ export async function createEventResource(input: {
   const normalizedTickets = normalizeEventTickets({ ticketTypes: input.ticketTypes, price: input.price });
   const isPaidTicketedEvent = normalizedTickets.some((ticket) => ticket.priceCents > 0);
   if (isPaidTicketedEvent) {
-    // Paid ticketing is gated by the "host" tier (or higher).
-    const canSellTickets = await hasEntitlement(resolvedUserId, "host");
+    // Paid ticketing requires the sell_tickets capability (Host / Provider /
+    // Organization / Steward / Worker — NOT Seller).
+    const canSellTickets = await hasCapability(resolvedUserId, "sell_tickets");
     if (!canSellTickets) {
       return {
         success: false,
-        message: "Paid ticketed events require a Host membership or higher.",
+        message: "Paid ticketed events require a Host, Provider, or Organization membership.",
         error: {
           code: "SUBSCRIPTION_REQUIRED",
-          details: "Subscribe to Host (or higher) to sell event tickets.",
+          details: "Subscribe to Host, Provider, or Organization to sell event tickets.",
           requiredTier: "host",
         },
       };

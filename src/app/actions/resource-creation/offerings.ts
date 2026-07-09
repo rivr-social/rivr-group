@@ -13,7 +13,7 @@ import {
 } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { hasEntitlement } from "@/lib/billing";
+import { hasCapability } from "@/lib/entitlements-server";
 import { getSellerCardCapability, SELLER_CARD_NO_ACCOUNT_REASON } from "@/lib/wallet";
 import { getAgent } from "@/lib/queries/agents";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
@@ -305,16 +305,17 @@ export async function createOfferingResource(input: {
       ? validatedItems.reduce((sum, i) => sum + i.priceCents, 0)
       : basePriceCents;
 
-    // Paid offerings (price > 0) require a "seller" tier (or higher).
+    // Paid offerings (price > 0) require the sell_offerings capability (Seller /
+    // Provider / Organization / Steward / Worker — NOT Host).
     if (totalPriceCents > 0) {
-      const canSell = await hasEntitlement(resolvedUserId, "seller");
+      const canSell = await hasCapability(resolvedUserId, "sell_offerings");
       if (!canSell) {
         return {
           success: false,
-          message: "Selling paid offerings requires a Seller membership or higher.",
+          message: "Selling paid offerings requires a Seller, Provider, or Organization membership.",
           error: {
             code: "SUBSCRIPTION_REQUIRED",
-            details: "Subscribe to Seller (or higher) to sell offerings.",
+            details: "Subscribe to Seller, Provider, or Organization to sell offerings.",
             requiredTier: "seller",
           },
         };
@@ -713,16 +714,17 @@ export async function createMarketplaceListingResource(input: {
     return { success: false, message: "You must be logged in", error: { code: "UNAUTHENTICATED" } };
   }
 
-  // Paid marketplace listings require a "seller" tier (or higher).
+  // Paid marketplace listings require the sell_offerings capability (Seller /
+  // Provider / Organization / Steward / Worker — NOT Host).
   if (Number.isFinite(input.price) && input.price > 0) {
-    const canSell = await hasEntitlement(userId, "seller");
+    const canSell = await hasCapability(userId, "sell_offerings");
     if (!canSell) {
       return {
         success: false,
-        message: "Selling marketplace listings requires a Seller membership or higher.",
+        message: "Selling marketplace listings requires a Seller, Provider, or Organization membership.",
         error: {
           code: "SUBSCRIPTION_REQUIRED",
-          details: "Subscribe to Seller (or higher) to list items for sale.",
+          details: "Subscribe to Seller, Provider, or Organization to list items for sale.",
           requiredTier: "seller",
         },
       };

@@ -48,7 +48,7 @@ import { type GroupMembershipPlan } from "@/lib/group-memberships";
 import { useToast } from "@/components/ui/use-toast";
 import { getGroupMatrixRoom, setGroupChatMode } from "@/lib/matrix-groups";
 import type { ChatMode } from "@/db/schema";
-import type { MembershipTier } from "@/db/schema";
+import { tierHasCapability } from "@/lib/entitlements";
 import { getSubscriptionStatusAction } from "@/app/actions/billing";
 import { SubscriptionGateDialog } from "@/components/subscription-gate-dialog";
 import { GroupAdminView } from "@/components/group-admin-view";
@@ -686,14 +686,9 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
 
     void (async () => {
       const subscription = await getSubscriptionStatusAction().catch(() => null);
-      const tierRank: Record<MembershipTier, number> = {
-        basic: 0,
-        host: 1,
-        seller: 2,
-        organizer: 3,
-        steward: 4,
-      };
-      if (!subscription || tierRank[subscription.tier] < tierRank.organizer) return;
+      // Auto-upgrade to an organization only if the active tier actually grants
+      // organization creation (Organization / Steward / Worker).
+      if (!subscription || !tierHasCapability(subscription.tier, "create_org_group")) return;
 
       await upgradeToOrganization();
       router.replace(`/groups/${groupId}/settings`);

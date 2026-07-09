@@ -50,14 +50,35 @@ vi.mock("@/lib/murmurations", () => ({
   syncMurmurationsProfilesForActor: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@/lib/federation", () => ({
-  ensureLocalNode: vi.fn().mockResolvedValue({ id: "local-node-id" }),
-  queueEntityExportEvents: vi.fn().mockResolvedValue(undefined),
-}));
+// createGroupResource imports `updateFacade`/`emitDomainEvent`/`EVENT_TYPES`
+// from the bare "@/lib/federation" barrel, so keep those REAL (owner-routing is
+// exercised against the test DB) and only stub the fire-and-forget node/export
+// helpers.
+vi.mock("@/lib/federation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/federation")>();
+  return {
+    ...actual,
+    ensureLocalNode: vi.fn().mockResolvedValue({ id: "local-node-id" }),
+    queueEntityExportEvents: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+// Organization-type group creation is gated by the `create_org_group`
+// capability. Mock @/lib/entitlements-server so `hasCapability` is controllable
+// while `isOrganizationGroupType` (the free/gated group classifier, still in the
+// pure @/lib/entitlements) stays REAL — community/family/ring must remain free.
+vi.mock("@/lib/entitlements-server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/entitlements-server")>();
+  return {
+    ...actual,
+    hasCapability: vi.fn().mockResolvedValue(false),
+  };
+});
 
 // Import AFTER mocks
 import { auth } from "@/auth";
 import { rateLimit } from "@/lib/rate-limit";
+import { hasCapability } from "@/lib/entitlements-server";
 import { createGroupResource } from "../groups";
 
 // =============================================================================
@@ -280,6 +301,97 @@ describe("group creation actions", () => {
 
         expect(group.name).toBe("Padded Name");
         expect(group.description).toBe("Padded Description");
+      }));
+
+    // -------------------------------------------------------------------------
+    // Capability gate: organization creation is paid; community/family/ring free
+    // -------------------------------------------------------------------------
+
+    it("creates a community group without any subscription (free)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+
+        const result = await createGroupResource({
+          ...VALID_GROUP_INPUT,
+          groupType: "community",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
+        // Free group types never consult the capability gate.
+        expect(hasCapability).not.toHaveBeenCalled();
+      }));
+
+    it("creates a family group without any subscription (free)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+
+        const result = await createGroupResource({
+          ...VALID_GROUP_INPUT,
+          groupType: "family",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
+        expect(hasCapability).not.toHaveBeenCalled();
+      }));
+
+    it("creates a ring group without any subscription (free)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+
+        const result = await createGroupResource({
+          ...VALID_GROUP_INPUT,
+          groupType: "ring",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
+        expect(hasCapability).not.toHaveBeenCalled();
+      }));
+
+    it("requires the create_org_group capability to create an organization", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        // Default mock: no create_org_group capability.
+        vi.mocked(hasCapability).mockResolvedValue(false);
+
+        const result = await createGroupResource({
+          ...VALID_GROUP_INPUT,
+          groupType: "organization",
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error?.code).toBe("SUBSCRIPTION_REQUIRED");
+        expect(result.error?.requiredTier).toBe("organizer");
+        expect(hasCapability).toHaveBeenCalledWith(user.id, "create_org_group");
+      }));
+
+    it("creates an organization when the user holds create_org_group", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(hasCapability).mockResolvedValue(true);
+
+        const result = await createGroupResource({
+          ...VALID_GROUP_INPUT,
+          groupType: "organization",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
+
+        const [group] = await db
+          .select()
+          .from(agents)
+          .where(eq(agents.id, result.resourceId!));
+        expect(group.type).toBe("organization");
+        const meta = group.metadata as Record<string, unknown>;
+        expect(meta.groupType).toBe("organization");
       }));
   });
 });

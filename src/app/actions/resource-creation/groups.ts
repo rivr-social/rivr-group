@@ -19,6 +19,8 @@ import { ensureGroupMatrixRoom } from "@/lib/matrix-groups";
 import { syncMurmurationsProfilesForActor } from "@/lib/murmurations";
 import { type GroupJoinSettings } from "@/lib/types";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { hasCapability } from "@/lib/entitlements-server";
+import { isOrganizationGroupType } from "@/lib/entitlements";
 
 import {
   resolveAuthenticatedUserId,
@@ -72,6 +74,27 @@ export async function createGroupResource(input: {
       message: "You must be logged in to create content",
       error: { code: "UNAUTHENTICATED" },
     };
+  }
+
+  // Organization-type groups are gated by the create_org_group capability
+  // (Organization / Steward / Worker). Community, family, and ring groups are
+  // free for any signed-in user. A subgroup of an org still requires the caller
+  // to hold write access on that org (checked below), so the org's own admins
+  // can nest structure without re-buying the tier.
+  if (isOrganizationGroupType(input.groupType) && !input.parentGroupId) {
+    const canCreateOrg = await hasCapability(userId, "create_org_group");
+    if (!canCreateOrg) {
+      return {
+        success: false,
+        message: "Creating an organization requires an Organization membership.",
+        error: {
+          code: "SUBSCRIPTION_REQUIRED",
+          details:
+            "Subscribe to Organization to create organization-type groups. Community, family, and ring groups are free.",
+          requiredTier: "organizer",
+        },
+      };
+    }
   }
 
   const facadeResult = await updateFacade.execute(

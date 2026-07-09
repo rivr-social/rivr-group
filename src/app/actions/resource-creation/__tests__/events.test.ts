@@ -59,8 +59,16 @@ vi.mock("@/lib/queries/agents", () => ({
 
 // Import AFTER mocks
 import { auth } from "@/auth";
-import { hasEntitlement } from "@/lib/billing";
+import { getActiveSubscription } from "@/lib/billing";
 import { createEventResource } from "../events";
+
+// The paid-ticket gate now resolves through the real `hasCapability`
+// (@/lib/entitlements), which reads the agent's active subscription tier. Drive
+// `getActiveSubscription` (mocked above) to a given tier so the REAL capability
+// map decides: Host/Provider/Organization grant `sell_tickets`; Seller does NOT.
+type ActiveSubscription = Awaited<ReturnType<typeof getActiveSubscription>>;
+const activeSubForTier = (tier: string): NonNullable<ActiveSubscription> =>
+  ({ membershipTier: tier, status: "active" } as unknown as NonNullable<ActiveSubscription>);
 
 // =============================================================================
 // Constants
@@ -131,15 +139,21 @@ describe("event creation actions", () => {
         expect(result.error?.code).toBe("INVALID_INPUT");
       }));
 
-    it("returns INVALID_INPUT when location is missing", () =>
-      withTestTransaction(async () => {
+    it("allows event creation when location is missing (location is optional)", () =>
+      withTestTransaction(async (db) => {
+        // Location is intentionally OPTIONAL server-side (the create form's
+        // location section is collapsed/optional), so an empty location must
+        // NOT block creation of an otherwise-valid event.
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+
         const result = await createEventResource({
           ...VALID_EVENT_INPUT,
           location: "",
         });
 
-        expect(result.success).toBe(false);
-        expect(result.error?.code).toBe("INVALID_INPUT");
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
       }));
 
     it("returns INVALID_INPUT when description exceeds max length", () =>
@@ -208,11 +222,12 @@ describe("event creation actions", () => {
         expect(result.resourceId).toBeDefined();
       }));
 
-    it("returns SUBSCRIPTION_REQUIRED for paid tickets without host tier", () =>
+    it("returns SUBSCRIPTION_REQUIRED for paid tickets without any subscription", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
-        vi.mocked(hasEntitlement).mockResolvedValueOnce(false);
+        // No active subscription (factory default) → no sell_tickets capability.
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(null);
 
         const result = await createEventResource({
           ...VALID_EVENT_INPUT,
@@ -222,6 +237,53 @@ describe("event creation actions", () => {
         expect(result.success).toBe(false);
         expect(result.error?.code).toBe("SUBSCRIPTION_REQUIRED");
         expect(result.error?.requiredTier).toBe("host");
+      }));
+
+    it("rejects a Seller for paid tickets (Seller lacks sell_tickets)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        // Seller has sell_offerings but NOT sell_tickets — must be rejected.
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(activeSubForTier("seller"));
+
+        const result = await createEventResource({
+          ...VALID_EVENT_INPUT,
+          price: 25,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error?.code).toBe("SUBSCRIPTION_REQUIRED");
+        expect(result.error?.requiredTier).toBe("host");
+      }));
+
+    it("allows a Host to create paid tickets", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(activeSubForTier("host"));
+
+        const result = await createEventResource({
+          ...VALID_EVENT_INPUT,
+          price: 25,
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
+      }));
+
+    it("allows a Provider to create paid tickets (Provider has sell_tickets)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(activeSubForTier("provider"));
+
+        const result = await createEventResource({
+          ...VALID_EVENT_INPUT,
+          price: 25,
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
       }));
 
     it("sets visibility to private when scoped to groups and not global", () =>

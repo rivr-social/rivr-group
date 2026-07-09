@@ -80,6 +80,11 @@ export const MEMBERSHIP_TIERS: Record<
     monthlyPriceId: process.env.STRIPE_PRICE_SELLER_MONTHLY,
     yearlyPriceId: process.env.STRIPE_PRICE_SELLER_YEARLY,
   },
+  provider: {
+    name: 'Provider',
+    monthlyPriceId: process.env.STRIPE_PRICE_PROVIDER_MONTHLY,
+    yearlyPriceId: process.env.STRIPE_PRICE_PROVIDER_YEARLY,
+  },
   organizer: {
     name: 'Organizer',
     monthlyPriceId: process.env.STRIPE_PRICE_ORGANIZER_MONTHLY,
@@ -90,17 +95,38 @@ export const MEMBERSHIP_TIERS: Record<
     monthlyPriceId: process.env.STRIPE_PRICE_STEWARD_MONTHLY,
     yearlyPriceId: process.env.STRIPE_PRICE_STEWARD_YEARLY,
   },
+  worker: {
+    name: 'Worker',
+    monthlyPriceId: process.env.STRIPE_PRICE_WORKER_MONTHLY,
+    yearlyPriceId: process.env.STRIPE_PRICE_WORKER_YEARLY,
+  },
 };
+
+/**
+ * Hidden tiers are internal memberships tied to hidden share-class groups; they
+ * are never surfaced in the public subscribe UI, but grant ALL capabilities.
+ */
+export const HIDDEN_MEMBERSHIP_TIERS: readonly MembershipTier[] = ['steward', 'worker'] as const;
+
+export function isHiddenTier(tier: MembershipTier): boolean {
+  return HIDDEN_MEMBERSHIP_TIERS.includes(tier);
+}
 
 export const DEFAULT_MEMBERSHIP_TRIAL_DAYS = 30;
 
-/** Tier hierarchy from lowest to highest for entitlement comparison. */
+/**
+ * Legacy ordinal hierarchy — retained ONLY for coarse display ordering and
+ * back-compat. Real feature gating is capability-based (see `@/lib/entitlements`)
+ * because Host ∥ Seller are peers, not rungs on a single ladder.
+ */
 export const TIER_HIERARCHY: readonly MembershipTier[] = [
   'basic',
   'host',
   'seller',
+  'provider',
   'organizer',
   'steward',
+  'worker',
 ] as const;
 
 /**

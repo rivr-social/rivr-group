@@ -25,10 +25,14 @@ const {
   process.env.STRIPE_PRICE_HOST_YEARLY = 'price_host_yearly';
   process.env.STRIPE_PRICE_SELLER_MONTHLY = 'price_seller_monthly';
   process.env.STRIPE_PRICE_SELLER_YEARLY = 'price_seller_yearly';
+  process.env.STRIPE_PRICE_PROVIDER_MONTHLY = 'price_provider_monthly';
+  process.env.STRIPE_PRICE_PROVIDER_YEARLY = 'price_provider_yearly';
   process.env.STRIPE_PRICE_ORGANIZER_MONTHLY = 'price_organizer_monthly';
   process.env.STRIPE_PRICE_ORGANIZER_YEARLY = 'price_organizer_yearly';
   process.env.STRIPE_PRICE_STEWARD_MONTHLY = 'price_steward_monthly';
   process.env.STRIPE_PRICE_STEWARD_YEARLY = 'price_steward_yearly';
+  process.env.STRIPE_PRICE_WORKER_MONTHLY = 'price_worker_monthly';
+  process.env.STRIPE_PRICE_WORKER_YEARLY = 'price_worker_yearly';
   process.env.NEXTAUTH_URL = 'http://localhost:3000';
 
   return {
@@ -80,7 +84,7 @@ vi.mock('@/db/schema', () => ({
     $inferInsert: {},
   },
   subscriptionStatusEnum: { enumValues: ['active', 'past_due', 'canceled', 'incomplete', 'incomplete_expired', 'trialing', 'unpaid', 'paused'] },
-  membershipTierEnum: { enumValues: ['basic', 'host', 'seller', 'organizer', 'steward'] },
+  membershipTierEnum: { enumValues: ['basic', 'host', 'seller', 'provider', 'organizer', 'steward', 'worker'] },
 }));
 
 vi.mock('@/lib/integrations/stripe', () => ({
@@ -129,13 +133,23 @@ function chainResult(result: unknown) {
 // ---------------------------------------------------------------------------
 
 describe('billing – MEMBERSHIP_TIERS', () => {
-  it('has five tiers with correct names', () => {
-    expect(Object.keys(MEMBERSHIP_TIERS)).toEqual(['basic', 'host', 'seller', 'organizer', 'steward']);
+  it('has seven tiers with correct names', () => {
+    expect(Object.keys(MEMBERSHIP_TIERS)).toEqual([
+      'basic',
+      'host',
+      'seller',
+      'provider',
+      'organizer',
+      'steward',
+      'worker',
+    ]);
     expect(MEMBERSHIP_TIERS.basic.name).toBe('Basic');
     expect(MEMBERSHIP_TIERS.host.name).toBe('Host');
     expect(MEMBERSHIP_TIERS.seller.name).toBe('Seller');
+    expect(MEMBERSHIP_TIERS.provider.name).toBe('Provider');
     expect(MEMBERSHIP_TIERS.organizer.name).toBe('Organizer');
     expect(MEMBERSHIP_TIERS.steward.name).toBe('Steward');
+    expect(MEMBERSHIP_TIERS.worker.name).toBe('Worker');
   });
 
   it('loads price IDs from environment variables', () => {
@@ -143,22 +157,37 @@ describe('billing – MEMBERSHIP_TIERS', () => {
     expect(MEMBERSHIP_TIERS.basic.yearlyPriceId).toBe('price_basic_yearly');
     expect(MEMBERSHIP_TIERS.host.monthlyPriceId).toBe('price_host_monthly');
     expect(MEMBERSHIP_TIERS.host.yearlyPriceId).toBe('price_host_yearly');
+    expect(MEMBERSHIP_TIERS.provider.monthlyPriceId).toBe('price_provider_monthly');
+    expect(MEMBERSHIP_TIERS.provider.yearlyPriceId).toBe('price_provider_yearly');
     expect(MEMBERSHIP_TIERS.steward.monthlyPriceId).toBe('price_steward_monthly');
     expect(MEMBERSHIP_TIERS.steward.yearlyPriceId).toBe('price_steward_yearly');
+    expect(MEMBERSHIP_TIERS.worker.monthlyPriceId).toBe('price_worker_monthly');
+    expect(MEMBERSHIP_TIERS.worker.yearlyPriceId).toBe('price_worker_yearly');
   });
 });
 
 describe('billing – TIER_HIERARCHY', () => {
   it('orders tiers from lowest to highest', () => {
-    expect(TIER_HIERARCHY).toEqual(['basic', 'host', 'seller', 'organizer', 'steward']);
+    expect(TIER_HIERARCHY).toEqual([
+      'basic',
+      'host',
+      'seller',
+      'provider',
+      'organizer',
+      'steward',
+      'worker',
+    ]);
   });
 
   it('basic has the lowest index', () => {
     expect(TIER_HIERARCHY.indexOf('basic')).toBe(0);
   });
 
-  it('steward has the highest index', () => {
-    expect(TIER_HIERARCHY.indexOf('steward')).toBe(4);
+  it('worker has the highest index', () => {
+    expect(TIER_HIERARCHY.indexOf('worker')).toBe(TIER_HIERARCHY.length - 1);
+    expect(TIER_HIERARCHY.indexOf('worker')).toBe(6);
+    // steward sits just below the hidden worker tier.
+    expect(TIER_HIERARCHY.indexOf('steward')).toBe(5);
   });
 });
 
@@ -260,8 +289,8 @@ describe('billing – hasEntitlement', () => {
     expect(result).toBe(false);
   });
 
-  it('steward includes all lower tier entitlements', async () => {
-    const mockSub = { membershipTier: 'steward', status: 'active' };
+  it('worker (highest tier) includes every tier entitlement', async () => {
+    const mockSub = { membershipTier: 'worker', status: 'active' };
 
     for (const tier of TIER_HIERARCHY) {
       vi.clearAllMocks();

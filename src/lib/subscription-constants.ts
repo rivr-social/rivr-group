@@ -1,19 +1,23 @@
 /**
  * Shared subscription tier constants for display and gating logic.
  *
- * Tier hierarchy (lowest to highest): basic < host < seller < organizer < steward.
- * Higher tiers inherit all lower-tier entitlements.
+ * Capabilities are PARALLEL, not a strict ladder (Host ∥ Seller are peers;
+ * Provider has both specialties; Organization adds org-group creation; Steward
+ * and Worker are hidden all-capability tiers). See `@/lib/entitlements` for the
+ * authoritative capability map.
  */
 
 import type { MembershipTier } from "@/db/schema";
 
-/** Human-readable display names for each membership tier. */
+/** Human-readable display names for each membership tier (canonical copy). */
 export const TIER_DISPLAY_NAMES: Record<MembershipTier, string> = {
-  basic: "Basic",
+  basic: "Collaborator",
   host: "Host",
   seller: "Seller",
-  organizer: "Organizer",
+  provider: "Provider",
+  organizer: "Organization",
   steward: "Steward",
+  worker: "Worker",
 } as const;
 
 /**

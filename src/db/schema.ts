@@ -141,8 +141,10 @@ export const membershipTierEnum = pgEnum('membership_tier', [
   'basic',
   'host',
   'seller',
+  'provider',
   'organizer',
   'steward',
+  'worker',
 ]);
 
 export const visibilityLevelEnum = pgEnum('visibility_level', [

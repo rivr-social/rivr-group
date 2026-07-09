@@ -60,9 +60,17 @@ vi.mock("@/lib/queries/agents", () => ({
 // Import AFTER mocks
 import { auth } from "@/auth";
 import { rateLimit } from "@/lib/rate-limit";
-import { hasEntitlement } from "@/lib/billing";
+import { getActiveSubscription } from "@/lib/billing";
 import { createOfferingResource, createMarketplaceListingResource } from "../offerings";
 import { dollarsToCents } from "../types";
+
+// The paid-offering gate now resolves through the real `hasCapability`
+// (@/lib/entitlements), which reads the agent's active subscription tier. Drive
+// `getActiveSubscription` (mocked above) so the REAL capability map decides:
+// Seller/Provider/Organization grant `sell_offerings`; Host does NOT.
+type ActiveSubscription = Awaited<ReturnType<typeof getActiveSubscription>>;
+const activeSubForTier = (tier: string): NonNullable<ActiveSubscription> =>
+  ({ membershipTier: tier, status: "active" } as unknown as NonNullable<ActiveSubscription>);
 
 // =============================================================================
 // Constants
@@ -211,11 +219,29 @@ describe("offering creation actions", () => {
         expect(result.error?.code).toBe("FORBIDDEN");
       }));
 
-    it("returns SUBSCRIPTION_REQUIRED for paid offerings without seller tier", () =>
+    it("returns SUBSCRIPTION_REQUIRED for paid offerings without any subscription", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
-        vi.mocked(hasEntitlement).mockResolvedValueOnce(false);
+        // No active subscription → no sell_offerings capability.
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(null);
+
+        const result = await createOfferingResource({
+          ...VALID_OFFERING_INPUT,
+          basePrice: 1000,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error?.code).toBe("SUBSCRIPTION_REQUIRED");
+        expect(result.error?.requiredTier).toBe("seller");
+      }));
+
+    it("rejects a Host for paid offerings (Host lacks sell_offerings)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        // Host has sell_tickets but NOT sell_offerings — must be rejected.
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(activeSubForTier("host"));
 
         const result = await createOfferingResource({
           ...VALID_OFFERING_INPUT,
@@ -329,11 +355,24 @@ describe("offering creation actions", () => {
         expect(result.error?.code).toBe("UNAUTHENTICATED");
       }));
 
-    it("returns SUBSCRIPTION_REQUIRED for paid listings without seller tier", () =>
+    it("returns SUBSCRIPTION_REQUIRED for paid listings without any subscription", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
-        vi.mocked(hasEntitlement).mockResolvedValueOnce(false);
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(null);
+
+        const result = await createMarketplaceListingResource(VALID_LISTING_INPUT);
+
+        expect(result.success).toBe(false);
+        expect(result.error?.code).toBe("SUBSCRIPTION_REQUIRED");
+        expect(result.error?.requiredTier).toBe("seller");
+      }));
+
+    it("rejects a Host for a paid listing (Host lacks sell_offerings)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(activeSubForTier("host"));
 
         const result = await createMarketplaceListingResource(VALID_LISTING_INPUT);
 
@@ -346,6 +385,19 @@ describe("offering creation actions", () => {
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(activeSubForTier("seller"));
+
+        const result = await createMarketplaceListingResource(VALID_LISTING_INPUT);
+
+        expect(result.success).toBe(true);
+        expect(result.resourceId).toBeDefined();
+      }));
+
+    it("allows a Provider to create a paid listing (Provider has sell_offerings)", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getActiveSubscription).mockResolvedValueOnce(activeSubForTier("provider"));
 
         const result = await createMarketplaceListingResource(VALID_LISTING_INPUT);
 

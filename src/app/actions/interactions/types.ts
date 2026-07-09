@@ -9,6 +9,13 @@ export type ActionResult = {
   /** True when the action created a pending-approval request rather than an
    * immediately-active grant (e.g. an approval-gated job claim). */
   pending?: boolean;
+  /** Structured failure detail (e.g. a capability/subscription gate), mirroring
+   * the resource-creation action result shape so the client can react uniformly. */
+  error?: {
+    code: string;
+    details?: string;
+    requiredTier?: string;
+  };
 };
 
 export type HiddenContentPreferences = {
