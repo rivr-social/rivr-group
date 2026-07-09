@@ -87,6 +87,19 @@ export type {
 } from './treasury-funds';
 
 export {
+  createShareClassAction,
+  setShareClassAllocationAction,
+  setMemberSharesAction,
+  getShareClassOverviewAction,
+  getMemberShareHoldingsAction,
+  getOrgMembersAction,
+  getOrgShareClasses,
+  getShareClassMemberShares,
+  SHARE_CLASS_GROUP_TYPE,
+  CANONICAL_SHARE_CLASSES,
+} from './share-classes';
+
+export {
   backfillConnectAccountsAction,
 } from './connect-backfill';
 export type {

@@ -257,6 +257,26 @@ wallet metadata) and stay dormant behind `STRIPE_TREASURY_ENABLED` /
 `treasury-funds-card.tsx` in the Treasury tab (admins). Tests:
 `wallet/__tests__/treasury-funds.test.ts` (pnpm test:db).
 
+## Share classes — Steward/Worker equity (2026-07-09)
+
+Hidden org-grade subgroups (`agents` row `type:'organization'`,
+`metadata.groupType:'share_class'`, `hidden:true`, `netBps`, `shareCount`,
+`tierKey`) that receive a **percentage of org NET** split among members **by
+shares held**. Members hold shares via an active `belong` ledger edge to the
+class carrying `metadata.shares` (interactionType `share-class-holding`).
+Actions: `actions/wallet/share-classes.ts` — `createShareClassAction`,
+`setShareClassAllocationAction` (netBps/shareCount, pie-validated),
+`setMemberSharesAction`, `getShareClassOverviewAction` (admin),
+`getMemberShareHoldingsAction` (member "Your Shares"), `getOrgMembersAction`.
+Net integration: `resolveGroupNetAllocation` now folds in
+`resolveShareClassAllocations` — each class resolved SEPARATELY (its own members
++ share weights) through the exact-sum `resolveNetAllocation`/`splitBpsByWeight`
+rail, merged with the authored tree by recipient. No enum/schema migration
+(metadata + existing ledger). UI: `share-classes-card.tsx` in the Treasury tab —
+rendered for ALL members (self "Your Shares" view) with admin authoring gated by
+`canManageStripe`. Steward/Worker are the canonical hidden classes; an org grants
+the tier by assigning a member shares in the org's Stewards/Workers class.
+
 ## Job cash pay + completion payout (2026-07-07)
 
 Jobs carry cash compensation alongside task points: `metadata.payKind`

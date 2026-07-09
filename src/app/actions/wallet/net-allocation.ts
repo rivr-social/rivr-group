@@ -16,8 +16,61 @@ import {
   type ResolvedNetAllocation,
 } from '@/lib/net-allocation';
 import { getSubtreeTaskPointsByMember } from '@/lib/queries/stakes';
+import { getOrgShareClasses, getShareClassMemberShares } from './share-classes';
 import { getCurrentUserId } from './helpers';
 import { isUuid } from './types';
+
+/**
+ * Resolves an org's hidden SHARE CLASSES into per-individual bps shares: each
+ * class's `netBps` is split among its members PROPORTIONAL TO THEIR SHARES,
+ * reusing the exact-sum {@link resolveNetAllocation} rail (one synthetic class
+ * rule per share class, so each class uses its OWN members' share weights). This
+ * is ADDITIVE to the authored net-allocation tree — a class with no members or
+ * zero net% contributes nothing.
+ */
+export async function resolveShareClassAllocations(
+  orgId: string,
+): Promise<ResolvedNetAllocation[]> {
+  if (!isUuid(orgId)) return [];
+  const classes = await getOrgShareClasses(orgId);
+  if (classes.length === 0) return [];
+
+  const out: ResolvedNetAllocation[] = [];
+  for (const cls of classes) {
+    if (cls.netBps <= 0) continue;
+    const holders = await getShareClassMemberShares(cls.id);
+    if (holders.length === 0) continue;
+    const classMembers = new Map<string, string[]>([[cls.id, holders.map((h) => h.memberId)]]);
+    const weights = new Map<string, number>(holders.map((h) => [h.memberId, h.shares]));
+    const resolved = resolveNetAllocation(
+      { rules: [{ targetType: 'class', targetId: cls.id, bps: cls.netBps }] },
+      classMembers,
+      weights,
+    );
+    out.push(...resolved);
+  }
+  return out;
+}
+
+/** Merges resolved allocations by recipient, summing bps (stable order). */
+function mergeResolvedAllocations(
+  ...groups: ResolvedNetAllocation[][]
+): ResolvedNetAllocation[] {
+  const order: string[] = [];
+  const byRecipient = new Map<string, ResolvedNetAllocation>();
+  for (const group of groups) {
+    for (const item of group) {
+      const existing = byRecipient.get(item.recipientId);
+      if (existing) {
+        existing.bps += item.bps;
+        continue;
+      }
+      order.push(item.recipientId);
+      byRecipient.set(item.recipientId, { ...item });
+    }
+  }
+  return order.map((id) => byRecipient.get(id)!);
+}
 
 interface NetAllocationResult {
   success: boolean;
@@ -170,5 +223,10 @@ export async function resolveGroupNetAllocation(
 
   const classMembers = await getGroupMembersByClass(groupId);
   const memberWeights = await getSubtreeTaskPointsByMember(groupId);
-  return resolveNetAllocation(tree, classMembers, memberWeights);
+  const authored = resolveNetAllocation(tree, classMembers, memberWeights);
+  // Hidden share classes (Steward/Worker equity) allocate ON TOP of the authored
+  // tree, split by member share holdings. The combined pie is bounded because
+  // share-class bps are validated against the remaining pie at authoring time.
+  const shareClass = await resolveShareClassAllocations(groupId);
+  return mergeResolvedAllocations(authored, shareClass);
 }

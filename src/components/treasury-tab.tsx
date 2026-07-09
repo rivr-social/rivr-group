@@ -30,6 +30,7 @@ import { getGroupWalletAction, getTransactionHistoryAction } from "@/app/actions
 import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
 import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
 import { TreasuryFundsCard } from "@/components/treasury-funds-card"
+import { ShareClassesCard } from "@/components/share-classes-card"
 import type { WalletBalance, WalletTransactionView } from "@/types"
 
 interface TreasuryTabProps {
@@ -187,6 +188,9 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
       {canManageStripe && <SubgroupBankingCard groupId={groupId} />}
 
       {canManageStripe && <TreasuryFundsCard groupId={groupId} />}
+
+      {/* Share classes: members see their own holdings; admins can author. */}
+      <ShareClassesCard groupId={groupId} canManage={canManageStripe} />
 
       {/* Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
