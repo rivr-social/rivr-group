@@ -22,6 +22,7 @@ import { GroupPlanCard } from "@/components/group-plan-card"
 import { collectGalleryItems, type GallerySourcePost, type GallerySourceResource } from "@/lib/gallery"
 import { createGovernanceProposalAction } from "@/app/actions/create-resources"
 import type { GroupWorkPeriodItem } from "@/app/actions/calendar-work"
+import { AddMemberCard } from "@/components/add-member-card"
 import { AboutDocumentsCard } from "@/components/about-documents-card"
 import { AgentGraph } from "@/components/agent-graph"
 import { FlowPassModal } from "@/components/flow-pass-modal"
@@ -745,6 +746,7 @@ export function GroupTabsClient({
         <div className="flex items-center justify-between mb-2">
           <p className="text-sm text-muted-foreground">{members.length} member{members.length !== 1 ? "s" : ""}</p>
         </div>
+        {isGroupAdmin && <AddMemberCard groupId={groupId} />}
         <PeopleFeed people={peopleUsers} />
         {isGroupAdmin && (
           <GroupAdminManager
