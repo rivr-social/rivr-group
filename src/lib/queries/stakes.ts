@@ -28,8 +28,15 @@ import { db } from "@/db";
 import { sql } from "drizzle-orm";
 import type { MemberStake } from "@/lib/types";
 
-/** Ledger metadata marker written by `toggleTaskCompletion` when points are awarded. */
+/** Ledger metadata marker written at attestation (`@/lib/work-completion`). */
 export const TASK_POINTS_INTERACTION = "task-points-earned";
+
+/** Coerces a raw-query timestamp (Date | string | null) to an ISO string. */
+function toIsoString(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  const parsed = new Date(String(value ?? ""));
+  return Number.isNaN(parsed.getTime()) ? new Date(0).toISOString() : parsed.toISOString();
+}
 
 /**
  * Resolves a group's agent-id subtree: the group itself plus every descendant
@@ -227,7 +234,11 @@ export async function getMemberStakesForGroup(groupId: string): Promise<MemberSt
         proposalsCreated: Number(row.proposals_created ?? 0),
         votesParticipated: Number(row.votes_participated ?? 0),
       },
-      joinedAt: (row.joined_at as Date).toISOString(),
+      // Raw db.execute returns timestamps as STRINGS (not Date) — calling
+      // .toISOString() directly threw a TypeError on every render, which the
+      // page's catch swallowed, so the Stake tab silently fell back to the
+      // equal-split placeholder forever. Coerce defensively.
+      joinedAt: toIsoString(row.joined_at),
       groupId,
     };
   });

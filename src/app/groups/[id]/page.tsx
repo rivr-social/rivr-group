@@ -316,7 +316,13 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     groupType: String(groupMeta.groupType ?? "organization"),
     memberCount: members.length || group.memberCount || 0,
   })
-  const serverMemberStakes = await getMemberStakesForGroup(id).catch(() => [])
+  const serverMemberStakes = await getMemberStakesForGroup(id).catch((error) => {
+    // Never fail the page over the stake panel — but never hide the failure
+    // either (a silent [] here masked a TypeError for weeks; the tab showed
+    // the equal-split placeholder instead of real points).
+    console.error("[group-page] getMemberStakesForGroup failed:", error)
+    return []
+  })
   const serverTotalStakes = serverMemberStakes.length > 0 ? calculateTotalStakes(serverMemberStakes) : 0
 
   // Admin-only calendar work sessions (getGroupWorkPeriods gates internally —
