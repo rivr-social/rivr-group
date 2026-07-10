@@ -16,7 +16,6 @@ import {
   type JobClaimScope,
 } from "@/lib/project-team";
 import { getCurrentUserId } from "./helpers";
-import { hasCapability } from "@/lib/entitlements-server";
 import type { ActionResult } from "./types";
 import { isUuid } from "./types";
 
@@ -105,21 +104,6 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
   );
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
-  // Claiming jobs (and earning their badges/points) requires the
-  // claim_badges_jobs capability — any paid membership tier grants it.
-  const canClaim = await hasCapability(userId, "claim_badges_jobs");
-  if (!canClaim) {
-    return {
-      success: false,
-      message: "Claiming jobs requires a Collaborator membership (or higher).",
-      error: {
-        code: "SUBSCRIPTION_REQUIRED",
-        details: "Subscribe to Collaborator to claim jobs and earn badges in projects.",
-        requiredTier: "basic",
-      },
-    };
-  }
-
   const [job] = await db
     .select({ id: resources.id, ownerId: resources.ownerId, metadata: resources.metadata })
     .from(resources)
@@ -142,8 +126,9 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
     typeof meta.maxAssignees === "number" ? meta.maxAssignees : null;
   const status = typeof meta.status === "string" ? meta.status : "open";
 
-  // Creator-selected claim gates (set at job creation).
-  const gateMembership = meta.claimGateMembership === true;
+  // Creator-selected claim gates (set at job creation). Membership is no
+  // longer creator-optional — it is the BASELINE (see evaluateJobClaimEligibility);
+  // the stored claimGateMembership flag on older jobs is subsumed by it.
   const gateAdmin = meta.claimGateAdmin === true;
   const approvalRequired = meta.claimApprovalRequired === true;
 
@@ -151,22 +136,16 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
     claimable: status !== "closed" && status !== "cancelled" && status !== "filled",
     requiredBadges,
     maxAssignees,
-    gateMembership,
     gateAdmin,
   };
 
-  // Only resolve membership/admin facts when a gate actually needs them.
-  let isMember = false;
-  let isAdmin = false;
-  if (gateMembership || gateAdmin) {
-    const { isGroupAdmin, isGroupMember } = await import("@/app/actions/group-admin");
-    [isAdmin, isMember] = await Promise.all([
-      isGroupAdmin(userId, groupId),
-      isGroupMember(userId, groupId),
-    ]);
-  }
-
-  const [heldBadgeIds, activeClaimCount, alreadyClaimed] = await Promise.all([
+  // Membership/admin are baseline facts now: every claim needs one of them.
+  // isGroupAdmin cascades from ancestor groups via pathIds, so a parent-group
+  // admin passes (and bypasses the badge gate) without a separate lookup.
+  const { isGroupAdmin, isGroupMember } = await import("@/app/actions/group-admin");
+  const [isAdmin, isMember, heldBadgeIds, activeClaimCount, alreadyClaimed] = await Promise.all([
+    isGroupAdmin(userId, groupId),
+    isGroupMember(userId, groupId),
     getUserBadgeIds(userId),
     countActiveJobClaims(jobId, userId),
     claimantHasActiveClaim(jobId, userId),
@@ -681,7 +660,10 @@ export async function getJobClaimPanelData(jobId: string): Promise<JobClaimPanel
 
   const meta = (job.metadata ?? {}) as Record<string, unknown>;
   const approvalRequired = meta.claimApprovalRequired === true;
-  const gateMembership = meta.claimGateMembership === true;
+  // Membership is the claim BASELINE (2026-07-10) — surfaced as always-on so
+  // the panel's "members only" note reflects the enforced rule regardless of
+  // what the job's stored legacy flag says.
+  const gateMembership = true;
   const gateAdmin = meta.claimGateAdmin === true;
   const maxAssignees = typeof meta.maxAssignees === "number" ? meta.maxAssignees : null;
   const status = typeof meta.status === "string" ? meta.status : "open";

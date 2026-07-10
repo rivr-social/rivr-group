@@ -2633,17 +2633,10 @@ export default function CreatePage() {
                             Require admin approval before a claim takes effect
                           </span>
                         </label>
-                        <label className="flex items-center gap-3 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4"
-                            checked={currentJob.claimGateMembership}
-                            onChange={(e) =>
-                              setCurrentJob((prev) => ({ ...prev, claimGateMembership: e.target.checked }))
-                            }
-                          />
-                          <span className="text-sm">Only group members can claim</span>
-                        </label>
+                        <p className="text-xs text-muted-foreground">
+                          Group membership is always required to claim (group and
+                          parent-group admins also qualify).
+                        </p>
                         <label className="flex items-center gap-3 cursor-pointer">
                           <input
                             type="checkbox"

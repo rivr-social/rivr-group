@@ -43,8 +43,11 @@ export interface JobClaimScope {
    */
   maxAssignees?: number | null;
   /**
-   * Creator-selected claim gate: require active membership in the owning group
-   * to claim. Default (undefined/false) = open to non-members.
+   * Legacy creator-selected membership gate. Membership is now a BASELINE
+   * requirement on sovereign instances (Cameron, 2026-07-10): every claimant
+   * must be an active member of the owning group OR hold group/ancestor admin
+   * authority. Retained so older jobs' stored flags still parse; it no longer
+   * loosens anything.
    */
   gateMembership?: boolean;
   /**
@@ -64,7 +67,11 @@ export interface JobClaimContext {
   alreadyClaimed: boolean;
   /** Whether the claimant holds an active membership in the owning group. */
   isMember?: boolean;
-  /** Whether the claimant holds group admin/moderator authority. */
+  /**
+   * Whether the claimant holds admin/moderator authority over the owning group
+   * OR any ancestor group (`isGroupAdmin` cascades via `pathIds`). Admin
+   * authority satisfies the membership baseline AND bypasses the badge gate.
+   */
   isAdmin?: boolean;
 }
 
@@ -97,7 +104,9 @@ export function hasOpenSlot(
 /**
  * Evaluates whether an agent may claim a job, applying the J2 gates in priority
  * order: the job must be claimable, the claimant must not already hold a claim,
- * must fit the badge scope, and a slot must be open.
+ * must be a member of the owning group (or a group/ancestor admin — the
+ * BASELINE gate, 2026-07-10), must fit the badge scope (admins bypass badges),
+ * and a slot must be open.
  *
  * Returning the FIRST failing reason keeps error messaging deterministic.
  *
@@ -115,13 +124,16 @@ export function evaluateJobClaimEligibility(
   if (context.alreadyClaimed) {
     return { eligible: false, reason: 'already_claimed' };
   }
-  if (scope.gateMembership && !context.isMember && !context.isAdmin) {
+  // Baseline: claiming is a member action. Group/ancestor admin authority
+  // satisfies it for cross-group stewardship.
+  if (!context.isMember && !context.isAdmin) {
     return { eligible: false, reason: 'not_a_member' };
   }
   if (scope.gateAdmin && !context.isAdmin) {
     return { eligible: false, reason: 'not_an_admin' };
   }
-  if (!meetsBadgeRequirement(scope.requiredBadges, context.heldBadgeIds)) {
+  // Badges gate members' fit scope; admin authority supersedes it.
+  if (!context.isAdmin && !meetsBadgeRequirement(scope.requiredBadges, context.heldBadgeIds)) {
     return { eligible: false, reason: 'missing_required_badge' };
   }
   if (!hasOpenSlot(scope.maxAssignees, context.activeClaimCount)) {
