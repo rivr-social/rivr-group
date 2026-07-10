@@ -34,6 +34,7 @@ import * as kg from "@/lib/kg/autobot-kg-client";
 import { authorizeKgScope } from "@/lib/federation/kg-scope-authz";
 import {
   AUTHORITY_GUARD_REASONS,
+  checkAuthorityForActor,
   checkAuthorityForSession,
 } from "@/lib/federation/authority-guard";
 import {
@@ -233,6 +234,39 @@ export async function POST(request: Request) {
     }
 
     const effectiveActorId = actorBinding.actorId;
+
+    // Unconditional peer-side authority enforcement (matches locale/region).
+    // The session guard above only fires when a remote-viewer session asserts a
+    // home; a peer-secret-bound mutation carries no homeBaseUrl and would
+    // otherwise skip revocation entirely. checkAuthorityForActor looks up the
+    // latest authority.revoke / successor.claim for the CLAIMED federated actor
+    // id (the id space the authority-event cache is keyed by — the raw
+    // body.actorId, NOT the entity-mapped local id) and rejects a
+    // revoked/superseded home before dispatch. Fails open on a DB read error; a
+    // no-revoke actor passes through untouched. body.actorId is guaranteed
+    // present here — bindAuthorizedFederationActor above already rejected it
+    // otherwise.
+    const claimedActorId = body.actorId ?? effectiveActorId;
+    const actorAuthority = await checkAuthorityForActor(claimedActorId);
+    if (!actorAuthority.allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            actorAuthority.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR
+              ? "Actor home has been superseded by a successor authority claim"
+              : "Actor home has been revoked",
+          errorCode:
+            actorAuthority.reason === AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR
+              ? "HOME_AUTHORITY_SUPERSEDED"
+              : "HOME_AUTHORITY_REVOKED",
+          ...(actorAuthority.newHomeBaseUrl
+            ? { newHomeBaseUrl: actorAuthority.newHomeBaseUrl }
+            : {}),
+        },
+        { status: 403 },
+      );
+    }
 
     return handleLegacyMutation(
       body,

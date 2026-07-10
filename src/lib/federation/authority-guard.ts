@@ -314,6 +314,74 @@ export async function persistAuthorityEvent(params: {
 }
 
 /**
+ * Check whether any latest-seen authority event for `agentId` has revoked
+ * this actor's home, without knowing which home was asserted.
+ *
+ * Some peer entry points (e.g. server-to-server mutation RPCs bound by a shared
+ * peer secret) receive an `actorId` without an accompanying `homeBaseUrl`. On
+ * those paths we still want to reject the caller if their previously-known home
+ * has been revoked and no successor claim has moved them elsewhere. This guard
+ * answers that by checking the latest `authority.revoke` row for the actor.
+ *
+ * If a `successor.authority.claim` with a newer `receivedAt` exists, the actor
+ * is treated as superseded (the new home url is surfaced for the caller to
+ * redirect/re-route).
+ *
+ * Always re-reads the DB (no TTL cache) because this path is sensitive, and
+ * fails OPEN on a read error so a transient DB blip cannot wedge federation.
+ *
+ * @param agentId - The asserted actor/agent id.
+ * @returns Guard result. If `allowed` is false, either `revoked` or
+ *   `superseded-by-successor` is set, and `newHomeBaseUrl` is included for the
+ *   superseded case.
+ */
+export async function checkAuthorityForActor(
+  agentId: string,
+): Promise<AuthorityGuardResult> {
+  if (!agentId) {
+    return { allowed: false, reason: AUTHORITY_GUARD_REASONS.REVOKED };
+  }
+
+  let revoke: AuthorityCacheRow | null = null;
+  let successor: AuthorityCacheRow | null = null;
+  try {
+    revoke = await findLatest(agentId, AUTHORITY_EVENT_TYPES.AUTHORITY_REVOKE);
+    successor = await findLatest(
+      agentId,
+      AUTHORITY_EVENT_TYPES.SUCCESSOR_AUTHORITY_CLAIM,
+    );
+  } catch (error) {
+    console.error(
+      "[authority-guard] Failed to read authority_event_cache; failing open:",
+      error instanceof Error ? error.message : error,
+    );
+    return { allowed: true };
+  }
+
+  if (!revoke) {
+    // No revoke at all: a successor alone does not block without an old-home
+    // assertion. Treat as allowed on this low-information path.
+    return { allowed: true };
+  }
+
+  const revokedAt = revoke.receivedAt.getTime();
+  const successorAt = successor?.receivedAt.getTime() ?? 0;
+  const successorNew = successor?.successorHomeBaseUrl
+    ? normalizeBaseUrl(successor.successorHomeBaseUrl)
+    : null;
+
+  if (successor && successorAt > revokedAt && successorNew) {
+    return {
+      allowed: false,
+      reason: AUTHORITY_GUARD_REASONS.SUPERSEDED_BY_SUCCESSOR,
+      newHomeBaseUrl: successorNew,
+    };
+  }
+
+  return { allowed: false, reason: AUTHORITY_GUARD_REASONS.REVOKED };
+}
+
+/**
  * Exported list of authority event types recognized by the import pipeline.
  * Re-exported from `@/db/schema` for convenience.
  */
