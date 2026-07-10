@@ -45,6 +45,8 @@ import { buildGroupPageMetadata } from "@/lib/object-metadata"
 import { buildProjectStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { ProjectActions } from "@/components/project-actions"
 import { ProjectJobsTab } from "@/components/project-jobs-tab"
+import { ProjectRolesCard } from "@/components/project-roles-card"
+import { getProjectRolesData } from "@/app/actions/project-roles"
 import { StockTab } from "@/components/stock-tab"
 import { getResourcesByProjectId } from "@/lib/queries/resources"
 import { extractStockNeeds, toStockInventory } from "@/lib/stock"
@@ -385,6 +387,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // Resolve current user ID (unified: local or federated remote-viewer,
   // normalized to a local agent id) and admin status for the jobs tab.
   const currentUserId = await getCurrentUserId()
+  // Lead/QA roles + eligible option lists (server-computed authority).
+  const projectRoles = await getProjectRolesData(project.id).catch(() => null)
   const projectMeta2 = (agent.metadata ?? {}) as Record<string, unknown>
   const projectGroupId = typeof projectMeta2.groupId === "string" ? projectMeta2.groupId : null
   const isAdmin = currentUserId
@@ -725,7 +729,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
         {/* ── Team Tab ──────────────────────────────────────────────────── */}
         <TabsContent value="team" className="space-y-4 mt-4">
-          {/* Project lead */}
+          {/* Lead + QA roles (claim → attest rail authority) */}
+          {projectRoles ? <ProjectRolesCard roles={projectRoles} /> : null}
+          {/* Project owner */}
           {owner ? (
             <Card>
               <CardHeader>

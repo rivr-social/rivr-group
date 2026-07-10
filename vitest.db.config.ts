@@ -17,6 +17,7 @@ export default defineConfig({
       "src/lib/__tests__/ai.test.ts",
       "src/lib/__tests__/permissions.test.ts",
       "src/lib/__tests__/referral-splits.test.ts",
+      "src/lib/__tests__/work-completion.test.ts",
     ],
     exclude: ["node_modules", "tests/**"],
     globalSetup: "./src/test/setup.ts",

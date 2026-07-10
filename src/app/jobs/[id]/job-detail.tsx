@@ -34,9 +34,12 @@ interface JobDetailClientProps {
   stockCanManage: boolean
   /** Server-computed: viewer may manage the job (owner or group write access). */
   canManage: boolean
+  /** Server-computed: viewer may attest task completions (group authority OR
+   *  the project lead/QA — the claim → attest rail). */
+  canAttest: boolean
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -219,7 +222,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
         </TabsContent>
 
         <TabsContent value="tasks" className="mt-6">
-          <JobTasksTab job={job} currentUserId={effectiveUserId} userBadgeIds={userBadgeIds} onTaskUpdate={(updatedJob) => setJobOverride(updatedJob)} />
+          <JobTasksTab job={job} currentUserId={effectiveUserId} userBadgeIds={userBadgeIds} canAttest={canAttest} onTaskUpdate={(updatedJob) => setJobOverride(updatedJob)} />
         </TabsContent>
 
         <TabsContent value="timer" className="mt-6">

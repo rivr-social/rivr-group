@@ -53,6 +53,21 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   // Same authority set gates the admin panel (edit / add task / mark done).
   const canManage = stockCanManage
 
+  // Attestation authority (claim → attest rail): group authority PLUS the
+  // project lead / QA resolved from the job's project. Server-computed — the
+  // client user-context cannot see federated remote-viewer sessions.
+  let canAttest = canManage
+  if (!canAttest && currentUserId && job?.groupId) {
+    const { resolveProjectAuthority, canAttestWork } = await import("@/lib/work-completion")
+    const jobMeta = (jobResource?.metadata ?? {}) as Record<string, unknown>
+    const authority = await resolveProjectAuthority({
+      targetType: "job",
+      jobId,
+      projectId: typeof jobMeta.projectId === "string" ? jobMeta.projectId : null,
+    })
+    canAttest = await canAttestWork(currentUserId, job.groupId, authority)
+  }
+
   return (
     <JobDetailClient
       jobId={jobId}
@@ -66,6 +81,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       stockNeeds={stockNeeds}
       stockCanManage={stockCanManage}
       canManage={canManage}
+      canAttest={canAttest}
     />
   )
 }
