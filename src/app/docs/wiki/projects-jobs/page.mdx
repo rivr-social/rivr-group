@@ -50,6 +50,14 @@ project's QA before stake moves.
 - **Time bounds** — jobs and tasks carry a work window (start → deadline) and
   a **max-hours budget**; hourly pay never exceeds the job's budget (overage
   stays visible on the timesheet but doesn't pay).
+- **Complete a project (settles the treasury)** — a group admin or the
+  project lead completes the project; expenses are already first-class
+  debits, so the remaining project-wallet balance — the **net** — sweeps
+  into the **owning group's treasury** automatically (idempotent; run an
+  explicit net distribution first when the net should split beyond the
+  owning group). Every subgroup has a treasury to receive it. Also available
+  as the `rivr.projects.complete` and `rivr.treasury.ensure_subgroup_wallets`
+  MCP tools.
 - **Update job status** — progress a job through its lifecycle.
 - **Link to project** — jobs and events can link to a parent project.
 - **Calendar** — your completed work periods and claimed jobs' windows appear

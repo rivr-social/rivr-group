@@ -40,6 +40,7 @@ import {
 import { addJobToProjectAction, addTaskToJobAction } from "@/app/actions/job-management";
 import { inviteGroupMemberAction } from "@/app/actions/group-members";
 import { markJobDoneAction } from "@/app/actions/job-completion";
+import { completeProjectAction, ensureSubgroupTreasuriesAction } from "@/app/actions/project-completion";
 import { backfillConnectAccountsAction } from "@/app/actions/wallet/connect-backfill";
 import { getResourcesByOwnerAndType, getResourcesByOwnerSubtreeAndType, getTaskCountsByJob } from "@/lib/queries/resources";
 
@@ -1047,6 +1048,35 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         deadline: optionalIsoDate(args, "deadline") ?? null,
         maxHours: num(args.maxHours) ?? null,
       }),
+  },
+  {
+    name: "rivr.projects.complete",
+    description:
+      "Complete a project and settle its treasury (group admin or project lead). Expenses are already " +
+      "first-class debits, so the remaining project-wallet balance — the net — SWEEPS into the owning " +
+      "group's treasury. Idempotent: a settled completion never moves money again. Run an explicit " +
+      "net-distribution BEFORE completing when the net should split beyond the owning group.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["projectId"],
+      properties: { projectId: { type: "string", description: "The project resource id to complete." } },
+    },
+    run: (args) => completeProjectAction(requireStr(args, "projectId")),
+  },
+  {
+    name: "rivr.treasury.ensure_subgroup_wallets",
+    description:
+      "Guarantee a treasury (settlement wallet) for the group AND every descendant subgroup " +
+      "(admin authority). Idempotent — reports created vs already-existing treasuries.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        groupId: { type: "string", description: "Root group. Defaults to the primary/acting group." },
+      },
+    },
+    run: (args, ctx) => ensureSubgroupTreasuriesAction(str(args.groupId) ?? ctx.groupId),
   },
   {
     name: "rivr.jobs.mark_done",

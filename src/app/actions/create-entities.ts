@@ -414,6 +414,23 @@ export async function createEntitiesFromScaffold(
     revalidatePath("/explore");
     revalidatePath("/create");
 
+    // Every subgroup gets a TREASURY at birth (2026-07-10): newly created
+    // group-like agents receive their settlement wallet up front instead of
+    // lazily on first money movement, so the Treasury tab is live immediately
+    // and project-completion sweeps always have a destination. Fire-and-forget
+    // — a wallet-provision hiccup must not fail entity creation (the wallet
+    // still creates lazily on first use).
+    for (const entry of result) {
+      const entity = payload.entities.find((e) => e.tempId === entry.tempId);
+      if (!entity || entity.isExisting) continue;
+      if (resolveTargetTable(entity) !== "agents") continue;
+      if (entity.type === "person") continue;
+      const { getSettlementWalletForAgent } = await import("@/lib/wallet");
+      getSettlementWalletForAgent(entry.dbId).catch((error) =>
+        console.error(`[create-entities] treasury provision failed for ${entry.dbId}:`, error),
+      );
+    }
+
     // Fire-and-forget: embed newly created entities for semantic search.
     for (const entry of result) {
       const entity = payload.entities.find((e) => e.tempId === entry.tempId);

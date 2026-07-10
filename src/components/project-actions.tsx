@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { updateResource, deleteResource } from "@/app/actions/create-resources"
+import { completeProjectAction } from "@/app/actions/project-completion"
 import { addJobToProjectAction } from "@/app/actions/job-management"
 import {
   Select,
@@ -81,6 +82,8 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isCompleteOpen, setIsCompleteOpen] = useState(false)
+  const [isCompleting, setIsCompleting] = useState(false)
   const [draftName, setDraftName] = useState(projectName)
   const [draftDescription, setDraftDescription] = useState(projectDescription ?? "")
   const [draftStart, setDraftStart] = useState(timeframeStart ?? "")
@@ -160,6 +163,28 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
       })
     } finally {
       setIsUpdating(false)
+    }
+  }
+
+  /**
+   * Completes the project: expenses are already debited, so the remaining
+   * project-wallet balance sweeps into the owning group's treasury.
+   */
+  const handleCompleteProject = async () => {
+    setIsCompleting(true)
+    try {
+      const result = await completeProjectAction(projectId)
+      if (!result.success) {
+        toast({ title: "Failed to complete project", description: result.message, variant: "destructive" })
+        return
+      }
+      setIsCompleteOpen(false)
+      toast({ title: "Project completed", description: result.message })
+      router.refresh()
+    } catch {
+      toast({ title: "Failed to complete project", description: "An unexpected error occurred.", variant: "destructive" })
+    } finally {
+      setIsCompleting(false)
     }
   }
 
@@ -422,6 +447,31 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={isCompleteOpen} onOpenChange={setIsCompleteOpen}>
+        <AlertDialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            Complete
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Complete this project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The project is marked completed and its treasury settles: expenses are
+              already debited, so the remaining balance — the net — sweeps into the
+              owning group&apos;s treasury. Run a net distribution first if this
+              project&apos;s net should split beyond the owning group.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCompleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleCompleteProject()} disabled={isCompleting}>
+              {isCompleting ? "Completing..." : "Complete & settle"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
         <AlertDialogTrigger asChild>
