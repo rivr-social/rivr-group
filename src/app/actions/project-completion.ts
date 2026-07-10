@@ -228,8 +228,11 @@ export async function ensureSubgroupTreasuriesAction(groupId: string): Promise<E
   if (!userId) return { success: false, message: "You must be logged in." };
   if (!isUuid(groupId)) return { success: false, message: "Invalid group id." };
 
-  const { isGroupAdmin } = await import("@/app/actions/group-admin");
-  if (!(await isGroupAdmin(userId, groupId))) {
+  // hasGroupWriteAccess (manage authority) matches the other admin tools —
+  // it also self-authorizes the acting group agent on the MCP act-as rail,
+  // which plain isGroupAdmin does not.
+  const { hasGroupWriteAccess } = await import("@/app/actions/resource-creation/helpers");
+  if (userId !== groupId && !(await hasGroupWriteAccess(userId, groupId))) {
     return { success: false, message: "Only a group admin can provision subgroup treasuries." };
   }
 
