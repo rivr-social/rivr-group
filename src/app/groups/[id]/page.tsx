@@ -21,6 +21,7 @@ import { AgentPageShell } from "@/components/agent-page-shell"
 import { Button } from "@/components/ui/button"
 import { GroupJoinControl } from "@/components/group-join-control"
 import { GroupTabsClient } from "@/components/group-tabs-client"
+import { GroupInviteBanner } from "@/components/group-invite-banner"
 import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
@@ -330,6 +331,14 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const { getGroupWorkPeriods } = await import("@/app/actions/calendar-work")
   const groupWorkPeriods = await getGroupWorkPeriods(id).catch(() => [])
 
+  // Membership invitations: pending list for admins (server-gated) + the
+  // VIEWER's own pending invite, which renders the accept/decline banner.
+  const { listGroupInvites, getMyPendingGroupInvite } = await import("@/app/actions/group-members")
+  const [pendingInvites, myPendingInvite] = await Promise.all([
+    listGroupInvites(id).catch(() => []),
+    getMyPendingGroupInvite(id).catch(() => null),
+  ])
+
   // Job-contribution stakeholders (J2 corrected model): contributors recorded on
   // job completion surface in the Stake tab. Resolve their display names.
   const recordedContributionRows = await getRecordedContributions({ groupId: id }).catch(() => [])
@@ -414,6 +423,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
       header={header}
       structuredDataJson={structuredData ? serializeJsonLd(structuredData) : null}
     >
+      {myPendingInvite && <GroupInviteBanner invite={myPendingInvite} />}
       <GroupTabsClient
         groupId={group.id}
         groupName={group.name}
@@ -475,6 +485,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         projectResources={projectResources}
         jobResources={jobOnlyResources}
         groupWorkPeriods={groupWorkPeriods}
+        pendingInvites={pendingInvites}
         treasuryActivity={treasuryActivity}
         publishActivity={publishActivity}
         resourceCount={detail.resources.length}

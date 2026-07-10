@@ -22,7 +22,8 @@ import { GroupPlanCard } from "@/components/group-plan-card"
 import { collectGalleryItems, type GallerySourcePost, type GallerySourceResource } from "@/lib/gallery"
 import { createGovernanceProposalAction } from "@/app/actions/create-resources"
 import type { GroupWorkPeriodItem } from "@/app/actions/calendar-work"
-import { AddMemberCard } from "@/components/add-member-card"
+import { InviteMemberCard } from "@/components/invite-member-card"
+import type { GroupInvite } from "@/app/actions/group-members"
 import { AboutDocumentsCard } from "@/components/about-documents-card"
 import { AgentGraph } from "@/components/agent-graph"
 import { FlowPassModal } from "@/components/flow-pass-modal"
@@ -213,6 +214,8 @@ export interface GroupTabsClientProps {
   /** Admin-only completed work sessions for the calendar (server-gated: []
    *  for non-admin viewers). */
   groupWorkPeriods?: GroupWorkPeriodItem[]
+  /** Admin-only pending membership invitations (server-gated: [] otherwise). */
+  pendingInvites?: GroupInvite[]
   treasuryActivity: ActivityEntry[]
   publishActivity: ActivityEntry[]
   resourceCount: number
@@ -262,6 +265,7 @@ export function GroupTabsClient({
   projectResources,
   jobResources,
   groupWorkPeriods = [],
+  pendingInvites = [],
   treasuryActivity,
   publishActivity,
   resourceCount,
@@ -746,7 +750,7 @@ export function GroupTabsClient({
         <div className="flex items-center justify-between mb-2">
           <p className="text-sm text-muted-foreground">{members.length} member{members.length !== 1 ? "s" : ""}</p>
         </div>
-        {isGroupAdmin && <AddMemberCard groupId={groupId} />}
+        {isGroupAdmin && <InviteMemberCard groupId={groupId} pendingInvites={pendingInvites} />}
         <PeopleFeed people={peopleUsers} />
         {isGroupAdmin && (
           <GroupAdminManager

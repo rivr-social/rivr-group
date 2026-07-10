@@ -22,11 +22,12 @@ families are related group-like containers.
 
 - **Join / leave** — toggle membership on a group or ring.
 - **Request to join / approve** — request-gated groups; admins approve or deny.
-- **Add a member (admin)** — admins add any person directly from the Members
-  tab (search by name/username, choose member or admin role). Idempotent —
-  adding an existing member updates their role. Also available to agents as
-  the `rivr.groups.add_member` MCP tool. Covers people who signed up but never
-  completed a join.
+- **Invite a member (admin)** — admins invite any person from the Members tab
+  (search by name/username, choose the member or admin role). **Membership
+  starts only when the person accepts** — the invite appears in their
+  notifications and as an accept/decline banner on the group page; admins see
+  and can cancel pending invitations. Also available to agents as the
+  `rivr.groups.invite_member` MCP tool.
 - **Browse tabs** — feed, members, events, projects, docs, and org tabs for
   org-typed groups and their descendant subgroups.
 - **Lineage breadcrumb** — navigate up the subgroup → parent → org chain.

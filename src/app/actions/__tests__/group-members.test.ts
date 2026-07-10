@@ -1,7 +1,8 @@
 /**
- * DB tests for admin member management (`@/app/actions/group-members`):
- * authority gating, membership-edge creation, idempotent role updates,
- * adminIds maintenance, and the addable-people search exclusions.
+ * DB tests for group membership INVITATIONS (`@/app/actions/group-members`):
+ * consent model — inviting never creates membership; only the invitee's
+ * accept does. Covers authority gating, invite idempotency, accept (edge +
+ * adminIds), decline, cancel, invitee-only response, and search exclusions.
  *
  * Run with `pnpm test:db`.
  */
@@ -47,7 +48,7 @@ vi.mock("@/lib/federation/remote-write", () => ({
   }),
 }));
 
-// The unified session resolver — pointed at the acting admin per test.
+// The unified session resolver — pointed at the acting user per step.
 const currentUserId = vi.fn<() => Promise<string | null>>();
 vi.mock("@/app/actions/interactions/helpers", async () => {
   const actual = await vi.importActual<typeof import("@/app/actions/interactions/helpers")>(
@@ -56,21 +57,28 @@ vi.mock("@/app/actions/interactions/helpers", async () => {
   return { ...actual, getCurrentUserId: () => currentUserId() };
 });
 
-import { addGroupMemberAction, searchAddableAgents } from "@/app/actions/group-members";
+import {
+  inviteGroupMemberAction,
+  respondToGroupInviteAction,
+  cancelGroupInviteAction,
+  listGroupInvites,
+  getMyPendingGroupInvite,
+  searchAddableAgents,
+} from "@/app/actions/group-members";
 
 beforeEach(() => {
   currentUserId.mockReset();
 });
 
 async function scaffold(db: Parameters<Parameters<typeof withTestTransaction>[0]>[0]) {
-  const group = await createTestGroup(db, { name: "AM Test Group" });
-  const admin = await createTestAgent(db, { name: "AM Admin", type: "person" });
+  const group = await createTestGroup(db, { name: "INV Test Group" });
+  const admin = await createTestAgent(db, { name: "INV Admin", type: "person" });
   await createMembership(db, admin.id, group.id, "admin");
-  const person = await createTestAgent(db, { name: "AM Newcomer", type: "person" });
+  const person = await createTestAgent(db, { name: "INV Newcomer", type: "person" });
   return { group, admin, person };
 }
 
-async function activeEdge(
+async function activeMembership(
   db: { execute: (q: unknown) => Promise<unknown> },
   agentId: string,
   groupId: string,
@@ -84,41 +92,74 @@ async function activeEdge(
   return rows[0] ?? null;
 }
 
-describe("addGroupMemberAction", () => {
+describe("inviteGroupMemberAction", () => {
   it("rejects non-admin callers", () =>
     withTestTransaction(async (db) => {
       const { group, person } = await scaffold(db);
-      const outsider = await createTestAgent(db, { name: "AM Outsider", type: "person" });
+      const outsider = await createTestAgent(db, { name: "INV Outsider", type: "person" });
       currentUserId.mockResolvedValue(outsider.id);
 
-      const result = await addGroupMemberAction(group.id, person.id, "member");
+      const result = await inviteGroupMemberAction(group.id, person.id, "member");
       expect(result.success).toBe(false);
-      expect(await activeEdge(db, person.id, group.id)).toBeNull();
     }));
 
-  it("adds a member edge with the standard membership shape", () =>
+  it("creates a PENDING invite — and NO membership", () =>
     withTestTransaction(async (db) => {
       const { group, admin, person } = await scaffold(db);
       currentUserId.mockResolvedValue(admin.id);
 
-      const result = await addGroupMemberAction(group.id, person.id, "member");
+      const result = await inviteGroupMemberAction(group.id, person.id, "member");
       expect(result.success).toBe(true);
-      const edge = await activeEdge(db, person.id, group.id);
-      expect(edge?.role).toBe("member");
-      expect(Number(edge?.n)).toBe(1);
+
+      // Consent model: inviting must never create the membership edge.
+      expect(await activeMembership(db, person.id, group.id)).toBeNull();
+
+      const invites = await listGroupInvites(group.id);
+      expect(invites).toHaveLength(1);
+      expect(invites[0].inviteeId).toBe(person.id);
+      expect(invites[0].role).toBe("member");
     }));
 
-  it("is idempotent and role-updates in place (member → admin, incl. adminIds)", () =>
+  it("is idempotent — re-inviting refreshes the pending invite (role update)", () =>
     withTestTransaction(async (db) => {
       const { group, admin, person } = await scaffold(db);
       currentUserId.mockResolvedValue(admin.id);
 
-      await addGroupMemberAction(group.id, person.id, "member");
-      await addGroupMemberAction(group.id, person.id, "member"); // no dup
-      const promoted = await addGroupMemberAction(group.id, person.id, "admin");
-      expect(promoted.success).toBe(true);
+      await inviteGroupMemberAction(group.id, person.id, "member");
+      await inviteGroupMemberAction(group.id, person.id, "admin");
 
-      const edge = await activeEdge(db, person.id, group.id);
+      const invites = await listGroupInvites(group.id);
+      expect(invites).toHaveLength(1);
+      expect(invites[0].role).toBe("admin");
+    }));
+
+  it("rejects inviting an existing member and non-person targets", () =>
+    withTestTransaction(async (db) => {
+      const { group, admin } = await scaffold(db);
+      currentUserId.mockResolvedValue(admin.id);
+
+      const already = await inviteGroupMemberAction(group.id, admin.id, "member");
+      expect(already.success).toBe(false);
+
+      const otherGroup = await createTestGroup(db, { name: "INV Other Group" });
+      const notPerson = await inviteGroupMemberAction(group.id, otherGroup.id, "member");
+      expect(notPerson.success).toBe(false);
+    }));
+});
+
+describe("respondToGroupInviteAction", () => {
+  it("accept creates the membership with the invited role (+ adminIds for admin)", () =>
+    withTestTransaction(async (db) => {
+      const { group, admin, person } = await scaffold(db);
+      currentUserId.mockResolvedValue(admin.id);
+      await inviteGroupMemberAction(group.id, person.id, "admin");
+      const [invite] = await listGroupInvites(group.id);
+
+      currentUserId.mockResolvedValue(person.id);
+      const result = await respondToGroupInviteAction(invite.id, true);
+      expect(result.success).toBe(true);
+
+      const edge = await activeMembership(db, person.id, group.id);
       expect(edge?.role).toBe("admin");
       expect(Number(edge?.n)).toBe(1);
 
@@ -127,16 +168,67 @@ describe("addGroupMemberAction", () => {
         FROM agents WHERE id = ${group.id}::uuid
       `)) as Array<{ listed: boolean }>;
       expect(adminIds[0]?.listed).toBe(true);
+
+      // Resolved — no longer pending anywhere.
+      currentUserId.mockResolvedValue(admin.id);
+      expect(await listGroupInvites(group.id)).toHaveLength(0);
     }));
 
-  it("rejects non-person targets", () =>
+  it("decline resolves the invite WITHOUT membership", () =>
     withTestTransaction(async (db) => {
-      const { group, admin } = await scaffold(db);
-      const otherGroup = await createTestGroup(db, { name: "AM Other Group" });
+      const { group, admin, person } = await scaffold(db);
       currentUserId.mockResolvedValue(admin.id);
+      await inviteGroupMemberAction(group.id, person.id, "member");
+      const [invite] = await listGroupInvites(group.id);
 
-      const result = await addGroupMemberAction(group.id, otherGroup.id, "member");
+      currentUserId.mockResolvedValue(person.id);
+      const result = await respondToGroupInviteAction(invite.id, false);
+      expect(result.success).toBe(true);
+      expect(await activeMembership(db, person.id, group.id)).toBeNull();
+
+      // A resolved invite cannot be responded to again.
+      const again = await respondToGroupInviteAction(invite.id, true);
+      expect(again.success).toBe(false);
+    }));
+
+  it("only the invitee may respond", () =>
+    withTestTransaction(async (db) => {
+      const { group, admin, person } = await scaffold(db);
+      currentUserId.mockResolvedValue(admin.id);
+      await inviteGroupMemberAction(group.id, person.id, "member");
+      const [invite] = await listGroupInvites(group.id);
+
+      const impostor = await createTestAgent(db, { name: "INV Impostor", type: "person" });
+      currentUserId.mockResolvedValue(impostor.id);
+      const result = await respondToGroupInviteAction(invite.id, true);
       expect(result.success).toBe(false);
+      expect(await activeMembership(db, person.id, group.id)).toBeNull();
+    }));
+});
+
+describe("cancelGroupInviteAction + getMyPendingGroupInvite", () => {
+  it("admin cancels a pending invite; invitee banner reflects state", () =>
+    withTestTransaction(async (db) => {
+      const { group, admin, person } = await scaffold(db);
+      currentUserId.mockResolvedValue(admin.id);
+      await inviteGroupMemberAction(group.id, person.id, "member");
+      const [invite] = await listGroupInvites(group.id);
+
+      currentUserId.mockResolvedValue(person.id);
+      const mine = await getMyPendingGroupInvite(group.id);
+      expect(mine?.id).toBe(invite.id);
+      expect(mine?.inviterName).toBe("INV Admin");
+
+      currentUserId.mockResolvedValue(admin.id);
+      const cancelled = await cancelGroupInviteAction(invite.id);
+      expect(cancelled.success).toBe(true);
+      expect(await listGroupInvites(group.id)).toHaveLength(0);
+
+      currentUserId.mockResolvedValue(person.id);
+      expect(await getMyPendingGroupInvite(group.id)).toBeNull();
+      // Cancelled invites cannot be accepted.
+      const late = await respondToGroupInviteAction(invite.id, true);
+      expect(late.success).toBe(false);
     }));
 });
 
@@ -146,13 +238,12 @@ describe("searchAddableAgents", () => {
       const { group, admin, person } = await scaffold(db);
       currentUserId.mockResolvedValue(admin.id);
 
-      const found = await searchAddableAgents(group.id, "AM Newcomer");
+      const found = await searchAddableAgents(group.id, "INV Newcomer");
       expect(found.some((a) => a.id === person.id)).toBe(true);
-      // The admin is already a member — never offered.
-      const self = await searchAddableAgents(group.id, "AM Admin");
+      const self = await searchAddableAgents(group.id, "INV Admin");
       expect(self.some((a) => a.id === admin.id)).toBe(false);
 
-      currentUserId.mockResolvedValue(person.id); // not an admin
-      expect(await searchAddableAgents(group.id, "AM")).toEqual([]);
+      currentUserId.mockResolvedValue(person.id);
+      expect(await searchAddableAgents(group.id, "INV")).toEqual([]);
     }));
 });

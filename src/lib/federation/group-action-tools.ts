@@ -38,7 +38,7 @@ import {
   recordJobContributionAction,
 } from "@/app/actions/interactions/project-team";
 import { addJobToProjectAction, addTaskToJobAction } from "@/app/actions/job-management";
-import { addGroupMemberAction } from "@/app/actions/group-members";
+import { inviteGroupMemberAction } from "@/app/actions/group-members";
 import { markJobDoneAction } from "@/app/actions/job-completion";
 import { backfillConnectAccountsAction } from "@/app/actions/wallet/connect-backfill";
 import { getResourcesByOwnerAndType, getResourcesByOwnerSubtreeAndType, getTaskCountsByJob } from "@/lib/queries/resources";
@@ -840,11 +840,12 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
     run: (args) => deleteGroupResource(requireStr(args, "groupId")),
   },
   {
-    name: "rivr.groups.add_member",
+    name: "rivr.groups.invite_member",
     description:
-      "Add a person to a group as member or admin (admin authority required). Idempotent: an " +
-      "existing membership is role-updated in place. Works for remote-homed people via their " +
-      "projected local agent — the fix for signed-up-but-never-joined invisibility.",
+      "INVITE a person to a group as member or admin (admin authority required). Consent model: " +
+      "membership starts only when the person ACCEPTS — groups can never add someone directly. " +
+      "Idempotent: an existing pending invitation is refreshed, current members are rejected. " +
+      "Works for remote-homed people via their projected local agent.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -852,14 +853,14 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       properties: {
         groupId: {
           type: "string",
-          description: "Group/subgroup to add the member to. Defaults to the primary/acting group.",
+          description: "Group/subgroup to invite into. Defaults to the primary/acting group.",
         },
-        agentId: { type: "string", description: "The person agent id to add." },
-        role: { type: "string", enum: ["member", "admin"], description: "Role to grant (default member)." },
+        agentId: { type: "string", description: "The person agent id to invite." },
+        role: { type: "string", enum: ["member", "admin"], description: "Role offered (default member)." },
       },
     },
     run: (args, ctx) =>
-      addGroupMemberAction(
+      inviteGroupMemberAction(
         str(args.groupId) ?? ctx.groupId,
         requireStr(args, "agentId"),
         args.role === "admin" ? "admin" : "member",
