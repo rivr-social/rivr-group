@@ -18,6 +18,7 @@
 import { getCurrentUserId } from "@/app/actions/interactions/helpers"
 import { getJobById, getShifts, getProjects, getUserBadgeIds, getResource, getResourcesByJobId } from "@/lib/queries/resources"
 import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
+import { getJobShareData } from "@/app/actions/job-peer-allocation"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
 import { extractStockNeeds, toStockInventory } from "@/lib/stock"
 import { JobDetailClient } from "./job-detail"
@@ -31,7 +32,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
 
   // Fetch the job DIRECTLY by id (type job OR legacy shift). Resolving via
   // getShifts() alone capped at 100 rows and 404'd every older job.
-  const [job, jobShifts, projects, userBadgeIds, claimPanel, jobResource, stockResources] = await Promise.all([
+  const [job, jobShifts, projects, userBadgeIds, claimPanel, jobResource, stockResources, share] = await Promise.all([
     getJobById(jobId),
     getShifts(),
     getProjects(),
@@ -39,6 +40,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
     getJobClaimPanelData(jobId),
     getResource(jobId).catch(() => null),
     getResourcesByJobId(jobId).catch(() => []),
+    getJobShareData(jobId).catch(() => null),
   ])
 
   // ── Stock tab data ── inventory linked to this job (metadata.jobId), the
@@ -82,6 +84,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       stockCanManage={stockCanManage}
       canManage={canManage}
       canAttest={canAttest}
+      share={share}
     />
   )
 }

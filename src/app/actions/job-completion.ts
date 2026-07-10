@@ -513,6 +513,34 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
     await recordJobContributionAction({ jobId, contributorId: assigneeId }).catch(() => {});
   }
 
+  // Job-level point pool (task-less jobs): split by peer allocation (each
+  // assignee's sliders over the others, equal split until inputs exist) and
+  // award as attested stake points — mark-done IS the attestation
+  // (idempotent: one active points edge per assignee+job).
+  const jobPoints =
+    typeof meta.points === "number" && Number.isFinite(meta.points) && meta.points > 0 ? meta.points : null;
+  if (jobPoints !== null && assignees.length > 0) {
+    const { allocatePointsByShares } = await import("@/lib/peer-allocation");
+    const { attestWork } = await import("@/lib/work-completion");
+    const rawInputs = meta.pointShareInputs;
+    const allocation = allocatePointsByShares(
+      jobPoints,
+      assignees,
+      rawInputs && typeof rawInputs === "object" ? (rawInputs as Record<string, Record<string, number>>) : null,
+    );
+    for (const assigneeId of assignees) {
+      const points = allocation.get(assigneeId) ?? 0;
+      if (points <= 0) continue;
+      await attestWork({
+        verifierId: userId,
+        workerId: assigneeId,
+        ref: { targetId: jobId, targetType: "job", ownerId: job.ownerId, jobId, projectId },
+        points,
+        outcome: "verified",
+      }).catch(() => {});
+    }
+  }
+
   emitDomainEvent({
     eventType: EVENT_TYPES.RESOURCE_UPDATED,
     entityType: "resource",

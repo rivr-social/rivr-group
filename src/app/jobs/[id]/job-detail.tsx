@@ -14,9 +14,11 @@ import { JobAdminPanel } from "@/components/job-admin-panel"
 import { JobTasksTab } from "@/components/job-tasks-tab"
 import { JobTimerTab } from "@/components/job-timer-tab"
 import { JobClaimPanel } from "@/components/job-claim-panel"
+import { JobPointsTab } from "@/components/job-points-tab"
 import { StockTab } from "@/components/stock-tab"
 import type { StockInventoryItem, StockNeed } from "@/lib/stock"
 import type { JobClaimPanelData } from "@/app/actions/interactions/project-team"
+import type { JobShareData } from "@/app/actions/job-peer-allocation"
 
 interface JobDetailClientProps {
   jobId: string
@@ -37,9 +39,11 @@ interface JobDetailClientProps {
   /** Server-computed: viewer may attest task completions (group authority OR
    *  the project lead/QA — the claim → attest rail). */
   canAttest: boolean
+  /** Server-computed peer point-share data (Points tab); null hides the tab. */
+  share?: JobShareData | null
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -210,10 +214,11 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className={`grid w-full ${share ? "grid-cols-5" : "grid-cols-4"}`}>
           <TabsTrigger value="about">About</TabsTrigger>
           <TabsTrigger value="tasks">Tasks ({totalTasks})</TabsTrigger>
           <TabsTrigger value="timer">Timer</TabsTrigger>
+          {share && <TabsTrigger value="points">Points</TabsTrigger>}
           <TabsTrigger value="stock">Stock</TabsTrigger>
         </TabsList>
 
@@ -228,6 +233,12 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
         <TabsContent value="timer" className="mt-6">
           <JobTimerTab job={job} currentUserId={effectiveUserId} />
         </TabsContent>
+
+        {share && (
+          <TabsContent value="points" className="mt-6">
+            <JobPointsTab share={share} />
+          </TabsContent>
+        )}
 
         <TabsContent value="stock" className="mt-6">
           <StockTab
