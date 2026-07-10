@@ -537,6 +537,10 @@ export default function CreatePage() {
     estimatedTime: number
     points: number
     required: boolean
+    /** ISO task deadline (the work window's end). */
+    deadline?: string | null
+    /** Advisory per-task hour budget. */
+    maxHours?: number | null
   }
 
   type JobFormData = {
@@ -561,6 +565,10 @@ export default function CreatePage() {
     status: string
     assignees: string[]
     createdAt: string
+    /** Hour budget: hourly payout is clamped to this many hours. */
+    maxHours?: number | null
+    /** Job-level points for task-less jobs (split at completion). */
+    points?: number | null
   }
 
   type TrainingModule = {
@@ -602,6 +610,9 @@ export default function CreatePage() {
     payKind: "none" as "none" | "fixed" | "hourly",
     payAmountDollars: "",
     hourlyRateDollars: "",
+    // Hour budget (clamps hourly pay) + job-level points for task-less jobs.
+    maxHoursInput: "",
+    jobPointsInput: "",
   })
   const [currentTask, setCurrentTask] = useState({
     name: "",
@@ -609,6 +620,8 @@ export default function CreatePage() {
     estimatedTime: 30,
     points: 10,
     required: true,
+    deadline: "",
+    maxHoursInput: "",
   })
   const [newSkill, setNewSkill] = useState("")
   const [showBadgeCreation, setShowBadgeCreation] = useState(false)
@@ -921,9 +934,16 @@ export default function CreatePage() {
    */
   const addTask = () => {
     if (currentTask.name.trim()) {
-      const newTask = {
+      const taskMaxHours = Number(currentTask.maxHoursInput)
+      const newTask: TaskFormData = {
         id: `task-${Date.now()}`,
-        ...currentTask,
+        name: currentTask.name,
+        description: currentTask.description,
+        estimatedTime: currentTask.estimatedTime,
+        points: currentTask.points,
+        required: currentTask.required,
+        deadline: currentTask.deadline || null,
+        maxHours: Number.isFinite(taskMaxHours) && taskMaxHours > 0 ? taskMaxHours : null,
       }
       setCurrentJob(prev => ({
         ...prev,
@@ -935,6 +955,8 @@ export default function CreatePage() {
         estimatedTime: 30,
         points: 10,
         required: true,
+        deadline: "",
+        maxHoursInput: "",
       })
     }
   }
@@ -1024,12 +1046,16 @@ export default function CreatePage() {
     const payAmountCents = payKind === "fixed" ? toCents(currentJob.payAmountDollars) : null
     const hourlyRateCents = payKind === "hourly" ? toCents(currentJob.hourlyRateDollars) : null
 
+    const jobMaxHours = Number(currentJob.maxHoursInput)
+    const jobLevelPoints = Number(currentJob.jobPointsInput)
     const newJob = {
       id: `job-${Date.now()}`,
       ...currentJob,
       payKind: payAmountCents || hourlyRateCents ? payKind : null,
       payAmountCents,
       hourlyRateCents,
+      maxHours: Number.isFinite(jobMaxHours) && jobMaxHours > 0 ? jobMaxHours : null,
+      points: Number.isFinite(jobLevelPoints) && jobLevelPoints > 0 ? jobLevelPoints : null,
       duration: calculateJobDuration(),
       totalPoints: calculateJobTotalPoints(),
       status: "open",
@@ -1059,6 +1085,8 @@ export default function CreatePage() {
       payKind: "none",
       payAmountDollars: "",
       hourlyRateDollars: "",
+      maxHoursInput: "",
+      jobPointsInput: "",
     })
     setShowJobCreation(false)
 
@@ -2381,6 +2409,26 @@ export default function CreatePage() {
                             />
                           </div>
                         )}
+                        <div className="space-y-2">
+                          <Label htmlFor="job-max-hours">Max Hours (budget)</Label>
+                          <Input
+                            id="job-max-hours"
+                            inputMode="decimal"
+                            placeholder="e.g. 40 — hourly pay stops here"
+                            value={currentJob.maxHoursInput}
+                            onChange={(e) => setCurrentJob({ ...currentJob, maxHoursInput: e.target.value })}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="job-points">Job Points (task-less jobs)</Label>
+                          <Input
+                            id="job-points"
+                            inputMode="numeric"
+                            placeholder="split across assignees at completion"
+                            value={currentJob.jobPointsInput}
+                            onChange={(e) => setCurrentJob({ ...currentJob, jobPointsInput: e.target.value })}
+                          />
+                        </div>
                       </div>
 
                       {/* Tasks Section */}
@@ -2419,6 +2467,27 @@ export default function CreatePage() {
                               placeholder="Describe what this task involves..."
                               rows={2}
                             />
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="task-deadline">Deadline</Label>
+                              <Input
+                                id="task-deadline"
+                                type="date"
+                                value={currentTask.deadline}
+                                onChange={(e) => setCurrentTask({ ...currentTask, deadline: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="task-max-hours">Max Hours (budget)</Label>
+                              <Input
+                                id="task-max-hours"
+                                inputMode="decimal"
+                                placeholder="e.g. 4"
+                                value={currentTask.maxHoursInput}
+                                onChange={(e) => setCurrentTask({ ...currentTask, maxHoursInput: e.target.value })}
+                              />
+                            </div>
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-2">

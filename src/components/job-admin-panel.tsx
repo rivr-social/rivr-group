@@ -92,13 +92,20 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
   const [draftPayAmount, setDraftPayAmount] = useState(centsToDollarInput(job.payAmountCents))
   const [draftHourlyRate, setDraftHourlyRate] = useState(centsToDollarInput(job.hourlyRateCents))
   const [draftMaxAssignees, setDraftMaxAssignees] = useState(String(job.maxAssignees || 1))
+  const [draftStartDate, setDraftStartDate] = useState(job.startDate ? job.startDate.slice(0, 10) : "")
   const [draftDeadline, setDraftDeadline] = useState(job.deadline ? job.deadline.slice(0, 10) : "")
+  const [draftMaxHours, setDraftMaxHours] = useState(job.maxHours ? String(job.maxHours) : "")
+  const [draftJobPoints, setDraftJobPoints] = useState(
+    typeof job.points === "number" && job.points > 0 ? String(job.points) : "",
+  )
 
   // Add-task drafts
   const [taskName, setTaskName] = useState("")
   const [taskDescription, setTaskDescription] = useState("")
   const [taskPoints, setTaskPoints] = useState("")
   const [taskEstimate, setTaskEstimate] = useState("")
+  const [taskDeadline, setTaskDeadline] = useState("")
+  const [taskMaxHours, setTaskMaxHours] = useState("")
 
   useEffect(() => {
     if (!isEditOpen) return
@@ -108,7 +115,10 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
     setDraftPayAmount(centsToDollarInput(job.payAmountCents))
     setDraftHourlyRate(centsToDollarInput(job.hourlyRateCents))
     setDraftMaxAssignees(String(job.maxAssignees || 1))
+    setDraftStartDate(job.startDate ? job.startDate.slice(0, 10) : "")
     setDraftDeadline(job.deadline ? job.deadline.slice(0, 10) : "")
+    setDraftMaxHours(job.maxHours ? String(job.maxHours) : "")
+    setDraftJobPoints(typeof job.points === "number" && job.points > 0 ? String(job.points) : "")
   }, [isEditOpen, job])
 
   if (!canManage) return null
@@ -132,6 +142,20 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
       return
     }
     const maxAssignees = Number.parseInt(draftMaxAssignees, 10)
+    const maxHours = draftMaxHours.trim() ? Number(draftMaxHours) : null
+    if (maxHours !== null && (!Number.isFinite(maxHours) || maxHours <= 0)) {
+      toast({ title: "Invalid max hours", description: "The hour budget must be a positive number.", variant: "destructive" })
+      return
+    }
+    const jobPoints = draftJobPoints.trim() ? Number(draftJobPoints) : null
+    if (jobPoints !== null && (!Number.isFinite(jobPoints) || jobPoints < 0)) {
+      toast({ title: "Invalid points", description: "Job points must be a non-negative number.", variant: "destructive" })
+      return
+    }
+    if (draftStartDate && draftDeadline && draftDeadline < draftStartDate) {
+      toast({ title: "Invalid dates", description: "The deadline must not be before the start date.", variant: "destructive" })
+      return
+    }
 
     setIsSaving(true)
     try {
@@ -145,7 +169,10 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
           payAmountCents: draftPayKind === "fixed" ? payAmountCents : null,
           hourlyRateCents: draftPayKind === "hourly" ? hourlyRateCents : null,
           maxAssignees: Number.isInteger(maxAssignees) && maxAssignees > 0 ? maxAssignees : 1,
+          startDate: draftStartDate || null,
           deadline: draftDeadline || null,
+          maxHours,
+          points: jobPoints,
         },
       })
       if (!result.success) {
@@ -174,6 +201,12 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
       return
     }
 
+    const maxHours = taskMaxHours.trim() ? Number(taskMaxHours) : null
+    if (maxHours !== null && (!Number.isFinite(maxHours) || maxHours <= 0)) {
+      toast({ title: "Invalid max hours", description: "The hour budget must be a positive number.", variant: "destructive" })
+      return
+    }
+
     setIsAddingTask(true)
     try {
       const result = await addTaskToJobAction(job.id, {
@@ -181,6 +214,8 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
         description: taskDescription.trim() || undefined,
         points,
         estimatedTime: taskEstimate.trim() || null,
+        deadline: taskDeadline || null,
+        maxHours,
       })
       if (!result.success) {
         toast({ title: "Failed to add task", description: result.message, variant: "destructive" })
@@ -190,6 +225,8 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
       setTaskDescription("")
       setTaskPoints("")
       setTaskEstimate("")
+      setTaskDeadline("")
+      setTaskMaxHours("")
       setIsAddTaskOpen(false)
       toast({ title: "Task added" })
       router.refresh()
@@ -313,6 +350,27 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                     />
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor={`job-maxhours-${job.id}`}>Max hours</Label>
+                    <Input
+                      id={`job-maxhours-${job.id}`}
+                      inputMode="decimal"
+                      value={draftMaxHours}
+                      onChange={(event) => setDraftMaxHours(event.target.value)}
+                      placeholder="hour budget"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor={`job-startdate-${job.id}`}>Start date</Label>
+                    <Input
+                      id={`job-startdate-${job.id}`}
+                      type="date"
+                      value={draftStartDate}
+                      onChange={(event) => setDraftStartDate(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor={`job-deadline-${job.id}`}>Deadline</Label>
                     <Input
                       id={`job-deadline-${job.id}`}
@@ -321,6 +379,16 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                       onChange={(event) => setDraftDeadline(event.target.value)}
                     />
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor={`job-points-${job.id}`}>Job points (task-less jobs)</Label>
+                  <Input
+                    id={`job-points-${job.id}`}
+                    inputMode="numeric"
+                    value={draftJobPoints}
+                    onChange={(event) => setDraftJobPoints(event.target.value)}
+                    placeholder="split across assignees at completion"
+                  />
                 </div>
               </div>
               <DialogFooter>
@@ -385,6 +453,27 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                       value={taskEstimate}
                       onChange={(event) => setTaskEstimate(event.target.value)}
                       placeholder="e.g. 2h"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor={`task-deadline-${job.id}`}>Deadline</Label>
+                    <Input
+                      id={`task-deadline-${job.id}`}
+                      type="date"
+                      value={taskDeadline}
+                      onChange={(event) => setTaskDeadline(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`task-maxhours-${job.id}`}>Max hours</Label>
+                    <Input
+                      id={`task-maxhours-${job.id}`}
+                      inputMode="decimal"
+                      value={taskMaxHours}
+                      onChange={(event) => setTaskMaxHours(event.target.value)}
+                      placeholder="budget"
                     />
                   </div>
                 </div>

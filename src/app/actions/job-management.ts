@@ -40,6 +40,12 @@ export interface AddJobToProjectInput {
   requiredBadges?: string[];
   startDate?: string | null;
   deadline?: string | null;
+  /** Hour budget: hourly payout is CLAMPED to this many hours (also shown as
+   *  remaining budget on the timer). Null/omitted = unbounded. */
+  maxHours?: number | null;
+  /** Job-level points for task-less jobs — split across assignees at
+   *  completion (peer allocation, equal fallback). */
+  points?: number | null;
   /** Cash compensation alongside task points; null/omitted = points-only. */
   payKind?: "fixed" | "hourly" | null;
   payAmountCents?: number | null;
@@ -57,6 +63,26 @@ export interface AddTaskToJobInput {
   estimatedTime?: string | null;
   required?: boolean;
   assignedTo?: string | null;
+  /** Task work window; the end is the task's deadline. */
+  startDate?: string | null;
+  deadline?: string | null;
+  /** Per-task hour budget (advisory on the timesheet). */
+  maxHours?: number | null;
+}
+
+/** Parses a positive finite hour budget, else null. */
+function normalizeMaxHours(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Validates a startDate ≤ deadline pair; returns an error message or null. */
+function validateTimeRange(startDate?: string | null, deadline?: string | null): string | null {
+  if (typeof startDate === "string" && typeof deadline === "string" && startDate && deadline) {
+    if (new Date(deadline).getTime() < new Date(startDate).getTime()) {
+      return "The deadline must not be before the start date.";
+    }
+  }
+  return null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -166,8 +192,15 @@ export async function addJobToProjectAction(
     return { success: false, message: "Only the project owner or a group admin can add jobs." };
   }
 
+  const rangeError = validateTimeRange(input.startDate, input.deadline);
+  if (rangeError) return { success: false, message: rangeError };
+
   const description = input.description?.trim() || "";
   const pay = normalizePayFields(input);
+  const jobPoints =
+    typeof input.points === "number" && Number.isFinite(input.points) && input.points >= 0
+      ? input.points
+      : null;
   const projectMeta = project.metadata;
 
   const facadeResult = await federatedWrite(
@@ -211,6 +244,8 @@ export async function addJobToProjectAction(
             claimGateAdmin: input.claimGateAdmin === true,
             startDate: typeof input.startDate === "string" ? input.startDate : null,
             deadline: typeof input.deadline === "string" ? input.deadline : null,
+            maxHours: normalizeMaxHours(input.maxHours),
+            points: jobPoints,
             date: null,
             status: "open",
             payKind: pay.payKind,
@@ -289,13 +324,42 @@ export async function addTaskToJobAction(
 
   const job = await getParentResource(jobId, ["job", "shift"]);
   if (!job) return { success: false, message: "Job not found." };
-  if (!(await canManageParent(userId, job))) {
-    return { success: false, message: "Only the job owner or a group admin can add tasks." };
+  // Owner/admin OR an active job claimant — whoever claimed the job may
+  // evolve its task breakdown (their point proposals still land via the
+  // claim → attest rail, so this grants no unreviewed stake).
+  let mayAdd = await canManageParent(userId, job);
+  let addedByClaimant = false;
+  if (!mayAdd) {
+    const claimRows = (await db.execute(sql`
+      SELECT 1 FROM ledger
+      WHERE subject_id = ${userId}::uuid
+        AND verb = 'join'
+        AND is_active = true
+        AND metadata->>'interactionType' = 'job-claim'
+        AND metadata->>'targetId' = ${jobId}
+      LIMIT 1
+    `)) as Array<Record<string, unknown>>;
+    mayAdd = claimRows.length > 0;
+    addedByClaimant = mayAdd;
   }
+  if (!mayAdd) {
+    return { success: false, message: "Only the job owner, a group admin, or a job claimant can add tasks." };
+  }
+
+  const rangeError = validateTimeRange(input.startDate, input.deadline);
+  if (rangeError) return { success: false, message: rangeError };
 
   const description = input.description?.trim() || "";
   const jobMeta = job.metadata;
   const projectId = typeof jobMeta.projectId === "string" ? jobMeta.projectId : null;
+
+  // Advisory (not blocking): a task deadline past the job's deadline.
+  const jobDeadline = typeof jobMeta.deadline === "string" ? jobMeta.deadline : null;
+  const deadlineWarning =
+    jobDeadline && typeof input.deadline === "string" && input.deadline &&
+    new Date(input.deadline).getTime() > new Date(jobDeadline).getTime()
+      ? " (note: the task deadline is after the job's deadline)"
+      : "";
 
   const facadeResult = await federatedWrite(
     {
@@ -328,12 +392,18 @@ export async function addTaskToJobAction(
             estimatedTime: typeof input.estimatedTime === "string" ? input.estimatedTime : null,
             points,
             required: input.required !== false,
+            startDate: typeof input.startDate === "string" ? input.startDate : null,
+            deadline: typeof input.deadline === "string" ? input.deadline : null,
+            maxHours: normalizeMaxHours(input.maxHours),
             ...(typeof input.assignedTo === "string" && isUuid(input.assignedTo)
               ? { assignedTo: input.assignedTo }
-              : {}),
+              : addedByClaimant
+                ? { assignedTo: userId }
+                : {}),
             status: "not_started",
             completed: false,
             createdBy: userId,
+            ...(addedByClaimant ? { proposedBy: userId } : {}),
           },
         } as NewResource)
         .returning({ id: resources.id });
@@ -355,7 +425,7 @@ export async function addTaskToJobAction(
       revalidatePath(`/jobs/${job.id}`);
       if (projectId) revalidatePath(`/projects/${projectId}`);
 
-      return { success: true, message: "Task added.", resourceId: createdTask.id } as ActionResult;
+      return { success: true, message: `Task added.${deadlineWarning}`, resourceId: createdTask.id } as ActionResult;
     },
   );
 
