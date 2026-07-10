@@ -1,7 +1,8 @@
 /**
- * Tests for the pure job-claim eligibility logic (EPIC J2 + configurable claim
- * gating). Covers the badge/slot gates AND the creator-selectable membership /
- * admin gates added for the job-claim approval flow.
+ * Tests for the pure job-claim eligibility logic (EPIC J2 + baseline
+ * membership gate, 2026-07-10). Membership in the owning group (or
+ * group/ancestor admin authority) is ALWAYS required; admins bypass the badge
+ * gate; the creator-selectable admin gate still narrows claiming to admins.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -21,33 +22,40 @@ const openScope: JobClaimScope = {
   maxAssignees: null,
 };
 
-const baseContext: JobClaimContext = {
+/** A plain member with no badges — the baseline eligible claimant. */
+const memberContext: JobClaimContext = {
   heldBadgeIds: [],
   activeClaimCount: 0,
   alreadyClaimed: false,
-  isMember: false,
+  isMember: true,
   isAdmin: false,
 };
 
+/** Neither a member nor an admin — baseline-ineligible. */
+const outsiderContext: JobClaimContext = {
+  ...memberContext,
+  isMember: false,
+};
+
 describe('evaluateJobClaimEligibility — base gates', () => {
-  it('allows an ungated, open, unclaimed job', () => {
-    expect(evaluateJobClaimEligibility(openScope, baseContext)).toEqual({ eligible: true });
+  it('allows an ungated, open, unclaimed job for a member', () => {
+    expect(evaluateJobClaimEligibility(openScope, memberContext)).toEqual({ eligible: true });
   });
 
   it('rejects a non-claimable job first', () => {
-    const r = evaluateJobClaimEligibility({ ...openScope, claimable: false }, baseContext);
+    const r = evaluateJobClaimEligibility({ ...openScope, claimable: false }, memberContext);
     expect(r).toEqual({ eligible: false, reason: 'job_not_claimable' });
   });
 
   it('rejects when the claimant already holds a claim', () => {
-    const r = evaluateJobClaimEligibility(openScope, { ...baseContext, alreadyClaimed: true });
+    const r = evaluateJobClaimEligibility(openScope, { ...memberContext, alreadyClaimed: true });
     expect(r).toEqual({ eligible: false, reason: 'already_claimed' });
   });
 
-  it('rejects a missing required badge', () => {
+  it('rejects a member missing a required badge', () => {
     const r = evaluateJobClaimEligibility(
       { ...openScope, requiredBadges: ['badge-a'] },
-      baseContext,
+      memberContext,
     );
     expect(r).toEqual({ eligible: false, reason: 'missing_required_badge' });
   });
@@ -55,35 +63,55 @@ describe('evaluateJobClaimEligibility — base gates', () => {
   it('rejects when no open slots remain', () => {
     const r = evaluateJobClaimEligibility(
       { ...openScope, maxAssignees: 2 },
-      { ...baseContext, activeClaimCount: 2 },
+      { ...memberContext, activeClaimCount: 2 },
     );
     expect(r).toEqual({ eligible: false, reason: 'no_open_slots' });
   });
 });
 
-describe('evaluateJobClaimEligibility — membership gate', () => {
-  it('rejects a non-member when membership is gated', () => {
+describe('evaluateJobClaimEligibility — baseline membership gate', () => {
+  it('rejects a non-member on an otherwise ungated job', () => {
+    const r = evaluateJobClaimEligibility(openScope, outsiderContext);
+    expect(r).toEqual({ eligible: false, reason: 'not_a_member' });
+  });
+
+  it('rejects a non-member even when the legacy gateMembership flag is false', () => {
     const r = evaluateJobClaimEligibility(
-      { ...openScope, gateMembership: true },
-      { ...baseContext, isMember: false },
+      { ...openScope, gateMembership: false },
+      outsiderContext,
     );
     expect(r).toEqual({ eligible: false, reason: 'not_a_member' });
   });
 
-  it('allows a member when membership is gated', () => {
+  it('allows a group/ancestor admin who is not a plain member', () => {
+    const r = evaluateJobClaimEligibility(openScope, { ...outsiderContext, isAdmin: true });
+    expect(r).toEqual({ eligible: true });
+  });
+});
+
+describe('evaluateJobClaimEligibility — badge gate vs admin authority', () => {
+  it('admin bypasses the required-badge gate', () => {
     const r = evaluateJobClaimEligibility(
-      { ...openScope, gateMembership: true },
-      { ...baseContext, isMember: true },
+      { ...openScope, requiredBadges: ['badge-a'] },
+      { ...memberContext, isAdmin: true },
     );
     expect(r).toEqual({ eligible: true });
   });
 
-  it('allows an admin through the membership gate even if not a plain member', () => {
+  it('member holding one of the required badges passes', () => {
     const r = evaluateJobClaimEligibility(
-      { ...openScope, gateMembership: true },
-      { ...baseContext, isMember: false, isAdmin: true },
+      { ...openScope, requiredBadges: ['badge-a', 'badge-b'] },
+      { ...memberContext, heldBadgeIds: ['badge-b'] },
     );
     expect(r).toEqual({ eligible: true });
+  });
+
+  it('admin does NOT bypass the slot limit', () => {
+    const r = evaluateJobClaimEligibility(
+      { ...openScope, maxAssignees: 1 },
+      { ...memberContext, isAdmin: true, activeClaimCount: 1 },
+    );
+    expect(r).toEqual({ eligible: false, reason: 'no_open_slots' });
   });
 });
 
@@ -91,7 +119,7 @@ describe('evaluateJobClaimEligibility — admin gate', () => {
   it('rejects a member who is not an admin when admin is gated', () => {
     const r = evaluateJobClaimEligibility(
       { ...openScope, gateAdmin: true },
-      { ...baseContext, isMember: true, isAdmin: false },
+      memberContext,
     );
     expect(r).toEqual({ eligible: false, reason: 'not_an_admin' });
   });
@@ -99,7 +127,7 @@ describe('evaluateJobClaimEligibility — admin gate', () => {
   it('allows an admin when admin is gated', () => {
     const r = evaluateJobClaimEligibility(
       { ...openScope, gateAdmin: true },
-      { ...baseContext, isAdmin: true },
+      { ...memberContext, isAdmin: true },
     );
     expect(r).toEqual({ eligible: true });
   });
@@ -108,8 +136,8 @@ describe('evaluateJobClaimEligibility — admin gate', () => {
 describe('evaluateJobClaimEligibility — gate ordering', () => {
   it('reports the membership denial before badge/slot when multiple gates fail', () => {
     const r = evaluateJobClaimEligibility(
-      { claimable: true, requiredBadges: ['badge-a'], maxAssignees: 1, gateMembership: true },
-      { ...baseContext, isMember: false, activeClaimCount: 1 },
+      { claimable: true, requiredBadges: ['badge-a'], maxAssignees: 1 },
+      { ...outsiderContext, activeClaimCount: 1 },
     );
     expect(r).toEqual({ eligible: false, reason: 'not_a_member' });
   });
@@ -123,11 +151,20 @@ describe('helpers', () => {
     expect(meetsBadgeRequirement(['a', 'b'], ['b'])).toBe(true);
     expect(meetsBadgeRequirement(['a', 'b'], ['c'])).toBe(false);
   });
-  it('hasOpenSlot: null/zero maxAssignees is unlimited', () => {
+  it('hasOpenSlot: null/undefined/non-positive maxAssignees is unlimited', () => {
     expect(hasOpenSlot(null, 999)).toBe(true);
+    expect(hasOpenSlot(undefined, 999)).toBe(true);
     expect(hasOpenSlot(0, 999)).toBe(true);
+    expect(hasOpenSlot(-3, 999)).toBe(true);
     expect(hasOpenSlot(3, 2)).toBe(true);
     expect(hasOpenSlot(3, 3)).toBe(false);
+  });
+  it('denies a non-claimable job before every other gate', () => {
+    const r = evaluateJobClaimEligibility(
+      { ...openScope, claimable: false, requiredBadges: ['b1'] },
+      { ...outsiderContext, alreadyClaimed: true },
+    );
+    expect(r).toEqual({ eligible: false, reason: 'job_not_claimable' });
   });
   it('deriveProjectTeam: unique claimants in first-seen order', () => {
     expect(

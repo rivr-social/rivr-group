@@ -253,6 +253,12 @@ export function ProjectJobsTab({
           delete next[taskId];
           return next;
         });
+        return;
+      }
+      // A non-verifier's check-off lands as a finish-claim awaiting
+      // attestation — reflect the real state instead of showing completed.
+      if (result.status === "awaiting_approval") {
+        setOptimisticTasks((prev) => ({ ...prev, [taskId]: false }));
       }
     });
   };

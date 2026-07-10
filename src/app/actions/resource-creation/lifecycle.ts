@@ -1170,6 +1170,16 @@ export async function createProjectResource(input: {
               startDate: typeof job.startDate === "string" ? job.startDate : null,
               deadline: typeof job.deadline === "string" ? job.deadline : null,
               date: typeof job.date === "string" ? job.date : null,
+              // Hour budget — hourly payout clamps to this (job-completion.ts).
+              maxHours:
+                typeof job.maxHours === "number" && Number.isFinite(job.maxHours) && job.maxHours > 0
+                  ? job.maxHours
+                  : null,
+              // Job-level points for task-less jobs (split at completion).
+              points:
+                typeof job.points === "number" && Number.isFinite(job.points) && job.points >= 0
+                  ? job.points
+                  : null,
             },
           } as NewResource)
           .returning({ id: resources.id });
@@ -1219,6 +1229,13 @@ export async function createProjectResource(input: {
                 estimatedTime: task.estimatedTime ?? null,
                 points: task.points ?? null,
                 required: task.required ?? true,
+                // Task work window + advisory hour budget (2026-07-10).
+                startDate: typeof task.startDate === "string" ? task.startDate : null,
+                deadline: typeof task.deadline === "string" ? task.deadline : null,
+                maxHours:
+                  typeof task.maxHours === "number" && Number.isFinite(task.maxHours) && task.maxHours > 0
+                    ? task.maxHours
+                    : null,
               },
             } as NewResource)
             .returning({ id: resources.id });

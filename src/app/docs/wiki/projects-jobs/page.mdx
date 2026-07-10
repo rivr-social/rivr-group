@@ -2,9 +2,11 @@
 
 ## What it is
 
-The work-graph surfaces. Projects are coordination containers (with treasury and
-deliverables); jobs/tasks are claimable units of work, often gated on badges.
-Together they model who is doing what and how contribution is rewarded.
+The work-graph surfaces. Projects are coordination containers (with treasury,
+deliverables, and lead/QA roles); jobs/tasks are claimable units of work, often
+gated on badges. Together they model who is doing what and how contribution is
+rewarded — work is **claimed finished** by the worker and **attested** by the
+project's QA before stake moves.
 
 ## Where it lives
 
@@ -19,9 +21,40 @@ Together they model who is doing what and how contribution is rewarded.
 - **Create / update a project** — name, description, treasury, deliverables, and
   a timeframe set through the unified date-time range selector (start/end in one
   popover) on both the create form and the owner edit dialog.
-- **Claim a job** — take a job; claiming may require a qualifying badge.
+- **Set project roles** — a **Lead** (coordinator, default attester) and a
+  **QA** on the project's Team tab. QA defaults to the lead; it can be any
+  member of the group, its parent, a sibling, or a child subgroup — or an
+  **affiliated group agent**, whose admins then hold the QA authority.
+- **Claim a job** — take a job. Claiming always requires **membership in the
+  owning group** (group/parent-group admins also qualify and bypass badge
+  gates); jobs may additionally be badge-gated, admin-gated, slot-capped, or
+  approval-gated.
+- **Check off a task ("claim finished")** — the worker's check-off records a
+  claim and lands the task in *awaiting attestation*; if a work timer is
+  running, the task links to that work period automatically. Workers can
+  propose a point value with their claim.
+- **Attest a task** — the QA, lead, or a group admin attests (or rejects) the
+  claim from the point chip on the task; **stake points land at attestation**
+  (the attester can adjust the awarded value). A verifier's own check-off
+  attests in one click.
+- **Claim a job complete** — an assignee claims the whole job finished, rating
+  the work's **skillfulness required** and **difficulty** (1–100 sliders);
+  the reviewing admin settles it by marking the job done.
+- **Split job points (Points tab)** — task-less jobs carry a job-level point
+  pool. Each assignee sets sliders over the *other* assignees; the pool splits
+  by the average of everyone's ratings (equal split until anyone rates) when
+  the job is marked done.
+- **Add tasks to a claimed job** — active claimants (not just admins) can add
+  tasks to their claimed job; their proposed points still settle through
+  attestation.
+- **Time bounds** — jobs and tasks carry a work window (start → deadline) and
+  a **max-hours budget**; hourly pay never exceeds the job's budget (overage
+  stays visible on the timesheet but doesn't pay).
 - **Update job status** — progress a job through its lifecycle.
 - **Link to project** — jobs and events can link to a parent project.
+- **Calendar** — your completed work periods and claimed jobs' windows appear
+  on `/calendar` (filterable); group admins additionally see a per-member
+  "Work periods" kind on the group calendar.
 
 ## Stock (Inventory + Needs)
 
@@ -38,11 +71,15 @@ Orgs, projects, and jobs each have a **Stock** tab with two subtabs:
 ## Permissions / gating
 
 - **Guests** can view public projects/jobs.
-- **Members / contributors** can claim and update work where authorized; job
-  claim can be **badge-gated**.
-- Project/treasury management is owner/admin-scoped.
+- **Claiming requires group membership** (or group/ancestor admin authority);
+  subscriptions gate group and subgroup *memberships*, never jobs.
+- Job claims can additionally be **badge-gated** (admins bypass), admin-gated,
+  slot-capped, or approval-gated.
+- **Attestation** (task completed/rejected) is QA / lead / group-admin scoped.
+- Project/treasury management is owner/admin-scoped; group-calendar work
+  periods are admin-only.
 
 ## Cross-links
 
 - API/MCP: [Work Graph tools](/docs/api) (21 tools — projects, jobs, deliverables) · [Grants tools](/docs/api)
-- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Badges & stake](/docs/wiki/badges-stake) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Governance](/docs/wiki/governance)
+- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Badges & stake](/docs/wiki/badges-stake) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Governance](/docs/wiki/governance) · [Calendar & events](/docs/wiki/calendar-events)

@@ -39,6 +39,7 @@ const TYPE_COLORS = {
   event: "bg-red-500",
   project: "bg-blue-500",
   job: "bg-green-500",
+  workperiod: "bg-purple-500",
 } as const
 
 type CalendarItemType = keyof typeof TYPE_COLORS
@@ -47,6 +48,7 @@ const KIND_LABELS: Record<CalendarItemType, string> = {
   event: "Events",
   project: "Projects",
   job: "Jobs",
+  workperiod: "Work periods",
 }
 
 // Filter sentinel for "no narrowing" — kept as a constant so the Select value,
@@ -90,6 +92,22 @@ interface GroupCalendarProps {
    */
   ownerNames?: Record<string, string>
   memberNames?: Record<string, string>
+  /**
+   * ADMIN-ONLY completed work sessions on the group subtree's jobs — the
+   * server passes [] for non-admin viewers (`getGroupWorkPeriods` gates), so
+   * the kind simply never renders for them. Filterable by person via the
+   * member filter (workerId rides memberIds).
+   */
+  workPeriods?: Array<{
+    id: string
+    jobId: string
+    jobName: string
+    workerId: string
+    workerName: string
+    startedAt: string
+    stoppedAt: string
+    durationMs: number
+  }>
 }
 
 /**
@@ -201,6 +219,7 @@ export function GroupCalendar({
   eventWindows = {},
   ownerNames = {},
   memberNames = {},
+  workPeriods = [],
 }: GroupCalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
@@ -220,6 +239,7 @@ export function GroupCalendar({
     event: true,
     project: true,
     job: true,
+    workperiod: true,
   })
   const [ownerFilter, setOwnerFilter] = useState<string>(ALL_FILTER)
   const [memberFilter, setMemberFilter] = useState<string>(ALL_FILTER)
@@ -277,8 +297,27 @@ export function GroupCalendar({
       if (dateStr) items.push(toCalendarItem(r, "job", dateStr, "jobs"))
     }
 
+    // Completed work sessions (admin-only data — server passes [] otherwise).
+    // Placed on their start instant; the member filter narrows by worker.
+    for (const period of workPeriods) {
+      const dateStr = utcInstantToLocalWallClock(period.startedAt) ?? period.startedAt
+      const parsed = new Date(dateStr)
+      if (Number.isNaN(parsed.getTime())) continue
+      const hours = period.durationMs > 0 ? ` · ${(period.durationMs / 3_600_000).toFixed(1)}h` : ""
+      items.push({
+        id: `wp-${period.id}`,
+        title: `${period.workerName}: ${period.jobName}${hours}`,
+        date: parsed,
+        type: "workperiod",
+        color: TYPE_COLORS.workperiod,
+        link: `/jobs/${period.jobId}`,
+        time: formatTime(dateStr),
+        memberIds: period.workerId ? [period.workerId] : [],
+      })
+    }
+
     return items
-  }, [eventResources, projectResources, jobResources, eventWindows])
+  }, [eventResources, projectResources, jobResources, eventWindows, workPeriods])
 
   // Distinct owner groups present in the data. The per-group filter only makes
   // sense (and only renders) when the calendar aggregates >1 owner; a single

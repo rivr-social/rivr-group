@@ -319,6 +319,11 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const serverMemberStakes = await getMemberStakesForGroup(id).catch(() => [])
   const serverTotalStakes = serverMemberStakes.length > 0 ? calculateTotalStakes(serverMemberStakes) : 0
 
+  // Admin-only calendar work sessions (getGroupWorkPeriods gates internally —
+  // non-admin viewers get [] and the calendar kind simply never renders).
+  const { getGroupWorkPeriods } = await import("@/app/actions/calendar-work")
+  const groupWorkPeriods = await getGroupWorkPeriods(id).catch(() => [])
+
   // Job-contribution stakeholders (J2 corrected model): contributors recorded on
   // job completion surface in the Stake tab. Resolve their display names.
   const recordedContributionRows = await getRecordedContributions({ groupId: id }).catch(() => [])
@@ -463,6 +468,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         })}
         projectResources={projectResources}
         jobResources={jobOnlyResources}
+        groupWorkPeriods={groupWorkPeriods}
         treasuryActivity={treasuryActivity}
         publishActivity={publishActivity}
         resourceCount={detail.resources.length}

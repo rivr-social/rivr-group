@@ -21,6 +21,7 @@ import { resourceToPost, resourceToMarketplaceListing } from "@/lib/graph-adapte
 import { GroupPlanCard } from "@/components/group-plan-card"
 import { collectGalleryItems, type GallerySourcePost, type GallerySourceResource } from "@/lib/gallery"
 import { createGovernanceProposalAction } from "@/app/actions/create-resources"
+import type { GroupWorkPeriodItem } from "@/app/actions/calendar-work"
 import { AboutDocumentsCard } from "@/components/about-documents-card"
 import { AgentGraph } from "@/components/agent-graph"
 import { FlowPassModal } from "@/components/flow-pass-modal"
@@ -208,6 +209,9 @@ export interface GroupTabsClientProps {
   documentResources: Document[]
   projectResources: SerializedResource[]
   jobResources: SerializedResource[]
+  /** Admin-only completed work sessions for the calendar (server-gated: []
+   *  for non-admin viewers). */
+  groupWorkPeriods?: GroupWorkPeriodItem[]
   treasuryActivity: ActivityEntry[]
   publishActivity: ActivityEntry[]
   resourceCount: number
@@ -256,6 +260,7 @@ export function GroupTabsClient({
   documentResources,
   projectResources,
   jobResources,
+  groupWorkPeriods = [],
   treasuryActivity,
   publishActivity,
   resourceCount,
@@ -592,6 +597,8 @@ export function GroupTabsClient({
           jobResources={jobResources}
           groupName={groupName}
           eventWindows={eventWindows}
+          workPeriods={groupWorkPeriods}
+          memberNames={Object.fromEntries(groupWorkPeriods.map((p) => [p.workerId, p.workerName]))}
         />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="lg:col-span-2">

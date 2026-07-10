@@ -26,16 +26,19 @@ interface JobTasksTabProps {
   job: JobShift
   currentUserId: string
   userBadgeIds?: string[]
+  /** Server-computed attestation authority (project QA/lead or group admin) —
+   *  the client cannot derive this (federated remote-viewer sessions are
+   *  invisible to client user-context). */
+  canAttest?: boolean
   onTaskUpdate: (updatedJob: JobShift) => void
 }
 
-export function JobTasksTab({ job, currentUserId, userBadgeIds = [], onTaskUpdate }: JobTasksTabProps) {
+export function JobTasksTab({ job, currentUserId, userBadgeIds = [], canAttest = false, onTaskUpdate }: JobTasksTabProps) {
   const [selectedTasks, setSelectedTasks] = useState<string[]>([])
+  // Per-task attestation point override, editable by the verifier on the chip.
+  const [attestPoints, setAttestPoints] = useState<Record<string, string>>({})
   const [isPending, startTransition] = useTransition()
   const { toast } = useToast()
-  
-  // Check if current user is an admin (creator of the job shift)
-  const isAdmin = job.createdBy === currentUserId
 
   const getTaskIcon = (task: Task) => {
     switch (task.status) {
@@ -109,9 +112,20 @@ export function JobTasksTab({ job, currentUserId, userBadgeIds = [], onTaskUpdat
     setSelectedTasks((prev) => (prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]))
   }
   
-  // Function to handle task approval or rejection by admin
+  // Attestation (claim → attest rail): verification is where stake points
+  // land; the verifier may override the point value on the chip.
   const handleTaskApproval = (taskId: string, approved: boolean) => {
     const nextStatus: Task['status'] = approved ? 'completed' : 'rejected'
+
+    const rawOverride = attestPoints[taskId]?.trim()
+    const attestedPoints =
+      approved && rawOverride !== undefined && rawOverride !== ""
+        ? Number(rawOverride)
+        : undefined
+    if (attestedPoints !== undefined && (!Number.isFinite(attestedPoints) || attestedPoints < 0)) {
+      toast({ title: "Invalid points", description: "Attested points must be a non-negative number.", variant: "destructive" })
+      return
+    }
 
     // Optimistic update
     const updatedTasks = job.tasks.map((t) =>
@@ -123,12 +137,16 @@ export function JobTasksTab({ job, currentUserId, userBadgeIds = [], onTaskUpdat
 
     // Persist via server action
     startTransition(async () => {
-      const result = await updateTaskStatus(taskId, nextStatus)
+      const result = await updateTaskStatus(
+        taskId,
+        nextStatus,
+        attestedPoints !== undefined ? { attestedPoints } : undefined,
+      )
       if (!result.success) {
         onTaskUpdate(job)
         toast({ title: "Update failed", description: result.message, variant: "destructive" })
       } else {
-        toast({ title: approved ? "Task approved" : "Task rejected", description: result.message })
+        toast({ title: approved ? "Task attested" : "Task rejected", description: result.message })
       }
     })
   }
@@ -183,10 +201,29 @@ export function JobTasksTab({ job, currentUserId, userBadgeIds = [], onTaskUpdat
                         {getTaskStatusBadge(task)}
                       </div>
                       <div className="flex items-center gap-3 text-sm text-gray-500">
-                        <div className="flex items-center gap-1">
-                          <Star className="h-3 w-3 text-yellow-500" />
-                          <span>{task.points}</span>
-                        </div>
+                        {/* Points chip — the claim/attest control lives here. */}
+                        {task.status === 'awaiting_approval' && !canAttest ? (
+                          <div className="flex items-center gap-1" title="Claimed finished — points land at attestation">
+                            <Star className="h-3 w-3 text-yellow-500" />
+                            <span>{task.points}</span>
+                            <span className="text-xs text-yellow-700">claimed</span>
+                          </div>
+                        ) : task.status !== 'completed' && task.status !== 'awaiting_approval' ? (
+                          <button
+                            className="flex items-center gap-1 rounded border border-yellow-200 bg-yellow-50 px-1.5 py-0.5 text-yellow-800 hover:bg-yellow-100"
+                            onClick={() => handleTaskToggle(task.id)}
+                            title="Claim this task finished"
+                          >
+                            <Star className="h-3 w-3 text-yellow-500" />
+                            <span>{task.points}</span>
+                            <span className="text-xs">claim finished</span>
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <Star className="h-3 w-3 text-yellow-500" />
+                            <span>{task.points}</span>
+                          </div>
+                        )}
                         <div className="flex items-center gap-1">
                           <Clock className="h-3 w-3" />
                           <span>{task.estimatedTime}</span>
@@ -199,21 +236,32 @@ export function JobTasksTab({ job, currentUserId, userBadgeIds = [], onTaskUpdat
                       </div>
                     </div>
                   </div>
-                  
-                  {/* Admin approval buttons */}
-                  {isAdmin && task.status === 'awaiting_approval' && (
-                    <div className="flex gap-2">
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
+
+                  {/* Attestation controls (QA / lead / group admin) */}
+                  {canAttest && task.status === 'awaiting_approval' && (
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1 rounded border px-1.5 py-0.5">
+                        <Star className="h-3 w-3 text-yellow-500" />
+                        <input
+                          type="number"
+                          min={0}
+                          className="w-14 bg-transparent text-sm outline-none"
+                          value={attestPoints[task.id] ?? String(task.points ?? 0)}
+                          onChange={(e) => setAttestPoints((prev) => ({ ...prev, [task.id]: e.target.value }))}
+                          title="Points to award at attestation"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
                         className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
                         onClick={() => handleTaskApproval(task.id, true)}
                       >
-                        <CheckCircle className="h-4 w-4 mr-1" /> Approve
+                        <CheckCircle className="h-4 w-4 mr-1" /> Attest
                       </Button>
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
+                      <Button
+                        size="sm"
+                        variant="outline"
                         className="bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
                         onClick={() => handleTaskApproval(task.id, false)}
                       >
@@ -308,12 +356,49 @@ export function JobTasksTab({ job, currentUserId, userBadgeIds = [], onTaskUpdat
                         <div className="flex items-center gap-1 text-xs text-gray-500">
                           <Star className="h-3 w-3 text-yellow-500" />
                           {task.points} points
+                          {task.status === 'awaiting_approval' && (
+                            <span className="text-yellow-700">— claimed finished</span>
+                          )}
                         </div>
                         <div className="flex items-center gap-1 text-xs text-gray-500">
                           <Clock className="h-3 w-3" />
                           {task.estimatedTime}
                         </div>
                       </div>
+
+                      {/* QA attestation of a teammate's claimed-finished work —
+                          the verifier's primary surface. */}
+                      {canAttest && task.status === 'awaiting_approval' && (
+                        <div className="flex items-center gap-2 mt-3">
+                          <div className="flex items-center gap-1 rounded border bg-white px-1.5 py-0.5">
+                            <Star className="h-3 w-3 text-yellow-500" />
+                            <input
+                              type="number"
+                              min={0}
+                              className="w-14 bg-transparent text-sm outline-none"
+                              value={attestPoints[task.id] ?? String(task.points ?? 0)}
+                              onChange={(e) => setAttestPoints((prev) => ({ ...prev, [task.id]: e.target.value }))}
+                              title="Points to award at attestation"
+                            />
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+                            onClick={() => handleTaskApproval(task.id, true)}
+                          >
+                            <CheckCircle className="h-4 w-4 mr-1" /> Attest
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+                            onClick={() => handleTaskApproval(task.id, false)}
+                          >
+                            <XCircle className="h-4 w-4 mr-1" /> Reject
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>

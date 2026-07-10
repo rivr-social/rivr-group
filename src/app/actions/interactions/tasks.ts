@@ -88,21 +88,38 @@ const VALID_TASK_STATUSES: readonly TaskStatus[] = [
   "rejected",
 ] as const;
 
+/** Attestation-time options for updateTaskStatus. */
+export interface TaskStatusOptions {
+  /** Worker's proposed point value on a finish-claim (`awaiting_approval`). */
+  proposedPoints?: number | null;
+  /** Verifier's point override at attestation (`completed`). */
+  attestedPoints?: number | null;
+}
+
 /**
- * Updates a task resource's status in the database.
+ * Updates a task resource's status in the database, driving the
+ * claim → attest work-completion rail (2026-07-10):
  *
- * Authorization: the current user must be the task assignee, the task's
- * owner, or hold write access to the owning group. Admin-only statuses
- * (`completed`, `rejected`) additionally require group-write permission
- * when the resource is group-owned.
+ * - `awaiting_approval` records the worker's "claimed finished" REA event
+ *   (`work-completion-claim` edge) and links their running workperiod.
+ * - `completed` / `rejected` are ATTESTATIONS — allowed for the project QA,
+ *   project lead, or a group/ancestor admin (`canAttestWork`). Verification
+ *   writes the `task-points-earned` stake edge (attested override → claim
+ *   proposal → the task's own points, in that order).
+ * - `not_started` retracts any claim + points so stake never counts un-done
+ *   work.
+ *
+ * Base authorization: assignee, direct owner, or group admin.
  *
  * @param {string} taskId - UUID of the task resource.
  * @param {TaskStatus} newStatus - Target status value.
+ * @param {TaskStatusOptions} [opts] - Point proposal/override values.
  * @returns {Promise<ActionResult>} Success/failure result.
  */
 export async function updateTaskStatus(
   taskId: string,
   newStatus: TaskStatus,
+  opts?: TaskStatusOptions,
 ): Promise<ActionResult> {
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, message: "You must be logged in to update tasks." };
@@ -139,6 +156,8 @@ export async function updateTaskStatus(
 
   const meta = (task.metadata ?? {}) as Record<string, unknown>;
   const assignedTo = typeof meta.assignedTo === "string" ? meta.assignedTo : undefined;
+  const jobId = typeof meta.jobId === "string" ? meta.jobId : null;
+  const projectId = typeof meta.projectId === "string" ? meta.projectId : null;
 
   // Authorization: assignee, direct owner, or group admin.
   const isAssignee = assignedTo === userId;
@@ -150,13 +169,52 @@ export async function updateTaskStatus(
     ? await hasGroupWriteAccess(userId, task.ownerId)
     : false;
 
-  if (!isAssignee && !isOwner && !isGroupAdmin) {
+  const {
+    resolveProjectAuthority,
+    canAttestWork,
+    claimWorkFinished,
+    attestWork,
+    retractWorkClaim,
+    getLatestWorkClaim,
+  } = await import("@/lib/work-completion");
+
+  const targetRef = {
+    targetId: taskId,
+    targetType: "task" as const,
+    ownerId: task.ownerId,
+    jobId,
+    projectId,
+  };
+
+  // Attestations widen beyond group authority to the project lead/QA.
+  const isAttestation = newStatus === "completed" || newStatus === "rejected";
+  let isVerifier = isOwner || isGroupAdmin;
+  if (isAttestation && !isVerifier) {
+    const authority = await resolveProjectAuthority(targetRef);
+    isVerifier = await canAttestWork(userId, task.ownerId, authority);
+  }
+
+  if (!isAssignee && !isOwner && !isGroupAdmin && !(isAttestation && isVerifier)) {
     return { success: false, message: "You do not have permission to update this task." };
   }
 
-  // Admin-only transitions: only group admin/owner can approve or reject.
-  if ((newStatus === "completed" || newStatus === "rejected") && !isOwner && !isGroupAdmin) {
-    return { success: false, message: "Only the job owner or a group admin can approve or reject tasks." };
+  if (isAttestation && !isVerifier) {
+    return {
+      success: false,
+      message: "Only the project QA, project lead, or a group admin can attest task completion.",
+    };
+  }
+
+  // Whose work is being attested: the assignee, else the latest claimant,
+  // else the verifier themself (one-click lead completing their own task).
+  let workerId = userId;
+  if (isAttestation) {
+    if (assignedTo) {
+      workerId = assignedTo;
+    } else {
+      const latestClaim = await getLatestWorkClaim(taskId);
+      if (latestClaim) workerId = latestClaim.workerId;
+    }
   }
 
   const now = new Date().toISOString();
@@ -164,7 +222,7 @@ export async function updateTaskStatus(
 
   if (newStatus === "completed") {
     statusPatch.completedAt = now;
-    statusPatch.completedBy = userId;
+    statusPatch.completedBy = workerId;
     statusPatch.completed = true;
   } else if (newStatus === "rejected") {
     statusPatch.completed = false;
@@ -213,6 +271,40 @@ export async function updateTaskStatus(
         },
       } as NewLedgerEntry);
 
+      // Drive the claim → attest rail off the status transition.
+      let attestNote = "";
+      if (newStatus === "awaiting_approval") {
+        // The finish-claim always belongs to the acting worker.
+        await claimWorkFinished({
+          workerId: userId,
+          ref: targetRef,
+          proposedPoints: opts?.proposedPoints ?? null,
+        });
+        attestNote = " — awaiting attestation";
+      } else if (newStatus === "completed" || newStatus === "rejected") {
+        const latestClaim = await getLatestWorkClaim(taskId);
+        const taskPoints = typeof meta.points === "number" ? meta.points : 0;
+        const points =
+          typeof opts?.attestedPoints === "number" && opts.attestedPoints >= 0
+            ? opts.attestedPoints
+            : latestClaim?.proposedPoints ?? taskPoints;
+        const { awardedPoints } = await attestWork({
+          verifierId: userId,
+          workerId,
+          ref: targetRef,
+          points,
+          outcome: newStatus === "completed" ? "verified" : "rejected",
+        });
+        if (newStatus === "completed" && awardedPoints > 0) {
+          attestNote = ` — ${awardedPoints} points attested`;
+        }
+      } else if (newStatus === "not_started") {
+        // Reopen: retract the previous claimant's claim + points.
+        const previousWorker =
+          typeof meta.completedBy === "string" ? meta.completedBy : assignedTo ?? userId;
+        await retractWorkClaim(previousWorker, taskId);
+      }
+
       // Keep the parent deliverable's progress/status roll-up in sync (J3).
       const deliverableId = typeof meta.deliverableId === "string" ? meta.deliverableId : undefined;
       if (deliverableId) {
@@ -221,12 +313,12 @@ export async function updateTaskStatus(
       }
 
       // Revalidate task-visible paths.
-      const jobId = typeof meta.jobId === "string" ? meta.jobId : undefined;
       revalidatePath("/");
       if (jobId) revalidatePath(`/jobs/${jobId}`);
+      if (projectId) revalidatePath(`/projects/${projectId}`);
       revalidatePath(`/groups/${task.ownerId}`);
 
-      return { success: true, message: `Task status updated to ${newStatus}.` } as ActionResult;
+      return { success: true, message: `Task status updated to ${newStatus}${attestNote}.` } as ActionResult;
     },
   );
 

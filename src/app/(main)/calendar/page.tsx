@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useHomeFeed } from "@/lib/hooks/use-graph-data"
+import { getMyWorkCalendarItems, type MyWorkCalendarData } from "@/app/actions/calendar-work"
 import { CalendarEvent } from "@/components/calendar-event"
 import { Badge } from "@/components/ui/badge"
 import { ChevronLeft, ChevronRight, Filter, Plus, Search } from "lucide-react"
@@ -65,15 +66,30 @@ type CalendarItem = {
 export default function CalendarPage() {
   const [date, setDate] = useState<Date>(new Date())
   const [view, setView] = useState("week")
-  // NOTE: Shifts and tasks filters removed — no shift/task data model exists yet.
-  // Re-add when shift/task resource types and DB tables are implemented.
   const [filters, setFilters] = useState({
     events: true,
+    workPeriods: true,
+    jobs: true,
   })
   const [searchQuery, setSearchQuery] = useState("")
   const router = useRouter()
   // Client-side graph fetch for events and related groups used throughout derived calendar state.
   const { data: graphData, state: graphState } = useHomeFeed()
+
+  // The viewer's work items (completed workperiods + claimed-job windows) —
+  // server-resolved so federated/remote-viewer sessions see their own work.
+  const [workData, setWorkData] = useState<MyWorkCalendarData>({ workPeriods: [], jobs: [] })
+  useEffect(() => {
+    let cancelled = false
+    getMyWorkCalendarItems()
+      .then((data) => {
+        if (!cancelled) setWorkData(data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Guard against rendering partial event data until the feed reports loaded.
   const sourceEvents = useMemo(() => graphState === "loaded" ? graphData.events : [], [graphState, graphData.events])
@@ -112,10 +128,49 @@ export default function CalendarPage() {
     })
     .filter(Boolean), [sourceEvents, groupIndex])
 
+  // Completed work sessions as calendar blocks (start → stop).
+  const workPeriodItems = useMemo<CalendarItem[]>(
+    () =>
+      workData.workPeriods.map((period) => ({
+        id: `wp-${period.id}`,
+        name: `Worked: ${period.jobName}`,
+        start: new Date(period.startedAt),
+        end: new Date(period.stoppedAt),
+        type: "workperiod",
+        color: "bg-blue-500",
+        colorClass: "border-blue-500 bg-blue-50",
+        projectId: period.jobId,
+      })),
+    [workData.workPeriods],
+  )
+
+  // Claimed jobs' work windows (startDate → deadline; deadline-only jobs pin
+  // to the deadline day).
+  const jobWindowItems = useMemo<CalendarItem[]>(
+    () =>
+      workData.jobs.map((job) => {
+        const start = new Date(job.startDate ?? job.deadline ?? "")
+        const end = new Date(job.deadline ?? job.startDate ?? "")
+        return {
+          id: `job-${job.id}`,
+          name: `Job: ${job.name}${job.deadline ? " (due)" : ""}`,
+          start,
+          end,
+          type: "job",
+          color: "bg-amber-500",
+          colorClass: "border-amber-500 bg-amber-50",
+          projectId: job.id,
+        }
+      }),
+    [workData.jobs],
+  )
+
   // Build final calendar dataset based on active filters and search text.
   const allCalendarItems = useMemo(() => {
     let items = [
       ...(filters.events ? userEvents : []),
+      ...(filters.workPeriods ? workPeriodItems : []),
+      ...(filters.jobs ? jobWindowItems : []),
     ].filter((item): item is NonNullable<typeof item> => item !== null)
 
     // Ensure all dates are valid
@@ -148,7 +203,7 @@ export default function CalendarPage() {
     }
 
     return items
-  }, [filters.events, searchQuery, userEvents])
+  }, [filters.events, filters.workPeriods, filters.jobs, searchQuery, userEvents, workPeriodItems, jobWindowItems])
 
   // Day view only: include entries that start on the currently selected date.
   const selectedDateEvents = useMemo(() => {
@@ -359,7 +414,28 @@ export default function CalendarPage() {
                         Events
                       </Label>
                     </div>
-                    {/* Shifts and Tasks filters removed — no data model yet. Re-add when implemented. */}
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="filter-workperiods"
+                        checked={filters.workPeriods}
+                        onCheckedChange={() => toggleFilter("workPeriods")}
+                      />
+                      <Label htmlFor="filter-workperiods" className="flex items-center">
+                        <div className="w-3 h-3 rounded-full bg-blue-500 mr-2"></div>
+                        Work periods
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="filter-jobs"
+                        checked={filters.jobs}
+                        onCheckedChange={() => toggleFilter("jobs")}
+                      />
+                      <Label htmlFor="filter-jobs" className="flex items-center">
+                        <div className="w-3 h-3 rounded-full bg-amber-500 mr-2"></div>
+                        My jobs
+                      </Label>
+                    </div>
                   </div>
                 </div>
 

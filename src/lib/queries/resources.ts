@@ -650,7 +650,10 @@ function resourceToJobShift(resource: Resource): JobShift {
     tasks: (m.tasks as Task[]) ?? [],
     assignees: (m.assignees as string[]) ?? [],
     maxAssignees: (m.maxAssignees as number) ?? 1,
+    startDate: m.startDate as string | undefined,
     deadline: m.deadline as string | undefined,
+    maxHours: typeof m.maxHours === "number" && m.maxHours > 0 ? m.maxHours : null,
+    points: typeof m.points === "number" && m.points >= 0 ? m.points : null,
     createdAt: resource.createdAt?.toISOString() ?? new Date().toISOString(),
     updatedAt: resource.updatedAt?.toISOString() ?? new Date().toISOString(),
     comments: (m.comments as JobShift["comments"]) ?? [],
@@ -730,6 +733,9 @@ function resourceToTask(resource: Resource): Task {
     assignedTo: typeof m.assignedTo === "string" ? m.assignedTo : undefined,
     requiredBadge: typeof m.requiredBadge === "string" ? m.requiredBadge : undefined,
     estimatedTime: typeof m.estimatedTime === "string" ? m.estimatedTime : "",
+    startDate: typeof m.startDate === "string" ? m.startDate : undefined,
+    deadline: typeof m.deadline === "string" ? m.deadline : undefined,
+    maxHours: typeof m.maxHours === "number" && m.maxHours > 0 ? m.maxHours : null,
   };
 }
 

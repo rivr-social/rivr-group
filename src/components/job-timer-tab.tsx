@@ -197,6 +197,17 @@ export function JobTimerTab({ job, currentUserId }: JobTimerTabProps) {
             <Clock className="h-8 w-8 mx-auto mb-2 text-blue-500" />
             <p className="text-sm text-muted-foreground">Total Tracked</p>
             <p className="text-2xl font-bold">{formatTime((totalMs + liveMs) / 1000)}</p>
+            {typeof job.maxHours === "number" && job.maxHours > 0 && (() => {
+              const budgetMs = job.maxHours * 3600_000
+              const remainingMs = budgetMs - (totalMs + liveMs)
+              return (
+                <p className={`text-xs mt-1 ${remainingMs < 0 ? "text-red-600" : "text-muted-foreground"}`}>
+                  {remainingMs >= 0
+                    ? `${formatTime(remainingMs / 1000)} left of ${job.maxHours}h budget`
+                    : `over the ${job.maxHours}h budget — overage doesn't pay`}
+                </p>
+              )
+            })()}
           </CardContent>
         </Card>
         <Card>

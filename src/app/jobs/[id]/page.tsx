@@ -18,6 +18,7 @@
 import { getCurrentUserId } from "@/app/actions/interactions/helpers"
 import { getJobById, getShifts, getProjects, getUserBadgeIds, getResource, getResourcesByJobId } from "@/lib/queries/resources"
 import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
+import { getJobShareData } from "@/app/actions/job-peer-allocation"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
 import { extractStockNeeds, toStockInventory } from "@/lib/stock"
 import { JobDetailClient } from "./job-detail"
@@ -31,7 +32,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
 
   // Fetch the job DIRECTLY by id (type job OR legacy shift). Resolving via
   // getShifts() alone capped at 100 rows and 404'd every older job.
-  const [job, jobShifts, projects, userBadgeIds, claimPanel, jobResource, stockResources] = await Promise.all([
+  const [job, jobShifts, projects, userBadgeIds, claimPanel, jobResource, stockResources, share] = await Promise.all([
     getJobById(jobId),
     getShifts(),
     getProjects(),
@@ -39,6 +40,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
     getJobClaimPanelData(jobId),
     getResource(jobId).catch(() => null),
     getResourcesByJobId(jobId).catch(() => []),
+    getJobShareData(jobId).catch(() => null),
   ])
 
   // ── Stock tab data ── inventory linked to this job (metadata.jobId), the
@@ -53,6 +55,21 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   // Same authority set gates the admin panel (edit / add task / mark done).
   const canManage = stockCanManage
 
+  // Attestation authority (claim → attest rail): group authority PLUS the
+  // project lead / QA resolved from the job's project. Server-computed — the
+  // client user-context cannot see federated remote-viewer sessions.
+  let canAttest = canManage
+  if (!canAttest && currentUserId && job?.groupId) {
+    const { resolveProjectAuthority, canAttestWork } = await import("@/lib/work-completion")
+    const jobMeta = (jobResource?.metadata ?? {}) as Record<string, unknown>
+    const authority = await resolveProjectAuthority({
+      targetType: "job",
+      jobId,
+      projectId: typeof jobMeta.projectId === "string" ? jobMeta.projectId : null,
+    })
+    canAttest = await canAttestWork(currentUserId, job.groupId, authority)
+  }
+
   return (
     <JobDetailClient
       jobId={jobId}
@@ -66,6 +83,8 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       stockNeeds={stockNeeds}
       stockCanManage={stockCanManage}
       canManage={canManage}
+      canAttest={canAttest}
+      share={share}
     />
   )
 }

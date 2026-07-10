@@ -156,7 +156,11 @@ interface OwedPay {
 /**
  * Computes each assignee's owed pay for the job's pay model. Fixed pay
  * splits equally with the integer remainder going to the first assignee (ids
- * pre-sorted for determinism); hourly pay is rate × tracked time.
+ * pre-sorted for determinism); hourly pay is rate × tracked time, with total
+ * payable time CLAMPED to the job's `maxHours` budget (2026-07-10): when the
+ * summed tracked time exceeds the budget, each assignee's payable ms scales
+ * down proportionally (floored — the treasury never pays past the cap).
+ * Overage remains visible on the timesheet; it just doesn't pay.
  */
 async function computeOwedPay(
   jobId: string,
@@ -164,6 +168,7 @@ async function computeOwedPay(
   payAmountCents: number | null,
   hourlyRateCents: number | null,
   assignees: string[],
+  maxHours: number | null,
 ): Promise<Map<string, OwedPay>> {
   const owed = new Map<string, OwedPay>();
   if (payKind === "fixed") {
@@ -177,10 +182,24 @@ async function computeOwedPay(
   }
 
   const rate = hourlyRateCents ?? 0;
+  const trackedByAssignee = new Map<string, number>();
+  let totalTrackedMs = 0;
   for (const assigneeId of assignees) {
     const trackedMs = await getTrackedMsForAssignee(jobId, assigneeId);
+    trackedByAssignee.set(assigneeId, trackedMs);
+    totalTrackedMs += trackedMs;
+  }
+
+  const maxMs = typeof maxHours === "number" && maxHours > 0 ? maxHours * MS_PER_HOUR : null;
+  const overBudget = maxMs !== null && totalTrackedMs > maxMs;
+
+  for (const assigneeId of assignees) {
+    const trackedMs = trackedByAssignee.get(assigneeId) ?? 0;
+    const payableMs = overBudget
+      ? Math.floor((trackedMs * (maxMs as number)) / totalTrackedMs)
+      : trackedMs;
     owed.set(assigneeId, {
-      amountCents: Math.round((trackedMs / MS_PER_HOUR) * rate),
+      amountCents: Math.round((payableMs / MS_PER_HOUR) * rate),
       trackedMs,
     });
   }
@@ -346,6 +365,11 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
     typeof meta.payAmountCents === "number" && meta.payAmountCents > 0 ? meta.payAmountCents : null;
   const hourlyRateCents =
     typeof meta.hourlyRateCents === "number" && meta.hourlyRateCents > 0 ? meta.hourlyRateCents : null;
+  // Hour budget: hourly payout never pays past this many hours (job-level).
+  const maxHours =
+    typeof meta.maxHours === "number" && Number.isFinite(meta.maxHours) && meta.maxHours > 0
+      ? meta.maxHours
+      : null;
 
   // Assignee set: active job-claim edges, falling back to legacy embedded assignees.
   let assignees = await getActiveJobAssignees(jobId);
@@ -379,6 +403,7 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
           payAmountCents,
           hourlyRateCents,
           assignees,
+          maxHours,
         );
 
         for (const assigneeId of assignees) {
@@ -486,6 +511,34 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
   // Stakeholder standing for every assignee (idempotent per contributor+job).
   for (const assigneeId of assignees) {
     await recordJobContributionAction({ jobId, contributorId: assigneeId }).catch(() => {});
+  }
+
+  // Job-level point pool (task-less jobs): split by peer allocation (each
+  // assignee's sliders over the others, equal split until inputs exist) and
+  // award as attested stake points — mark-done IS the attestation
+  // (idempotent: one active points edge per assignee+job).
+  const jobPoints =
+    typeof meta.points === "number" && Number.isFinite(meta.points) && meta.points > 0 ? meta.points : null;
+  if (jobPoints !== null && assignees.length > 0) {
+    const { allocatePointsByShares } = await import("@/lib/peer-allocation");
+    const { attestWork } = await import("@/lib/work-completion");
+    const rawInputs = meta.pointShareInputs;
+    const allocation = allocatePointsByShares(
+      jobPoints,
+      assignees,
+      rawInputs && typeof rawInputs === "object" ? (rawInputs as Record<string, Record<string, number>>) : null,
+    );
+    for (const assigneeId of assignees) {
+      const points = allocation.get(assigneeId) ?? 0;
+      if (points <= 0) continue;
+      await attestWork({
+        verifierId: userId,
+        workerId: assigneeId,
+        ref: { targetId: jobId, targetType: "job", ownerId: job.ownerId, jobId, projectId },
+        points,
+        outcome: "verified",
+      }).catch(() => {});
+    }
   }
 
   emitDomainEvent({

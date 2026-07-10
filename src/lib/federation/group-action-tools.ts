@@ -504,6 +504,14 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         },
         payAmountCents: { type: "number", description: "Fixed cash value in cents (payKind 'fixed')." },
         hourlyRateCents: { type: "number", description: "Hourly rate in cents (payKind 'hourly')." },
+        maxHours: {
+          type: "number",
+          description: "Hour budget: hourly payout is clamped to this many hours. Pass 0 to clear.",
+        },
+        points: {
+          type: "number",
+          description: "Job-level points for task-less jobs (split across assignees at completion). Pass 0 to clear.",
+        },
       },
     },
     run: (args) => {
@@ -521,6 +529,10 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       if (status) metadataPatch.status = status;
       const maxAssignees = num(args.maxAssignees);
       if (maxAssignees !== undefined) metadataPatch.maxAssignees = maxAssignees;
+      const maxHours = num(args.maxHours);
+      if (maxHours !== undefined) metadataPatch.maxHours = maxHours > 0 ? maxHours : null;
+      const jobPoints = num(args.points);
+      if (jobPoints !== undefined) metadataPatch.points = jobPoints > 0 ? jobPoints : null;
       if (args.payKind === "none") {
         metadataPatch.payKind = null;
         metadataPatch.payAmountCents = null;
@@ -544,7 +556,7 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         description === undefined
       ) {
         throw new Error(
-          "Provide at least one field to update (name, description, startDate, deadline, date, status, maxAssignees, or payKind/payAmountCents/hourlyRateCents).",
+          "Provide at least one field to update (name, description, startDate, deadline, date, status, maxAssignees, maxHours, points, or payKind/payAmountCents/hourlyRateCents).",
         );
       }
       return updateResource({
@@ -942,6 +954,8 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         payKind: { type: "string", enum: ["fixed", "hourly"], description: "Cash pay model; omit for points-only." },
         payAmountCents: { type: "number", description: "Fixed cash value in cents (payKind 'fixed')." },
         hourlyRateCents: { type: "number", description: "Hourly rate in cents (payKind 'hourly')." },
+        maxHours: { type: "number", description: "Hour budget: hourly payout is clamped to this many hours." },
+        points: { type: "number", description: "Job-level points for a task-less job (split at completion)." },
         claimApprovalRequired: { type: "boolean" },
         claimGateMembership: { type: "boolean" },
         claimGateAdmin: { type: "boolean" },
@@ -961,6 +975,8 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         requiredBadges: strArray(args.requiredBadges),
         startDate: optionalIsoDate(args, "startDate") ?? null,
         deadline: optionalIsoDate(args, "deadline") ?? null,
+        maxHours: num(args.maxHours) ?? null,
+        points: num(args.points) ?? null,
         payKind: args.payKind === "fixed" || args.payKind === "hourly" ? args.payKind : null,
         payAmountCents: num(args.payAmountCents) ?? null,
         hourlyRateCents: num(args.hourlyRateCents) ?? null,
@@ -982,10 +998,13 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         jobId: { type: "string", description: "The job resource id to add the task under." },
         name: { type: "string" },
         description: { type: "string" },
-        points: { type: "number", description: "Points earned when this task is completed." },
+        points: { type: "number", description: "Points earned when this task is completed (attested via the claim → attest rail)." },
         estimatedTime: { type: "string", description: "Human estimate, e.g. '2h'." },
         required: { type: "boolean", description: "Whether the task is required (default true)." },
         assignedTo: { type: "string", description: "Optional agent id to pre-assign." },
+        startDate: { type: "string", description: "ISO start of the task's work window." },
+        deadline: { type: "string", description: "ISO task deadline (the window's end)." },
+        maxHours: { type: "number", description: "Advisory per-task hour budget (shown on the timesheet)." },
       },
     },
     run: (args) =>
@@ -996,6 +1015,9 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         estimatedTime: str(args.estimatedTime) ?? null,
         required: args.required !== false,
         assignedTo: str(args.assignedTo) ?? null,
+        startDate: optionalIsoDate(args, "startDate") ?? null,
+        deadline: optionalIsoDate(args, "deadline") ?? null,
+        maxHours: num(args.maxHours) ?? null,
       }),
   },
   {

@@ -26,6 +26,11 @@ export interface Task {
   assignedTo?: string
   requiredBadge?: string
   estimatedTime: string
+  /** Work window: ISO start / deadline (end). */
+  startDate?: string
+  deadline?: string
+  /** Advisory per-task hour budget (timesheet display). */
+  maxHours?: number | null
 }
 
 export interface JobShift {
@@ -54,7 +59,12 @@ export interface JobShift {
   tasks: Task[]
   assignees: string[]
   maxAssignees: number
+  startDate?: string
   deadline?: string
+  /** Hour budget: hourly payout clamps to this many hours (null = unbounded). */
+  maxHours?: number | null
+  /** Job-level points for task-less jobs (split across assignees at completion). */
+  points?: number | null
   createdAt: string
   updatedAt: string
   comments: Array<{
