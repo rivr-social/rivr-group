@@ -32,6 +32,7 @@ export default defineConfig({
       "src/lib/__tests__/ai.test.ts",
       "src/lib/__tests__/permissions.test.ts",
       "src/lib/__tests__/referral-splits.test.ts",
+      "src/lib/__tests__/work-completion.test.ts",
     ],
     testTimeout: 30000,
     hookTimeout: 30000,

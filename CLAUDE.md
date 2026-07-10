@@ -299,17 +299,42 @@ pay/details, add task, mark done) and `ProjectActions` gains server-computed
 surfaces gate on SERVER-computed authority passed as props — the client
 user-context cannot see federated remote-viewer sessions.
 
-## Stake distribution (points-based, 2026-07-02)
+## Stake distribution (points-based, claim → attest since 2026-07-10)
 
 Org stake is proportional to TASK POINTS earned across the group and its
 subgroup tree (recursive `agents.parent_id`). The points rail is the `earn` /
-`task-points-earned` ledger edge written by `toggleTaskCompletion`
-(`metadata.points`). `getMemberStakesForGroup` (lib/queries/stakes.ts) derives
+`task-points-earned` ledger edge — written ONLY at ATTESTATION by
+`@/lib/work-completion` (the single writer, shared by `toggleTaskCompletion`
+and `updateTaskStatus`; never write it elsewhere). A worker's check-off is a
+`work-completion-claim` edge (verb `complete`, reviewStatus 'claimed',
+awaiting_approval, auto-linked to their RUNNING workperiod); verification by
+the project QA / lead / group-or-ancestor admin (`canAttestWork`;
+project `metadata.leadId`/`qaId`, QA defaults to lead, group-agent QA = that
+group's admins) flips it to 'verified' and awards points (one ACTIVE edge per
+worker+target — re-attest updates in place, reject/reopen deactivates claim AND
+points). Job-level `metadata.points` (task-less jobs) settle at mark-done via
+peer allocation (`@/lib/peer-allocation`: per-assignee sliders over the others
+→ normalized average → largest-remainder; equal until rated).
+`getMemberStakesForGroup` (lib/queries/stakes.ts) derives
 `profitShare = memberPoints / subtreeTotalPoints`; net-allocation `class` rules
 split their bps proportionally to the same weights
 (`getSubtreeTaskPointsByMember` → `resolveNetAllocation(tree, classMembers,
 memberWeights)`), falling back to an equal split only when nobody in the class
 holds points. Group-only feature — do NOT port to locale/region.
+
+## Job claiming (baseline membership gate, 2026-07-10)
+
+Claiming a job ALWAYS requires active membership in the owning group, or
+group/ancestor admin authority (`isGroupAdmin` cascades via pathIds — parent
+admins qualify and BYPASS badge gates). The old `claim_badges_jobs`
+subscription capability gate is removed from the claim path — subscriptions
+gate group/subgroup MEMBERSHIPS, never jobs (Cameron's standing rule). The
+legacy `claimGateMembership` flag is subsumed; `claimGateAdmin`,
+`claimApprovalRequired`, badges, and `maxAssignees` still apply. Active
+claimants may add tasks to their claimed job (`addTaskToJobAction`), with
+proposed points settling only via attestation. Jobs/tasks carry
+`startDate`/`deadline` + `maxHours`; hourly payout CLAMPS to the job's
+maxHours (proportional scale-down, floored) in `computeOwedPay`.
 
 ## Development
 

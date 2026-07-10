@@ -16,9 +16,17 @@ standing/weight within an org. Admins manage badge issuance.
 
 - **Browse badges / open a badge** — see a badge and its holders.
 - **Issue a badge** — admins award badges to agents (`/admin/badges`).
-- **Earn points** — contribution credits `earn` ledger rows; points accrue to the
-  actor's balance.
-- **Stake** — points-based org stake converts contribution → standing. _TODO(verify): confirm live stake mechanic and where it is set._
+- **Earn points (claim → attest)** — checking off a task records the worker's
+  *claimed finished* event; points land as `earn` ledger rows **when the
+  project's QA, lead, or a group admin attests** the work (the attester can
+  adjust the value). Reopening or rejecting work retracts its points. Task-less
+  jobs carry a job-level pool split among assignees by their mutual
+  peer-assessment sliders at job completion.
+- **Stake** — org stake is proportional to attested task points earned across
+  the group and its subgroup tree: `profitShare = your points ÷ subtree total`,
+  shown on the group's Stake tab and reused by net-allocation class rules.
+  Badges remain claim-time *gates*; completion records contribution instead of
+  minting badges.
 
 ## Permissions / gating
 
