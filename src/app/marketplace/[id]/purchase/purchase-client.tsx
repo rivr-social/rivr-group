@@ -28,13 +28,30 @@ import { getMarketplacePrimaryActionLabel } from "@/lib/listing-types"
 import { claimVoucherWithThanksEscrowAction, fetchVoucherEscrowStateAction, type VoucherEscrowState } from "@/app/actions/interactions"
 
 
-export function PurchasePageClient({ id }: { id: string }) {
+export function PurchasePageClient({
+  id,
+  serverViewerId = null,
+}: {
+  id: string
+  /**
+   * Unified-session viewer id computed by the SERVER page. NextAuth's
+   * useSession() is blind to federated remote-viewer principals, so gating on
+   * it alone forced logged-in federated members into the guest/sign-in modal.
+   */
+  serverViewerId?: string | null
+}) {
   const resolvedParams = { id }
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const { data: session, update: updateSession } = useSession()
   const { listings } = useMarketplace(1000)
+
+  // A viewer is authenticated if EITHER the local NextAuth session or the
+  // server-verified federated principal exists. Server actions and API routes
+  // re-derive identity themselves; this only controls client-side gating.
+  const viewerAgentId = session?.user?.id ?? serverViewerId
+  const isViewerAuthenticated = Boolean(viewerAgentId)
 
   const [fallbackListing, setFallbackListing] = useState<ReturnType<typeof resourceToMarketplaceListing> | null>(null)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
@@ -128,7 +145,7 @@ export function PurchasePageClient({ id }: { id: string }) {
   }, [listing?.cardCheckoutAvailable, listing?.currency, paymentMethod, walletBalance])
 
   useEffect(() => {
-    if (listing?.type !== "voucher" || !session?.user?.id) {
+    if (listing?.type !== "voucher" || !viewerAgentId) {
       setVoucherEscrowState(null)
       return
     }
@@ -145,7 +162,7 @@ export function PurchasePageClient({ id }: { id: string }) {
     return () => {
       cancelled = true
     }
-  }, [listing?.type, resolvedParams.id, session?.user?.id])
+  }, [listing?.type, resolvedParams.id, viewerAgentId])
 
   // Derived values — safe to compute even when listing is null
   const maxSelectableQuantity =
@@ -261,7 +278,7 @@ export function PurchasePageClient({ id }: { id: string }) {
           listingId: resolvedParams.id,
           quantity,
           hours: listing.type === "service" ? quantity : undefined,
-          buyerAgentId: session?.user?.id || null,
+          buyerAgentId: viewerAgentId || null,
           dealPostId,
           bookingDate: selectedBookingDate || null,
           bookingSlot: selectedBookingSlot || null,
@@ -443,15 +460,15 @@ export function PurchasePageClient({ id }: { id: string }) {
       return
     }
 
-    // For non-card methods, require authentication.
-    if (!session?.user && paymentMethod !== "card") {
+    // For non-card methods, require authentication (local OR federated).
+    if (!isViewerAuthenticated && paymentMethod !== "card") {
       setShowAuthModal(true)
       return
     }
 
     // Guest card checkout is supported by the API route and should go directly
     // to Stripe rather than forcing a modal detour.
-    if (!session?.user && paymentMethod === "card") {
+    if (!isViewerAuthenticated && paymentMethod === "card") {
       setIsProcessing(true)
       try {
         await handleCardCheckout()
@@ -524,7 +541,7 @@ export function PurchasePageClient({ id }: { id: string }) {
       cardUnavailableReason={listing.cardCheckoutUnavailableReason}
       walletBalanceCents={walletBalance?.balanceCents}
       hasEthAddress={!!walletBalance?.ethAddress}
-      isAuthenticated={!!session?.user}
+      isAuthenticated={isViewerAuthenticated}
       disabled={isProcessing}
       listingAcceptsCrypto={listingAcceptsCrypto}
       listingCurrency={listing.currency}
@@ -537,7 +554,7 @@ export function PurchasePageClient({ id }: { id: string }) {
     const hasEscrowClaim = voucherEscrowState?.hasEscrowClaim ?? false
 
     const handleVoucherClaim = async () => {
-      if (!session?.user) {
+      if (!isViewerAuthenticated) {
         setShowAuthModal(true)
         return
       }

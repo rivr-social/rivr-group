@@ -9,6 +9,8 @@
 import { PurchasePageClient } from "./purchase-client"
 import { getResource } from "@/lib/queries/resources"
 import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
+import { getSession } from "@/lib/auth/get-session"
+import { resolveLocalActorId } from "@/lib/federation/resolution"
 
 export default async function MarketplaceItemPurchasePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -20,5 +22,16 @@ export default async function MarketplaceItemPurchasePage({ params }: { params: 
     metadata: resource?.metadata as Record<string, unknown> | null,
     subPath: "/purchase",
   })
-  return <PurchasePageClient id={id} />
+  // Server-computed viewer: the client's NextAuth useSession() cannot see a
+  // federated remote-viewer cookie, so a logged-in federated member was shown
+  // the "Sign in to complete your purchase" modal (toybox verification,
+  // 2026-07-11). The unified session is resolved HERE and passed down —
+  // identity still never comes from the client.
+  const session = await getSession()
+  const serverViewerId = session?.user?.id
+    ? session.user.authMethod === "federated"
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id
+    : null
+  return <PurchasePageClient id={id} serverViewerId={serverViewerId} />
 }
