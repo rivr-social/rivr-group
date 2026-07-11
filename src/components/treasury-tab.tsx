@@ -31,6 +31,7 @@ import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
 import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
 import { TreasuryFundsCard } from "@/components/treasury-funds-card"
 import { ShareClassesCard } from "@/components/share-classes-card"
+import { TreasuryFlowChart } from "@/components/treasury-flow-chart"
 import type { WalletBalance, WalletTransactionView } from "@/types"
 
 interface TreasuryTabProps {
@@ -282,12 +283,18 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid grid-cols-4 w-full">
+        <TabsList className="grid grid-cols-5 w-full">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="allocations">Allocations</TabsTrigger>
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
           <TabsTrigger value="budget">Budget</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
         </TabsList>
+
+        {/* ── Allocations: how funds flow among the entities ── */}
+        <TabsContent value="allocations" className="mt-6">
+          <TreasuryFlowChart groupId={groupId} />
+        </TabsContent>
 
         <TabsContent value="overview" className="space-y-6 mt-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
