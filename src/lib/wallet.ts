@@ -399,6 +399,24 @@ export async function getPlatformWallet(): Promise<WalletRecord> {
   return getSettlementWalletForAgent(configuredOwnerId);
 }
 
+/**
+ * Like {@link getPlatformWallet} but returns `null` instead of throwing when
+ * `PLATFORM_AGENT_ID` is not configured.
+ *
+ * For settlement paths where the absence of a platform-fee sink is a legitimate
+ * state rather than a misconfiguration: a self-hosted SOVEREIGN group instance
+ * settling its OWN membership dues has no hosted-platform intermediary to skim
+ * a fee for. Callers treat `null` as "no platform cut — the full amount belongs
+ * to the counterpart" rather than aborting the whole settlement. Do NOT use
+ * this on the hosted-marketplace fee path, which MUST fail closed rather than
+ * silently route a platform fee to nowhere.
+ */
+export async function getPlatformWalletOrNull(): Promise<WalletRecord | null> {
+  const configuredOwnerId = process.env.PLATFORM_AGENT_ID?.trim();
+  if (!configuredOwnerId) return null;
+  return getSettlementWalletForAgent(configuredOwnerId);
+}
+
 // ---------------------------------------------------------------------------
 // 1. getOrCreateWallet
 // ---------------------------------------------------------------------------

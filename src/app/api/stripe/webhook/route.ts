@@ -36,6 +36,7 @@ import {
   confirmDeposit,
   failDeposit,
   getPlatformWallet,
+  getPlatformWalletOrNull,
   getSettlementWalletForAgent,
   getOrCreateProjectWallet,
   creditWalletCapital,
@@ -1402,7 +1403,6 @@ async function settleGroupSubscriptionCapital(params: {
 
   const grossCents = stripeSub.items.data[0]?.price?.unit_amount ?? 0;
   if (grossCents <= 0) return;
-  const groupNetCents = Math.max(0, grossCents - applicationFeeCents);
 
   const cycleKey = `${stripeSub.id}:${periodStartUnix}`;
 
@@ -1415,7 +1415,16 @@ async function settleGroupSubscriptionCapital(params: {
   if (existingEntry) return;
 
   const groupWallet = await getSettlementWalletForAgent(groupId);
-  const platformWallet = await getPlatformWallet();
+  // A self-hosted SOVEREIGN group settling its OWN dues has no hosted-platform
+  // intermediary — `PLATFORM_AGENT_ID` is unset there. Resolving the platform
+  // wallet UNCONDITIONALLY used to throw on such instances, aborting the whole
+  // settlement so the group's own net credit never landed either (toybox
+  // campaign 2026-07-11: dues marked active, treasury never credited). Resolve
+  // it lazily; when there is no sink, the fee is NOT skimmed and the group is
+  // credited the full gross.
+  const platformWallet = applicationFeeCents > 0 ? await getPlatformWalletOrNull() : null;
+  const effectiveFeeCents = platformWallet ? applicationFeeCents : 0;
+  const groupNetCents = Math.max(0, grossCents - effectiveFeeCents);
   const currency = stripeSub.currency ?? 'usd';
 
   await db.transaction(async (tx) => {
@@ -1434,7 +1443,7 @@ async function settleGroupSubscriptionCapital(params: {
           type: 'group_deposit',
           toWalletId: groupWallet.id,
           amountCents: groupNetCents,
-          feeCents: applicationFeeCents,
+          feeCents: effectiveFeeCents,
           currency,
           description: `Group membership subscription ${stripeSub.id}`,
           referenceType: 'agent',
@@ -1462,11 +1471,11 @@ async function settleGroupSubscriptionCapital(params: {
       });
     }
 
-    if (applicationFeeCents > 0) {
+    if (platformWallet && effectiveFeeCents > 0) {
       await tx
         .update(wallets)
         .set({
-          balanceCents: sql`${wallets.balanceCents} + ${applicationFeeCents}`,
+          balanceCents: sql`${wallets.balanceCents} + ${effectiveFeeCents}`,
           updatedAt: new Date(),
         })
         .where(eq(wallets.id, platformWallet.id));
@@ -1476,7 +1485,7 @@ async function settleGroupSubscriptionCapital(params: {
         .values({
           type: 'service_fee',
           toWalletId: platformWallet.id,
-          amountCents: applicationFeeCents,
+          amountCents: effectiveFeeCents,
           feeCents: 0,
           currency,
           description: `Platform fee for group membership subscription ${stripeSub.id}`,
@@ -1492,7 +1501,7 @@ async function settleGroupSubscriptionCapital(params: {
         })
         .returning({ id: walletTransactions.id });
 
-      await creditWalletCapital(tx, platformWallet.id, applicationFeeCents, {
+      await creditWalletCapital(tx, platformWallet.id, effectiveFeeCents, {
         settlementStatus: 'pending',
         sourceType: 'group_membership_subscription_platform_fee',
         sourceTransactionId: feeTx.id,
