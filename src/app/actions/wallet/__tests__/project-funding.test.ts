@@ -53,6 +53,7 @@ import { auth } from "@/auth";
 import { db } from "@/db";
 import { getSettlementWalletForAgent, getProjectWalletForResource } from "@/lib/wallet";
 import { transferProjectBalanceAction } from "../project-funding";
+import { recordProjectExpenseAction } from "../expenses";
 
 type TestDb = Parameters<Parameters<typeof withTestTransaction>[0]>[0];
 
@@ -117,6 +118,25 @@ describe("transferProjectBalanceAction", () => {
         .where(eq(wallets.id, groupWallet.id));
       expect(projectAfterReturn.balanceCents).toBe(2_500);
       expect(treasuryAfterReturn.balanceCents).toBe(7_500);
+    }));
+
+  it("funded project accepts an expense (owner-routed facade, sim round-2 residual)", () =>
+    withTestTransaction(async (testDb) => {
+      const { admin, group, project } = await seedProjectFunding(testDb);
+      vi.mocked(auth).mockResolvedValue(mockAuthSession(admin.id));
+
+      const funded = await transferProjectBalanceAction(group.id, project.id, 3_000, "to_project");
+      expect(funded.success).toBe(true);
+
+      const expensed = await recordProjectExpenseAction(project.id, 1_200, {
+        description: "Sim supplies",
+        payee: "Hardware store",
+      });
+      expect(expensed.success).toBe(true);
+      expect(expensed.transactionId).toBeTruthy();
+
+      const projectWallet = await getProjectWalletForResource(project.id);
+      expect(projectWallet!.balanceCents).toBe(1_800);
     }));
 
   it("refuses to fund a completed project (residue belongs to the sweep)", () =>

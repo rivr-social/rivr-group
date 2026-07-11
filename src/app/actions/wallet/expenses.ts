@@ -75,23 +75,31 @@ export async function recordProjectExpenseAction(
     return { success: false, error: 'A description is required for the expense.' };
   }
 
+  // Facade routing must target an AGENT whose home instance is authoritative —
+  // the project's owning group/org. Targeting the project RESOURCE id resolved
+  // to no local agent, so the facade owner-forwarded the write off-instance and
+  // remote-viewer admins got "Federation mutations require an actor-bound
+  // session or remote viewer token" (persona sim round 2, 2026-07-11).
+  const [projectRow] = await db
+    .select({ type: resources.type, ownerId: resources.ownerId })
+    .from(resources)
+    .where(eq(resources.id, projectId))
+    .limit(1);
+  if (!projectRow || projectRow.type !== RESOURCE_TYPE_PROJECT) {
+    return { success: false, error: 'Expenses can only be recorded against a project.' };
+  }
+
   const result = await updateFacade.execute(
     {
       type: 'recordProjectExpenseAction',
       actorId: agentId,
-      targetAgentId: projectId,
+      targetAgentId: projectRow.ownerId,
       payload: { projectId, amountCents, description },
     },
     async () => {
       const access = await canModifyResource(agentId, projectId);
       if (!access.allowed || !access.resource) {
         throw new Error('You do not have permission to spend from this project treasury.');
-      }
-
-      // The `resources.type` column is authoritative for the project guard.
-      const isProject = await resolveResourceTypeIsProject(projectId);
-      if (!isProject) {
-        throw new Error('Expenses can only be recorded against a project.');
       }
 
       const projectWallet = await getProjectWalletForResource(projectId);
@@ -129,15 +137,3 @@ export async function recordProjectExpenseAction(
   return result.data ?? { success: true };
 }
 
-/**
- * Confirms a resource row is of type `project`. Used as a defensive guard before
- * debiting a treasury when the in-memory metadata does not carry the type.
- */
-async function resolveResourceTypeIsProject(resourceId: string): Promise<boolean> {
-  const [row] = await db
-    .select({ type: resources.type })
-    .from(resources)
-    .where(eq(resources.id, resourceId))
-    .limit(1);
-  return row?.type === RESOURCE_TYPE_PROJECT;
-}
