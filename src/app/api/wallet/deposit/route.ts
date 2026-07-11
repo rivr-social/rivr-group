@@ -28,7 +28,9 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
+import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { getOrCreateWallet, createDepositIntent } from '@/lib/wallet';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import { MIN_DEPOSIT_CENTS, MAX_DEPOSIT_CENTS } from '@/lib/wallet-constants';
@@ -59,14 +61,23 @@ import {
  * ```
  */
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  const agentId = session?.user?.id;
-
-  if (!agentId) {
+  // Unified session: federated remote-viewer members fund their local wallet
+  // on this sovereign too — plain `auth()` 401'd them (2026-07-11 sweep). The
+  // wallet row is FK-keyed on a local agents row, so a first-contact
+  // federated depositor is projected before `getOrCreateWallet`.
+  const session = await getSession();
+  if (!session?.user?.id) {
     return NextResponse.json(
       { error: 'Authentication required' },
       { status: STATUS_UNAUTHORIZED },
     );
+  }
+  const agentId =
+    session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id;
+  if (session.user.authMethod === 'federated') {
+    await ensureLocalActorAgent(agentId);
   }
 
   // Abuse protection: throttle deposit intent creation per authenticated agent.

@@ -8,7 +8,7 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
 import { createProvidePaymentAction } from '@/app/actions/wallet';
 import {
   STATUS_BAD_REQUEST,
@@ -21,8 +21,11 @@ import { getClientIp } from '@/lib/client-ip';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
-  // Security boundary: only authenticated principals can create payment intents.
-  const session = await auth();
+  // Security boundary: only authenticated principals can create payment
+  // intents. Unified session so federated remote-viewer members pass the
+  // gate; the delegated wallet action resolves + projects the principal
+  // itself (`getCurrentUserIdForWrite`), so this route only needs the check.
+  const session = await getSession();
   if (!session?.user?.id) {
     return NextResponse.json(
       { error: 'Authentication required' },

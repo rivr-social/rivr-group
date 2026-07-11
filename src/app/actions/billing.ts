@@ -24,7 +24,9 @@
  * - Input validation is performed before external provider calls.
  * - Failures are logged and transformed into safe error messages for callers.
  */
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
+import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { db } from '@/db';
 import { agents, emailLog, subscriptions, type SubscriptionStatus } from '@/db/schema';
 import { and, eq, gte, lte } from 'drizzle-orm';
@@ -48,6 +50,27 @@ type BillingResult = {
 };
 
 /**
+ * Unified-session actor resolution for billing actions: federated
+ * remote-viewer members (SSO'd from their home instance, no local NextAuth
+ * JWT) subscribe to tiers on sovereigns too — plain `auth()` locked them out
+ * (2026-07-11 payment-rail sweep). Write paths pass `ensure: true` so a
+ * first-contact federated subscriber gets a projected local agents row before
+ * Stripe-customer / subscription keyed writes; read paths only normalize.
+ */
+async function resolveBillingActorId(options?: { ensure?: boolean }): Promise<string | null> {
+  const session = await getSession();
+  if (!session?.user?.id) return null;
+  if (session.user.authMethod === 'federated') {
+    const localActorId = await resolveLocalActorId(session.user.id);
+    if (options?.ensure) {
+      await ensureLocalActorAgent(localActorId);
+    }
+    return localActorId;
+  }
+  return session.user.id;
+}
+
+/**
  * Creates a Stripe Checkout session and returns its redirect URL.
  *
  * @param {string} tier - Membership tier key expected in `MEMBERSHIP_TIERS`.
@@ -65,8 +88,8 @@ export async function createCheckoutAction(
   billingPeriod: 'monthly' | 'yearly',
   returnPath?: string
 ): Promise<BillingResult> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await resolveBillingActorId({ ensure: true });
+  if (!actorId) {
     return { success: false, error: 'You must be logged in to subscribe.' };
   }
 
@@ -81,7 +104,7 @@ export async function createCheckoutAction(
   try {
     // Tier/cadence are already validated, so casting is safe at this point.
     const url = await createCheckoutSession(
-      session.user.id,
+      actorId,
       tier as MembershipTier,
       billingPeriod,
       {
@@ -114,12 +137,12 @@ export async function createCheckoutAction(
  * ```
  */
 export async function getSubscriptionStatusAction() {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await resolveBillingActorId();
+  if (!actorId) {
     return null;
   }
 
-  const sub = await getActiveSubscription(session.user.id);
+  const sub = await getActiveSubscription(actorId);
   if (!sub) return null;
 
   return {
@@ -145,8 +168,8 @@ export async function startFreeTrialAction(
   tier: MembershipTier = 'organizer',
   returnPath?: string
 ): Promise<{ success: boolean; error?: string; url?: string }> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await resolveBillingActorId({ ensure: true });
+  if (!actorId) {
     return { success: false, error: 'You must be logged in to start a trial.' };
   }
 
@@ -154,14 +177,14 @@ export async function startFreeTrialAction(
     return { success: false, error: `Invalid membership tier: ${tier}` };
   }
 
-  const active = await getActiveSubscription(session.user.id);
+  const active = await getActiveSubscription(actorId);
   if (active && (active.status === 'active' || active.status === 'trialing')) {
     return { success: true };
   }
 
   try {
     const url = await createCheckoutSession(
-      session.user.id,
+      actorId,
       tier,
       'monthly',
       {
@@ -187,12 +210,12 @@ export async function startFreeTrialAction(
  * @returns Array of { tier, status } objects, or empty array if unauthenticated.
  */
 export async function getAllSubscriptionStatusesAction() {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await resolveBillingActorId();
+  if (!actorId) {
     return [];
   }
 
-  const subs = await getAllActiveSubscriptions(session.user.id);
+  const subs = await getAllActiveSubscriptions(actorId);
   return subs.map((sub) => ({
     tier: sub.membershipTier,
     status: sub.status,
@@ -205,14 +228,14 @@ export async function sendTrialEndingRemindersAction(): Promise<{
   error?: string;
 }> {
   // Admin-only: this action mutates subscription state and sends emails.
-  const session = await auth();
-  if (!session?.user?.id) {
+  const actorId = await resolveBillingActorId();
+  if (!actorId) {
     return { success: false, sent: 0, error: "Authentication required." };
   }
   const [agent] = await db
     .select({ metadata: agents.metadata })
     .from(agents)
-    .where(eq(agents.id, session.user.id))
+    .where(eq(agents.id, actorId))
     .limit(1);
   const agentMeta =
     agent?.metadata && typeof agent.metadata === "object" && !Array.isArray(agent.metadata)

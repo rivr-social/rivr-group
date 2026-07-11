@@ -16,7 +16,9 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
+import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { db } from '@/db';
 import { agents } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -34,14 +36,25 @@ import { getOrCreateWallet } from '@/lib/wallet';
  * 4. If present, redirect to `/profile?subscription=success`.
  */
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  const userId = session?.user?.id;
+  // Unified session: the post-checkout redirect must recognize federated
+  // remote-viewer subscribers (no local NextAuth JWT) — plain `auth()` bounced
+  // them to login and Connect onboarding never started. The wallet + agent
+  // lookups are keyed on a local agents row, so a first-contact federated
+  // subscriber is projected before `getOrCreateWallet`.
+  const session = await getSession();
   const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
   const returnPath = request.nextUrl.searchParams.get('return_path');
   const resolvedReturnPath = returnPath && returnPath.startsWith("/") ? returnPath : "/profile?subscription=success";
 
-  if (!userId) {
+  if (!session?.user?.id) {
     return NextResponse.redirect(`${baseUrl}/auth/login`);
+  }
+  const userId =
+    session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id;
+  if (session.user.authMethod === 'federated') {
+    await ensureLocalActorAgent(userId);
   }
 
   try {

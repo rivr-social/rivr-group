@@ -10,7 +10,8 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { db } from '@/db';
 import { wallets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -23,14 +24,22 @@ import { getStripe } from '@/lib/billing';
  * Validates account ownership, updates wallet metadata, and redirects to settings.
  */
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  const userId = session?.user?.id;
+  // Unified session: a federated remote-viewer returning from Stripe hosted
+  // onboarding carries no local NextAuth JWT — plain `auth()` bounced them to
+  // login and the wallet metadata never updated. The Connect account's
+  // `ownerId` metadata stores the LOCAL agent id, so the federated id must be
+  // normalized before the ownership check.
+  const session = await getSession();
 
   const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
 
-  if (!userId) {
+  if (!session?.user?.id) {
     return NextResponse.redirect(`${baseUrl}/auth/login`);
   }
+  const userId =
+    session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id;
 
   const accountId = request.nextUrl.searchParams.get('account_id');
   const returnPath = request.nextUrl.searchParams.get('return_path');

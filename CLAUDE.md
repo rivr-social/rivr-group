@@ -277,6 +277,22 @@ rendered for ALL members (self "Your Shares" view) with admin authoring gated by
 `canManageStripe`. Steward/Worker are the canonical hidden classes; an org grants
 the tier by assigning a member shares in the org's Stewards/Workers class.
 
+## Dues gross-up pricing + federated payment principals (2026-07-11)
+
+Group-membership dues are priced through `computeGroupSubscriptionChargePricing`
+(`lib/group-subscription-pricing.ts`) — the canonical `calculateCheckoutFees`
+gross-up with zero flat overhead — so the PAYER covers Stripe's 2.9% + 30¢ and
+RIVR's 5% margin while the group nets the full plan face value on both
+settlement rails (flat 5%-of-face netted the platform NEGATIVE on small dues).
+Connect `application_fee_percent` derives from the gross-up; admin-configured
+Stripe price IDs are honored only when they already cover the grossed-up total.
+Every money surface (tier checkout, wallet deposit, payment-intent, Connect
+return, subscription-success, marketplace checkout, billing + purchase actions)
+resolves principals via the unified session (`getSession` +
+`resolveLocalActorId`) and projects first-contact federated actors
+(`ensureLocalActorAgent` / `getCurrentUserIdForWrite` in `actions/wallet/helpers.ts`)
+before actor-keyed writes. Do not reintroduce plain `auth()` on economic routes.
+
 ## Job cash pay + completion payout (2026-07-07)
 
 Jobs carry cash compensation alongside task points: `metadata.payKind`

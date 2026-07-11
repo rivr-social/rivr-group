@@ -23,6 +23,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/get-session';
 import { resolveLocalActorId } from '@/lib/federation/resolution';
+import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { db } from '@/db';
 import { resources, ledger, agents } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -100,6 +101,14 @@ export async function POST(request: NextRequest) {
       ? await resolveLocalActorId(session.user.id)
       : session.user.id
     : null;
+
+  // First-contact enrollment: the buyer id flows into webhook-settled writes
+  // (receipts, capital entries, ledger subject_id), all FK-keyed on a local
+  // agents row a first-contact federated buyer doesn't have yet. Project the
+  // verified principal before checkout so settlement can't dead-letter.
+  if (sessionUserId && session?.user?.authMethod === 'federated') {
+    await ensureLocalActorAgent(sessionUserId);
+  }
 
   let body: {
     listingId?: string;

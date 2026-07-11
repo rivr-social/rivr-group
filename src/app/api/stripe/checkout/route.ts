@@ -26,7 +26,9 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
+import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { createCheckoutSession, MEMBERSHIP_TIERS } from '@/lib/billing';
 import type { MembershipTier } from '@/db/schema';
 import {
@@ -54,18 +56,31 @@ const VALID_PERIODS = new Set(['monthly', 'yearly']);
  * ```
  */
 export async function POST(request: NextRequest) {
-  // Security boundary: only authenticated principals can initiate paid membership flows.
-  const session = await auth();
+  // Security boundary: only authenticated principals can initiate paid
+  // membership flows. Unified session so a sovereign's federated
+  // remote-viewer members (SSO'd from their home instance, no local NextAuth
+  // JWT) can subscribe — plain `auth()` 401'd them (same class as the
+  // 2026-07-11 dues fix). Federated ids normalize to the local agent and are
+  // projected on first contact so getOrCreateStripeCustomer's keyed write
+  // can't hit "Agent not found".
+  const session = await getSession();
   if (!session?.user?.id) {
     return NextResponse.json(
       { error: 'Authentication required' },
       { status: STATUS_UNAUTHORIZED }
     );
   }
+  const memberAgentId =
+    session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id;
+  if (session.user.authMethod === 'federated') {
+    await ensureLocalActorAgent(memberAgentId);
+  }
 
   const clientIp = getClientIp(request.headers);
   const limiter = await rateLimit(
-    `membership-checkout:${clientIp}:${session.user.id}`,
+    `membership-checkout:${clientIp}:${memberAgentId}`,
     RATE_LIMITS.WALLET.limit,
     RATE_LIMITS.WALLET.windowMs,
   );
@@ -107,7 +122,7 @@ export async function POST(request: NextRequest) {
   try {
     // Casting is safe after explicit allow-list validation above.
     const url = await createCheckoutSession(
-      session.user.id,
+      memberAgentId,
       tier as MembershipTier,
       billingPeriod as 'monthly' | 'yearly'
     );

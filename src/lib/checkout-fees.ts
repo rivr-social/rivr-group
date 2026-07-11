@@ -30,6 +30,13 @@ export function calculateCheckoutFees(
   options?: {
     orgCommissionBps?: number;
     platformFeeBps?: number;
+    /**
+     * Connect-account overhead folded into the platform's target net. Defaults
+     * to the marketplace flat overhead; recurring dues pass 0 — their
+     * per-member fee policy has no flat component, they only need the Stripe
+     * processing gross-up.
+     */
+    connectOverheadCents?: number;
   },
 ): CheckoutFeeResult {
   if (!Number.isInteger(sellerPriceCents) || sellerPriceCents < 0) {
@@ -62,8 +69,15 @@ export function calculateCheckoutFees(
       ? Math.round((sellerPriceCents * orgCommissionBps) / BPS_DIVISOR)
       : 0;
 
+  const connectOverheadCents =
+    typeof options?.connectOverheadCents === "number" &&
+    Number.isInteger(options.connectOverheadCents) &&
+    options.connectOverheadCents >= 0
+      ? options.connectOverheadCents
+      : STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS;
+
   const targetPlatformNetCents =
-    platformFeeCents + orgCommissionCents + STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS;
+    platformFeeCents + orgCommissionCents + connectOverheadCents;
 
   const grossBeforeStripeFixedCents =
     sellerPriceCents + targetPlatformNetCents + STRIPE_CARD_FIXED_CENTS;
@@ -85,6 +99,6 @@ export function calculateCheckoutFees(
     orgCommissionCents,
     applicationFeeCents,
     stripeProcessingFeeEstimateCents,
-    connectAccountFeeEstimateCents: STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS,
+    connectAccountFeeEstimateCents: connectOverheadCents,
   };
 }

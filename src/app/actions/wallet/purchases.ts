@@ -26,7 +26,7 @@ import { getAgent } from '@/lib/queries/agents';
 import { getOrCreateStripeCustomer, getStripe } from '@/lib/billing';
 import { consumeBookingSlot, hasBookableSchedule, isBookingSlotAvailable } from '@/lib/booking-slots';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
-import { getCurrentUserId } from './helpers';
+import { getCurrentUserIdForWrite } from './helpers';
 import { isUuid, isPositiveInteger, getAcceptedCurrencies, getAvailableInventory } from './types';
 
 type EventTicketSelectionInput = {
@@ -200,7 +200,7 @@ export async function purchaseWithWalletAction(
   bookingDate?: string | null,
   bookingSlot?: string | null,
 ): Promise<{ success: boolean; receiptId?: string; error?: string }> {
-  const agentId = await getCurrentUserId();
+  const agentId = await getCurrentUserIdForWrite();
   if (!agentId) {
     return { success: false, error: 'You must be logged in to make a purchase.' };
   }
@@ -495,7 +495,7 @@ export async function createEventTicketCheckoutAction(
   eventId: string,
   selections: EventTicketSelectionInput[]
 ): Promise<{ success: boolean; url?: string; error?: string }> {
-  const agentId = await getCurrentUserId();
+  const agentId = await getCurrentUserIdForWrite();
   if (!agentId) {
     return { success: false, error: 'You must be logged in to purchase tickets.' };
   }
@@ -653,7 +653,7 @@ export async function purchaseEventTicketsWithWalletAction(
   eventId: string,
   selections: EventTicketSelectionInput[]
 ): Promise<{ success: boolean; error?: string }> {
-  const agentId = await getCurrentUserId();
+  const agentId = await getCurrentUserIdForWrite();
   if (!agentId) {
     return { success: false, error: 'You must be logged in to purchase tickets.' };
   }
@@ -783,7 +783,7 @@ export async function createProvidePaymentAction(offeringId: string): Promise<{
   };
   error?: string;
 }> {
-  const agentId = await getCurrentUserId();
+  const agentId = await getCurrentUserIdForWrite();
   if (!agentId) {
     return { success: false, error: 'You must be logged in.' };
   }

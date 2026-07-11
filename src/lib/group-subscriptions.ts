@@ -11,6 +11,13 @@
  *   recurring charge is a destination charge to the group's connected account.
  *   RIVR keeps a per-member platform fee via `application_fee_percent`. The
  *   group is paid directly by Stripe.
+ *
+ * Pricing (2026-07-11): the member's recurring charge is grossed up over the
+ * plan's face value via `computeGroupSubscriptionChargePricing` (the canonical
+ * `calculateCheckoutFees` gross-up, zero flat overhead) so the PAYER covers
+ * Stripe's 2.9% + 30¢ and RIVR's 5% margin while the group nets the full plan
+ * price on either rail. The previous flat-5%-of-face-value model netted the
+ * platform NEGATIVE on small dues.
  * - `platform_capital`: fallback when the group is NOT yet onboarded to Connect.
  *   RIVR collects the full charge and owes the group, settled internally on the
  *   existing `capital_entries` rail (see the webhook handler).
@@ -35,16 +42,18 @@ import { getSettlementWalletForAgent } from '@/lib/wallet';
 import type { GroupMembershipPlan } from '@/lib/group-memberships';
 import type { GroupSubscriptionSettlementRail } from '@/db/schema';
 import {
-  GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT,
   planAmountCents,
-  computePlatformFeeCents,
+  computeGroupSubscriptionChargePricing,
+  chargePricingFromBuyerTotal,
   type GroupSubscriptionBillingPeriod,
+  type GroupSubscriptionChargePricing,
 } from '@/lib/group-subscription-pricing';
 
 export {
   GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT,
   planAmountCents,
   computePlatformFeeCents,
+  computeGroupSubscriptionChargePricing,
 } from '@/lib/group-subscription-pricing';
 export type { GroupSubscriptionBillingPeriod } from '@/lib/group-subscription-pricing';
 
@@ -120,27 +129,63 @@ export async function createGroupSubscriptionCheckout(params: {
   }
 
   const settlement = await resolveGroupSettlement(groupId);
-  const applicationFeeCents = computePlatformFeeCents(amountCents);
   const customerId = await getOrCreateStripeCustomer(memberAgentId);
   const stripe = getStripe();
 
   const interval: Stripe.PriceCreateParams.Recurring.Interval =
     billingPeriod === 'monthly' ? 'month' : 'year';
 
+  // The member's charge is GROSSED UP over the plan's face value so the payer
+  // covers Stripe's processing fee and RIVR's per-member margin while the
+  // group nets the full plan price. Taking the flat 5% out of face value made
+  // the platform net NEGATIVE on small dues (toybox campaign 2026-07-11).
+  const grossUpPricing = computeGroupSubscriptionChargePricing(amountCents);
+
   const configuredPriceId =
     billingPeriod === 'monthly' ? plan.stripePriceIdMonthly : plan.stripePriceIdYearly;
 
-  const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = configuredPriceId
-    ? { price: configuredPriceId, quantity: 1 }
-    : {
-        price_data: {
-          currency: 'usd',
-          product_data: { name: `${plan.name} membership` },
-          recurring: { interval },
-          unit_amount: amountCents,
-        },
-        quantity: 1,
-      };
+  // An admin-configured Stripe price is honored only when it already carries
+  // at least the gross-up (its unit amount covers plan net + fees); otherwise
+  // it would recreate the negative-net bug, so fall back to dynamic pricing.
+  let pricing: GroupSubscriptionChargePricing = grossUpPricing;
+  let lineItem: Stripe.Checkout.SessionCreateParams.LineItem | null = null;
+  if (configuredPriceId) {
+    try {
+      const configuredPrice = await stripe.prices.retrieve(configuredPriceId);
+      const configuredAmount = configuredPrice.unit_amount ?? 0;
+      if (
+        configuredPrice.currency === 'usd' &&
+        configuredPrice.recurring?.interval === interval &&
+        configuredAmount >= grossUpPricing.buyerTotalCents
+      ) {
+        pricing = chargePricingFromBuyerTotal(amountCents, configuredAmount);
+        lineItem = { price: configuredPriceId, quantity: 1 };
+      } else {
+        console.warn(
+          `Configured Stripe price ${configuredPriceId} does not cover the grossed-up dues total ` +
+            `(${configuredAmount} < ${grossUpPricing.buyerTotalCents} or wrong currency/interval); ` +
+            'using dynamic gross-up pricing instead.',
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `Configured Stripe price ${configuredPriceId} could not be retrieved; using dynamic gross-up pricing.`,
+        err,
+      );
+    }
+  }
+
+  if (!lineItem) {
+    lineItem = {
+      price_data: {
+        currency: 'usd',
+        product_data: { name: `${plan.name} membership` },
+        recurring: { interval },
+        unit_amount: pricing.buyerTotalCents,
+      },
+      quantity: 1,
+    };
+  }
 
   const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
   const successUrl = new URL(params.successPath ?? `/groups/${groupId}?subscribed=1`, baseUrl);
@@ -152,7 +197,9 @@ export async function createGroupSubscriptionCheckout(params: {
     groupId,
     planId: plan.id,
     settlementRail: settlement.rail,
-    applicationFeeCents: String(applicationFeeCents),
+    applicationFeeCents: String(pricing.applicationFeeCents),
+    planAmountCents: String(pricing.planAmountCents),
+    buyerTotalCents: String(pricing.buyerTotalCents),
     billingPeriod,
   };
 
@@ -160,10 +207,13 @@ export async function createGroupSubscriptionCheckout(params: {
     metadata: subscriptionMetadata,
   };
 
-  // Connect rail: destination charge to the group's connected account, RIVR
-  // keeps the per-member platform fee. Fallback rail collects to the platform.
+  // Connect rail: destination charge to the group's connected account. The
+  // application-fee percent is derived from the gross-up (fee ÷ buyer total),
+  // so after Stripe's cut the group still nets the plan's full face value and
+  // RIVR keeps its margin — a flat 5% of face value netted negative on small
+  // dues because the platform (merchant of record) pays Stripe's fee here.
   if (settlement.rail === 'connect' && settlement.connectAccountId) {
-    subscriptionData.application_fee_percent = GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT;
+    subscriptionData.application_fee_percent = pricing.applicationFeePercent;
     subscriptionData.transfer_data = { destination: settlement.connectAccountId };
     subscriptionMetadata.stripeConnectAccountId = settlement.connectAccountId;
   }
