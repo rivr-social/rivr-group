@@ -30,6 +30,8 @@ export interface ProjectFlowNode extends FlowNode {
   expenseCents: number;
   /** Total transferred from this project's wallet into the group treasury. */
   sweptCents: number;
+  /** Total apportioned from the group treasury into this project's wallet. */
+  fundedCents: number;
   completed: boolean;
 }
 
@@ -117,13 +119,19 @@ export async function getTreasuryFlowData(groupId: string): Promise<TreasuryFlow
 
   const projects: ProjectFlowNode[] = [];
   for (const row of projectRows) {
-    const swept = treasury ? await sumBetween(row.wallet_id, treasury.id) : 0;
+    const [swept, funded] = treasury
+      ? await Promise.all([
+          sumBetween(row.wallet_id, treasury.id),
+          sumBetween(treasury.id, row.wallet_id),
+        ])
+      : [0, 0];
     projects.push({
       id: row.id,
       name: row.name,
       balanceCents: Number(row.balance ?? 0),
       expenseCents: Number(row.expense_cents ?? 0),
       sweptCents: swept,
+      fundedCents: funded,
       completed: row.status === "completed",
     });
   }

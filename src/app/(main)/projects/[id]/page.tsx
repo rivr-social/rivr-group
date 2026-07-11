@@ -891,6 +891,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
           <ProjectExpensePanel
             projectId={project.id}
+            groupId={ownerId ?? null}
             currency={(projectWalletBalance?.currency || "USD").toUpperCase()}
             balanceCents={projectWalletBalance?.balanceCents ?? 0}
             canManage={isAdmin}

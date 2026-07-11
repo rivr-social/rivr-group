@@ -18,9 +18,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Receipt, Loader2 } from "lucide-react"
+import { Receipt, Loader2, ArrowLeftRight } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { recordProjectExpenseAction } from "@/app/actions/wallet/expenses"
+import {
+  transferProjectBalanceAction,
+  type ProjectFundingDirection,
+} from "@/app/actions/wallet/project-funding"
 
 /** A recorded expense transaction as shown in the list. */
 export interface ProjectExpenseView {
@@ -33,6 +37,12 @@ export interface ProjectExpenseView {
 
 interface ProjectExpensePanelProps {
   projectId: string
+  /**
+   * The owning group agent id, enabling the treasury ⇄ project Move-money
+   * controls; null hides them (personally-owned projects have no group
+   * treasury to apportion from).
+   */
+  groupId: string | null
   currency: string
   /** Current treasury balance, used to client-validate affordability. */
   balanceCents: number
@@ -58,6 +68,7 @@ function formatDate(value: string | Date): string {
 
 export function ProjectExpensePanel({
   projectId,
+  groupId,
   currency,
   balanceCents,
   canManage,
@@ -71,6 +82,49 @@ export function ProjectExpensePanel({
   const [category, setCategory] = useState("")
   const [payee, setPayee] = useState("")
   const [isSaving, setIsSaving] = useState(false)
+
+  // Treasury ⇄ project Move-money controls.
+  const [moveAmount, setMoveAmount] = useState("")
+  const [moveDirection, setMoveDirection] = useState<ProjectFundingDirection>("to_project")
+  const [isMoving, setIsMoving] = useState(false)
+
+  const parsedMoveDollars = Number.parseFloat(moveAmount)
+  const moveAmountCents =
+    Number.isFinite(parsedMoveDollars) && parsedMoveDollars > 0 ? Math.round(parsedMoveDollars * 100) : 0
+  const moveExceedsProject = moveDirection === "to_main" && moveAmountCents > balanceCents
+  const moveBelowMinimum = moveAmountCents > 0 && moveAmountCents < MIN_EXPENSE_CENTS
+  const canMove =
+    canManage && !!groupId && !isMoving && moveAmountCents >= MIN_EXPENSE_CENTS && !moveExceedsProject
+
+  async function handleMove() {
+    if (!canMove || !groupId) return
+    setIsMoving(true)
+    try {
+      const result = await transferProjectBalanceAction(groupId, projectId, moveAmountCents, moveDirection)
+      if (!result.success) {
+        toast({
+          title: "Could not move money",
+          description: result.error ?? "Please try again.",
+          variant: "destructive",
+        })
+        return
+      }
+      toast({
+        title: "Money moved",
+        description:
+          moveDirection === "to_project"
+            ? `${formatMoney(moveAmountCents, currency)} allocated from the group treasury.`
+            : `${formatMoney(moveAmountCents, currency)} returned to the group treasury.`,
+      })
+      setMoveAmount("")
+      router.refresh()
+    } catch (error) {
+      console.error("transferProjectBalanceAction error:", error)
+      toast({ title: "Could not move money", description: "An unexpected error occurred.", variant: "destructive" })
+    } finally {
+      setIsMoving(false)
+    }
+  }
 
   const parsedDollars = Number.parseFloat(amount)
   const amountCents =
@@ -127,6 +181,56 @@ export function ProjectExpensePanel({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {canManage && groupId ? (
+          <div className="space-y-3 rounded-md border p-4">
+            <div className="flex items-center gap-2">
+              <ArrowLeftRight className="h-4 w-4" />
+              <p className="text-sm font-medium">Move money</p>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Apportion funds between the group treasury and this project&apos;s wallet.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <Label htmlFor="project-move-direction">Direction</Label>
+                <select
+                  id="project-move-direction"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={moveDirection}
+                  onChange={(e) => setMoveDirection(e.target.value as ProjectFundingDirection)}
+                >
+                  <option value="to_project">Group treasury → project</option>
+                  <option value="to_main">Project → group treasury</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="project-move-amount">Amount</Label>
+                <Input
+                  id="project-move-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={moveAmount}
+                  onChange={(e) => setMoveAmount(e.target.value)}
+                />
+                {moveExceedsProject ? (
+                  <p className="text-xs text-destructive">Exceeds project balance ({formatMoney(balanceCents, currency)}).</p>
+                ) : moveBelowMinimum ? (
+                  <p className="text-xs text-destructive">Minimum transfer is {formatMoney(MIN_EXPENSE_CENTS, currency)}.</p>
+                ) : null}
+              </div>
+              <div className="flex items-end">
+                <Button onClick={handleMove} disabled={!canMove} className="w-full">
+                  {isMoving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ArrowLeftRight className="h-4 w-4 mr-2" />}
+                  Move money
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {canManage ? (
           <div className="space-y-3 rounded-md border p-4">
             <div className="grid gap-3 sm:grid-cols-2">

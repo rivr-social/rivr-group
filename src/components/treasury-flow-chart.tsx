@@ -57,10 +57,12 @@ function Node({ box }: { box: Box }) {
   )
 }
 
-function Edge({ from, to, label, dashed }: { from: Box; to: Box; label?: string; dashed?: boolean }) {
-  const x1 = from.x + NODE_W
+function Edge({ from, to, label, dashed, reverse }: { from: Box; to: Box; label?: string; dashed?: boolean; reverse?: boolean }) {
+  // `reverse` draws a right-to-left flow (e.g. treasury funding a project):
+  // the path leaves the source's LEFT edge and enters the target's RIGHT edge.
+  const x1 = reverse ? from.x : from.x + NODE_W
   const y1 = from.y + NODE_H / 2
-  const x2 = to.x
+  const x2 = reverse ? to.x + NODE_W : to.x
   const y2 = to.y + NODE_H / 2
   const mx = (x1 + x2) / 2
   return (
@@ -183,6 +185,9 @@ export function TreasuryFlowChart({ groupId }: { groupId: string }) {
             const p = projects[i]
             return (
               <g key={p.id}>
+                {p.fundedCents > 0 && (
+                  <Edge from={treasuryBox} to={box} label={`fund ${fmt(p.fundedCents)}`} reverse />
+                )}
                 {p.expenseCents > 0 && <Edge from={box} to={expenseBox} label={fmt(p.expenseCents)} />}
                 <Edge
                   from={box}

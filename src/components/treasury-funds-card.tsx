@@ -74,6 +74,12 @@ import type {
 
 interface TreasuryFundsCardProps {
   groupId: string
+  /**
+   * Called after any move that changes the MAIN treasury balance, so the
+   * parent tab can refresh its headline "Current Balance" card — which
+   * otherwise kept showing the pre-move number (persona sim, 2026-07-11).
+   */
+  onBalancesChanged?: () => void
 }
 
 type FundDialogMode = "rename" | "assign" | "move" | null
@@ -83,7 +89,7 @@ function formatUsd(cents: number | null): string {
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" })
 }
 
-export function TreasuryFundsCard({ groupId }: TreasuryFundsCardProps) {
+export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsCardProps) {
   const [overview, setOverview] = useState<GroupTreasuryFundsOverview | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [pendingFundId, setPendingFundId] = useState<string | null>(null)
@@ -261,6 +267,7 @@ export function TreasuryFundsCard({ groupId }: TreasuryFundsCardProps) {
         })
         closeDialog()
         await loadOverview()
+        onBalancesChanged?.()
       } else {
         toast({ title: "Could not move money", description: result.error, variant: "destructive" })
       }

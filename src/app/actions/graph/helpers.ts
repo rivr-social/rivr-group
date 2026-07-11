@@ -1,14 +1,14 @@
 "use server";
 
-import { auth } from "@/auth";
 import type { Agent, Resource } from "@/db/schema";
+import { getSession } from "@/lib/auth/get-session";
+import { resolveLocalActorId } from "@/lib/federation/resolution";
 import { check } from "@/lib/permissions";
 import { getAgent } from "@/lib/queries/agents";
 import { isAnonymousCrawlableVisibility } from "./types";
 
 export async function requireActorId(): Promise<string> {
-  const session = await auth();
-  const actorId = session?.user?.id;
+  const actorId = await tryActorId();
   if (!actorId) {
     // Fail closed for all authenticated-only actions.
     throw new Error("Unauthorized");
@@ -16,10 +16,23 @@ export async function requireActorId(): Promise<string> {
   return actorId;
 }
 
+/**
+ * Optional viewer resolution for graph reads. Accepts a local NextAuth
+ * session OR the signed federated remote-viewer cookie (unified
+ * `getSession`), normalizing federated ids to THIS instance's local agent id
+ * (GRP-DSN-001). Plain `auth()` here made every graph read treat
+ * sovereign-homed members viewing via SSO as ANONYMOUS — the 2026-07-11
+ * persona simulation saw a remote-homed group founder's freshly created jobs
+ * filtered down to the publicly-crawlable set ("Jobs (0)").
+ */
 export async function tryActorId(): Promise<string | null> {
   try {
-    const session = await auth();
-    return session?.user?.id ?? null;
+    const session = await getSession();
+    if (!session?.user?.id) return null;
+    if (session.user.authMethod === "federated") {
+      return resolveLocalActorId(session.user.id);
+    }
+    return session.user.id;
   } catch {
     return null;
   }

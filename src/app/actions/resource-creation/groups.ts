@@ -97,11 +97,18 @@ export async function createGroupResource(input: {
     }
   }
 
+  // Authority for creating a group lives where the group will be homed: a
+  // subgroup homes with its parent group, so route on the parent — routing on
+  // the CREATOR forwarded sovereign-group subgroup creation to a remote-homed
+  // admin's own home instance, which rejected it ("Federation mutations
+  // require an actor-bound session or remote viewer token", 2026-07-11
+  // persona simulation). Top-level creation stays actor-routed: the new group
+  // homes wherever its creator is.
   const facadeResult = await updateFacade.execute(
     {
       type: "createGroupResource",
       actorId: userId,
-      targetAgentId: userId,
+      targetAgentId: input.parentGroupId ?? userId,
       payload: {},
     },
     async () => {

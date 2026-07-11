@@ -188,7 +188,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
 
       {canManageStripe && <SubgroupBankingCard groupId={groupId} />}
 
-      {canManageStripe && <TreasuryFundsCard groupId={groupId} />}
+      {canManageStripe && <TreasuryFundsCard groupId={groupId} onBalancesChanged={fetchWalletData} />}
 
       {/* Share classes: members see their own holdings; admins can author. */}
       <ShareClassesCard groupId={groupId} canManage={canManageStripe} />
