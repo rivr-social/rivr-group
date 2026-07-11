@@ -1,16 +1,23 @@
 /**
- * Legacy checkout fee calculator used for backward-compatible pricing.
+ * Offering / event-ticket fee calculator ("legacy" breakdown shape).
  *
  * Purpose:
- * Reproduces the historical ONE-backend fee pipeline exactly so existing
- * totals remain consistent after migration.
+ * Preserves the historical breakdown contract (platform fee + sales tax +
+ * payment fee on top of the seller's subtotal) while routing the
+ * payment-processing leg through the CANONICAL gross-up engine
+ * (`calculateCheckoutFees`), so Stripe's rate lives in exactly one adjustable
+ * place (2026-07-11 consolidation, Cameron-approved). The old standalone
+ * 4% + 40¢ approximation over-collected ~1.1% + 10¢ per order; the engine
+ * recovers exactly Stripe's 2.9% + 30¢ (adjust STRIPE_CARD_PERCENT_BPS /
+ * STRIPE_CARD_FIXED_CENTS in checkout-fees.ts if Stripe's pricing changes).
  *
  * Key exports:
- * `LegacyFeeBreakdown` and `calculateLegacyCheckoutFeesCents`.
- *
- * Dependencies:
- * None (deterministic math only).
+ * `LegacyFeeBreakdown` and `calculateLegacyCheckoutFeesCents` (same shape and
+ * field names as before — `paymentFeeCents` is now the exact processing
+ * gross-up instead of the 4% + 40¢ approximation) and
+ * `calculateOfferingDestinationCharge`.
  */
+import { calculateCheckoutFees } from "@/lib/checkout-fees";
 
 /**
  * Fee output shape in cents for each fee component and final total.
@@ -23,27 +30,32 @@ export type LegacyFeeBreakdown = {
   totalCents: number;
 };
 
-/** Flat platform fee in dollars added to each non-zero order. */
-const PLATFORM_FEE_FIXED = 1.44;
-/** Platform fee rate applied to subtotal (3.3%). */
-const PLATFORM_FEE_PERCENTAGE = 0.033;
-/** Tax rate applied after platform fee is included. */
-const SALES_TAX_RATE = 0.0905;
-/** Flat payment processing fee in dollars. */
-const PAYMENT_FEE_FIXED = 0.4;
-/** Payment processing fee rate applied after tax (4%). */
-const PAYMENT_FEE_PERCENTAGE = 0.04;
+/** Flat platform fee in cents added to each non-zero order. */
+const PLATFORM_FEE_FIXED_CENTS = 144;
+/** Platform fee rate applied to subtotal (3.3%), in basis points. */
+const PLATFORM_FEE_BPS = 330;
+/** Tax rate applied after platform fee is included, in basis points. */
+const SALES_TAX_BPS = 905;
+/** Basis-point divisor. */
+const BPS_DIVISOR = 10_000;
 
 /**
- * Calculates legacy fee components and total charge for a checkout subtotal.
+ * Calculates the fee components and total charge for a checkout subtotal.
+ *
+ * The platform margin (3.3% + $1.44) and sales tax (9.05% of subtotal +
+ * platform fee) are policy layers computed here; the processing leg is the
+ * canonical engine's exact gross-up over (subtotal + margin + tax), so after
+ * Stripe's cut the seller's subtotal, the platform margin, AND the tax
+ * remittance all survive intact — the payer covers processing, and the
+ * platform can never net negative on this surface.
  *
  * @param subtotalCents Subtotal before fees/tax, in integer cents.
- * @returns A full fee breakdown in cents including the rounded total.
+ * @returns A full fee breakdown in cents including the charged total.
  * @throws {Error} When `subtotalCents` is negative or not an integer.
  * @example
  * ```ts
  * const fees = calculateLegacyCheckoutFeesCents(10_00);
- * // => { subtotalCents: 1000, platformFeeCents: ..., totalCents: ... }
+ * // => { subtotalCents: 1000, platformFeeCents: 177, salesTaxCents: 107, ... }
  * ```
  */
 export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyFeeBreakdown {
@@ -62,21 +74,30 @@ export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyF
     };
   }
 
-  const basePrice = subtotalCents / 100;
-  const platformFee = basePrice * PLATFORM_FEE_PERCENTAGE + PLATFORM_FEE_FIXED;
-  const totalAfterPlatformFee = basePrice + platformFee;
-  const salesTax = totalAfterPlatformFee * SALES_TAX_RATE;
-  const totalAfterSalesTax = totalAfterPlatformFee + salesTax;
-  const paymentFee = totalAfterSalesTax * PAYMENT_FEE_PERCENTAGE + PAYMENT_FEE_FIXED;
-  const total = basePrice + platformFee + salesTax + paymentFee;
+  const platformFeeCents =
+    Math.round((subtotalCents * PLATFORM_FEE_BPS) / BPS_DIVISOR) + PLATFORM_FEE_FIXED_CENTS;
+  const salesTaxCents = Math.round(
+    ((subtotalCents + platformFeeCents) * SALES_TAX_BPS) / BPS_DIVISOR,
+  );
 
-  // Round each component independently to match the legacy backend contract.
+  // Exact processing gross-up over everything the payer owes before Stripe:
+  // the engine call carries zero margin/overhead of its own — the policy
+  // layers above are this surface's margin; the engine only guarantees the
+  // processing math (single source of truth for Stripe's rate).
+  const preProcessingCents = subtotalCents + platformFeeCents + salesTaxCents;
+  const grossUp = calculateCheckoutFees(preProcessingCents, {
+    platformFeeBps: 0,
+    connectOverheadCents: 0,
+  });
+  const totalCents = grossUp.buyerTotalCents;
+  const paymentFeeCents = totalCents - preProcessingCents;
+
   return {
     subtotalCents,
-    platformFeeCents: Math.round(platformFee * 100),
-    salesTaxCents: Math.round(salesTax * 100),
-    paymentFeeCents: Math.round(paymentFee * 100),
-    totalCents: Math.round(total * 100),
+    platformFeeCents,
+    salesTaxCents,
+    paymentFeeCents,
+    totalCents,
   };
 }
 

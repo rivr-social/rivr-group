@@ -42,6 +42,27 @@ describe("calculateLegacyCheckoutFeesCents", () => {
     expect(() => calculateLegacyCheckoutFeesCents(-1)).toThrow();
     expect(() => calculateLegacyCheckoutFeesCents(10.5)).toThrow();
   });
+
+  it("components sum EXACTLY to the total (paymentFee is total-derived)", () => {
+    for (const sub of [1_00, 6_00, 10_00, 45_00, 100_00]) {
+      const b = calculateLegacyCheckoutFeesCents(sub);
+      expect(b.subtotalCents + b.platformFeeCents + b.salesTaxCents + b.paymentFeeCents).toBe(
+        b.totalCents,
+      );
+    }
+  });
+
+  it("paymentFee covers Stripe's exact 2.9% + 30¢ on the charged total", () => {
+    for (const sub of [1_00, 6_00, 10_00, 45_00, 100_00]) {
+      const b = calculateLegacyCheckoutFeesCents(sub);
+      const stripeCost = Math.round(b.totalCents * 0.029) + 30;
+      expect(b.paymentFeeCents).toBeGreaterThanOrEqual(stripeCost - 1);
+      // …and is the exact gross-up, not the old 4% + 40¢ over-collection.
+      const preProcessing = b.subtotalCents + b.platformFeeCents + b.salesTaxCents;
+      const oldApprox = Math.round(preProcessing * 0.04) + 40;
+      expect(b.paymentFeeCents).toBeLessThan(oldApprox);
+    }
+  });
 });
 
 describe("calculateOfferingDestinationCharge — COM-DSN-001", () => {
