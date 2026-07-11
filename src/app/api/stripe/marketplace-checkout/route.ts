@@ -21,7 +21,8 @@
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { db } from '@/db';
 import { resources, ledger, agents } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -87,8 +88,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const session = await auth();
-  const sessionUserId = session?.user?.id ?? null;
+  // Unified session so a sovereign group's federated remote-viewer members
+  // (SSO'd from their home instance, no local NextAuth JWT) get their purchase
+  // ATTRIBUTED rather than silently falling through to an anonymous guest
+  // checkout. Identity is still fully server-derived — the client never
+  // supplies a buyer id (P0 rule, issue #101). Federated ids normalize to the
+  // local agent so buyer==seller self-purchase guards and receipts bind right.
+  const session = await getSession();
+  const sessionUserId = session?.user?.id
+    ? session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id
+    : null;
 
   let body: {
     listingId?: string;

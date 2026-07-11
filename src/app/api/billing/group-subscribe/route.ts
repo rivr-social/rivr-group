@@ -13,7 +13,8 @@
  * - Paid plan: `{ url }` (hosted Stripe Checkout)
  */
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { db } from '@/db';
 import { agents } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -31,11 +32,21 @@ const STATUS_INTERNAL_ERROR = 500;
 const VALID_BILLING_PERIODS: readonly GroupSubscriptionBillingPeriod[] = ['monthly', 'yearly'];
 
 export async function POST(request: Request) {
-  const session = await auth();
-  const memberAgentId = session?.user?.id;
-  if (!memberAgentId) {
+  // Unified session: a sovereign group's dues-paying members include
+  // federated remote-viewers (SSO'd from their home instance, no local
+  // NextAuth JWT). Plain `auth()` here 401'd them — the 2026-07-11 toybox
+  // campaign saw a dev-homed member who could JOIN + POST (those use the
+  // unified session) but got "Authentication required" on the paid dues
+  // checkout. Normalize any federated id to this instance's local agent so
+  // the subscription/customer/membership bind to the correct local member.
+  const session = await getSession();
+  if (!session?.user?.id) {
     return NextResponse.json({ error: 'Authentication required.' }, { status: STATUS_UNAUTHORIZED });
   }
+  const memberAgentId =
+    session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id;
 
   let body: unknown;
   try {
