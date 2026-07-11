@@ -98,6 +98,11 @@ export function encodeRemoteViewerSession(
     homeAuthorityVersion: input.homeAuthorityVersion,
     instanceClass: input.instanceClass,
     parentAgentId: input.parentAgentId,
+    // Carry the signed display identity so first-contact projection/render use
+    // the real name; omit the keys entirely when absent to keep the canonical
+    // JSON (and thus the HMAC) stable for name-less cookies.
+    ...(input.name ? { name: input.name } : {}),
+    ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
     authMethod: input.authMethod,
     iat,
     exp,

@@ -224,6 +224,11 @@ export async function GET(request: Request): Promise<NextResponse> {
         homeAuthorityVersion: claims.homeAuthorityVersion,
         instanceClass: claims.instanceClass,
         parentAgentId: claims.parentAgentId,
+        // Carry the verified display identity from the assertion so a
+        // first-contact federated member renders + projects under their real
+        // name instead of a "Federated agent" placeholder.
+        name: claims.name ?? null,
+        avatarUrl: claims.avatarUrl ?? null,
         authMethod: "federated-sso",
         lifetimeSec: effectiveLifetimeSec,
       },

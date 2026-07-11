@@ -88,18 +88,27 @@ export async function toggleTaskCompletion(taskId: string): Promise<ToggleResult
   const isAssignee = assignedTo === userId;
   const isOwner = task.ownerId === userId;
 
+  const jobId = typeof meta.jobId === "string" ? meta.jobId : null;
+  const projectId = typeof meta.projectId === "string" ? meta.projectId : null;
+
   // Check group write access if not direct owner/assignee.
   const { hasGroupWriteAccess } = await import("@/app/actions/create-resources");
   const isGroupAdmin = task.ownerId !== userId
     ? await hasGroupWriteAccess(userId, task.ownerId)
     : false;
 
-  if (!isAssignee && !isOwner && !isGroupAdmin) {
+  // A worker who claimed the parent job is the task's de-facto assignee — their
+  // check-off is a finish-claim awaiting attestation. Without this a job
+  // claimant who was never explicitly set as the per-task `assignedTo` (the
+  // common case: admin posts a job with tasks, a member claims it) hit "You do
+  // not have permission to update this task" and could never do the work
+  // (toybox campaign 2026-07-11).
+  const { hasActiveJobClaim } = await import("@/app/actions/interactions/project-team");
+  const isJobClaimant = jobId ? await hasActiveJobClaim(userId, jobId) : false;
+
+  if (!isAssignee && !isOwner && !isGroupAdmin && !isJobClaimant) {
     return { success: false, message: "You do not have permission to update this task." };
   }
-
-  const jobId = typeof meta.jobId === "string" ? meta.jobId : null;
-  const projectId = typeof meta.projectId === "string" ? meta.projectId : null;
 
   const {
     resolveProjectAuthority,

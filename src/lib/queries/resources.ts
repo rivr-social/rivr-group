@@ -817,7 +817,28 @@ export async function getJobById(id: string): Promise<JobShift | null> {
   });
   if (!row) return null;
   const [hydrated] = await hydrateJobTasks([resourceToJobShift(row)]);
-  return hydrated;
+  if (!hydrated) return hydrated;
+
+  // The team roster + "N/M claimed" must agree with the claim panel and the
+  // mark-done payout, all of which key on ACTIVE `job-claim` ledger edges — not
+  // the legacy `metadata.assignees` array, which claiming never writes. Merge
+  // the active claimants in so the About tab stops showing "No team members yet"
+  // for a job that is 1/1 claimed (toybox campaign 2026-07-11: made Bob think
+  // the — actually successful — payout had failed).
+  const claimantRows = (await db.execute(sql`
+    SELECT DISTINCT subject_id::text AS id
+    FROM ledger
+    WHERE verb = 'join'
+      AND is_active = true
+      AND metadata->>'interactionType' = 'job-claim'
+      AND metadata->>'targetId' = ${id}
+  `)) as Array<Record<string, unknown>>;
+  const claimants = claimantRows.map((r) => String(r.id ?? "")).filter(Boolean);
+  if (claimants.length === 0) return hydrated;
+  return {
+    ...hydrated,
+    assignees: Array.from(new Set([...(hydrated.assignees ?? []), ...claimants])),
+  };
 }
 
 

@@ -169,6 +169,13 @@ export async function updateTaskStatus(
     ? await hasGroupWriteAccess(userId, task.ownerId)
     : false;
 
+  // A worker who claimed the parent job is the task's de-facto assignee, so a
+  // non-attestation status change (starting/finishing their own work) is
+  // allowed even without an explicit per-task `assignedTo` (toybox campaign
+  // 2026-07-11). Attestation stays gated to the verifier set below.
+  const { hasActiveJobClaim } = await import("@/app/actions/interactions/project-team");
+  const isJobClaimant = jobId ? await hasActiveJobClaim(userId, jobId) : false;
+
   const {
     resolveProjectAuthority,
     canAttestWork,
@@ -194,7 +201,7 @@ export async function updateTaskStatus(
     isVerifier = await canAttestWork(userId, task.ownerId, authority);
   }
 
-  if (!isAssignee && !isOwner && !isGroupAdmin && !(isAttestation && isVerifier)) {
+  if (!isAssignee && !isOwner && !isGroupAdmin && !isJobClaimant && !(isAttestation && isVerifier)) {
     return { success: false, message: "You do not have permission to update this task." };
   }
 

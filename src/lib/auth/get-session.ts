@@ -129,6 +129,14 @@ async function readFederatedSession(): Promise<UnifiedSession | null> {
     /* best-effort: never fail session resolution on a projection lookup */
   }
 
+  // First-contact fallback: before the member's first local write there is no
+  // projected agent row (that is what `ensureLocalActorAgent` is about to
+  // create, reading this very name), so fall back to the display identity the
+  // signed cookie now carries. Without this, first-contact enrollment projected
+  // members under a generic "Federated agent" placeholder.
+  name = name ?? payload.name ?? null;
+  image = image ?? payload.avatarUrl ?? null;
+
   return {
     user: {
       id: payload.actorId,

@@ -55,6 +55,16 @@ export interface RemoteViewerSessionPayload {
   instanceClass: "hosted-federated" | "sovereign";
   /** Parent agent id when `actorId` is a persona, null otherwise. */
   parentAgentId: string | null;
+  /**
+   * Display name resolved from the signed SSO assertion at authentication time.
+   * Optional + backward-compatible (older cookies omit it). Lets a first-contact
+   * federated member render + project under their real name before their home
+   * peer federates the agent upsert — without it `getSession` reads name from a
+   * local agent row that does not exist yet and falls back to a placeholder.
+   */
+  name?: string | null;
+  /** Avatar URL resolved from the signed SSO assertion, optional. */
+  avatarUrl?: string | null;
   /** How this session was authenticated. */
   authMethod: RemoteViewerAuthMethod;
   /** Issued-at time, UNIX seconds UTC. */

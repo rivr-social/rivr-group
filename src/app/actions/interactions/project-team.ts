@@ -633,6 +633,31 @@ export async function getMyJobClaimStatus(
   return "none";
 }
 
+/**
+ * Whether `agentId` holds an ACTIVE `job-claim` on `jobId`. The claimant-scoped
+ * form of {@link getMyJobClaimStatus} that takes an explicit agent id (server
+ * authorization, not viewer UI). Used to authorize a worker to check off / work
+ * on the tasks of the job they claimed — a job claimant is the tasks' de-facto
+ * assignee even when no per-task `assignedTo` was set.
+ *
+ * @param agentId Verified actor id.
+ * @param jobId UUID of the job the task belongs to.
+ */
+export async function hasActiveJobClaim(agentId: string, jobId: string): Promise<boolean> {
+  if (!isUuid(agentId) || !isUuid(jobId)) return false;
+  const rows = (await db.execute(sql`
+    SELECT 1
+    FROM ledger
+    WHERE subject_id = ${agentId}::uuid
+      AND verb = 'join'
+      AND is_active = true
+      AND metadata->>'targetId' = ${jobId}
+      AND metadata->>'interactionType' = ${JOB_CLAIM_INTERACTION}
+    LIMIT 1
+  `)) as Array<Record<string, unknown>>;
+  return rows.length > 0;
+}
+
 /** Everything the job-detail claim panel needs, resolved server-side in one call. */
 export interface JobClaimPanelData {
   jobId: string;
