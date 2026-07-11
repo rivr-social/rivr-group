@@ -18,6 +18,7 @@ import { headers } from "next/headers";
 import { rateLimit } from "@/lib/rate-limit";
 import { JoinType, type GroupJoinSettings, type JoinRequest } from "@/lib/types";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
+import { ensureLocalActorAgent } from "@/lib/federation/actor-projection";
 import { getAuthenticatedActorId } from "@/lib/server-auth";
 import { isGroupAdmin } from "@/app/actions/group-admin";
 
@@ -115,6 +116,11 @@ export async function challengeGroupAccess(
   if (!password || password.length === 0) {
     return { success: false, error: "Password is required." };
   }
+
+  // Project the verified principal locally before the membership ledger write so
+  // a first-contact federated member's `ledger.subject_id` FK holds (see the
+  // note in applyMembershipRequestForActor). No-op when the agent already exists.
+  await ensureLocalActorAgent(actorId);
 
   const facadeResult = await updateFacade.execute(
     {
@@ -580,6 +586,13 @@ export async function applyMembershipRequestForActor(
   if (!groupId || !UUID_RE.test(groupId)) {
     return { success: false, error: "Invalid group identifier." };
   }
+
+  // First-contact enrollment: a federated remote-viewer joining before any
+  // local write has no `agents` row on this sovereign, so the `ledger.subject_id`
+  // FK below would fail and the join silently no-op'd (toybox campaign
+  // 2026-07-11). Project a private local mirror of the verified principal first;
+  // no-op for the owner, local members, and anyone already projected.
+  await ensureLocalActorAgent(actorId);
 
   const [group] = await db
     .select({

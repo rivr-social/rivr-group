@@ -8,6 +8,7 @@ import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
+import { ensureLocalActorAgent } from "@/lib/federation/actor-projection";
 import { getUserBadgeIds } from "@/lib/queries/resources";
 import {
   evaluateJobClaimEligibility,
@@ -96,6 +97,12 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, message: "You must be logged in to claim a job." };
   if (!isUuid(jobId)) return { success: false, message: "Invalid job id." };
+
+  // A federated remote-viewer member claiming a job writes a `job-claim`
+  // ledger edge keyed on their id; project a local mirror first so the
+  // subject_id FK holds even if this is their first local write (toybox
+  // campaign 2026-07-11). No-op for the owner / local members / already-projected.
+  await ensureLocalActorAgent(userId);
 
   const check = await rateLimit(
     `social:${userId}`,

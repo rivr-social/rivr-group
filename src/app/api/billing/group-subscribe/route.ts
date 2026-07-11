@@ -15,6 +15,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/get-session';
 import { resolveLocalActorId } from '@/lib/federation/resolution';
+import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { db } from '@/db';
 import { agents } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -47,6 +48,16 @@ export async function POST(request: Request) {
     session.user.authMethod === 'federated'
       ? await resolveLocalActorId(session.user.id)
       : session.user.id;
+
+  // First-contact enrollment: a federated member subscribing before any local
+  // write has no `agents` row on this sovereign, so getOrCreateStripeCustomer /
+  // grantGroupMembership threw "Agent not found" (toybox campaign 2026-07-11 —
+  // a dev-homed member landed recognized via SSO but couldn't enroll). Project
+  // a private local mirror of the verified principal (verified-principal model,
+  // same helper the importer + direct write path use); no-op if it exists.
+  if (session.user.authMethod === 'federated') {
+    await ensureLocalActorAgent(memberAgentId);
+  }
 
   let body: unknown;
   try {
