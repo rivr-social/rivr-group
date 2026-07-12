@@ -42,6 +42,11 @@ import { inviteGroupMemberAction } from "@/app/actions/group-members";
 import { markJobDoneAction } from "@/app/actions/job-completion";
 import { completeProjectAction, ensureSubgroupTreasuriesAction } from "@/app/actions/project-completion";
 import { backfillConnectAccountsAction } from "@/app/actions/wallet/connect-backfill";
+import {
+  getCryptoTreasuryOverviewAction,
+  createBudgetProposalsAction,
+  createTransferProposalAction,
+} from "@/app/actions/wallet/crypto-treasury";
 import { getResourcesByOwnerAndType, getResourcesByOwnerSubtreeAndType, getTaskCountsByJob } from "@/lib/queries/resources";
 
 // ---------------------------------------------------------------------------
@@ -1091,6 +1096,71 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       properties: { jobId: { type: "string" } },
     },
     run: (args) => markJobDoneAction(requireStr(args, "jobId")),
+  },
+  {
+    name: "rivr.treasury.crypto_overview",
+    description:
+      "Read the group's crypto (USDC on Base) treasury: whether an officer Safe is configured, its address, " +
+      "officer set + threshold, on-chain USDC balance, whether the budget (Allowance) module is enabled, each active " +
+      "per-lead budget with its remaining amount, and any pending officer-signature proposals. Read-only.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { ...GROUP_ID_PROP },
+    },
+    run: (args, ctx) => getCryptoTreasuryOverviewAction(pickGroup(args, ctx)),
+  },
+  {
+    name: "rivr.treasury.crypto_propose_budget",
+    description:
+      "Create the officer-approval proposals for a per-lead USDC spending budget on the group's treasury Safe " +
+      "(enable the budget module if needed, register the lead as a delegate, set the allowance). The officers then " +
+      "sign the proposals in-app; the lead afterwards pays members within the budget with a single signature and no " +
+      "officer involvement. Requires admin authority. Does NOT move money — it only creates the proposals to be signed.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["leadAddress", "amountUsd"],
+      properties: {
+        ...GROUP_ID_PROP,
+        leadAddress: { type: "string", description: "The budget lead's wallet address (0x…, 42 chars)." },
+        amountUsd: { type: "number", description: "Budget size in US dollars, e.g. 250 for a $250 budget." },
+        periodic: {
+          type: "boolean",
+          description: "true = the budget refills monthly; false (default) = a one-time depleting budget.",
+        },
+      },
+    },
+    run: (args, ctx) =>
+      createBudgetProposalsAction(
+        pickGroup(args, ctx),
+        requireStr(args, "leadAddress"),
+        Math.round((num(args.amountUsd) ?? 0) * 100),
+        args.periodic === true ? 43200 : 0,
+      ),
+  },
+  {
+    name: "rivr.treasury.crypto_propose_transfer",
+    description:
+      "Create an officer-approval proposal for a direct USDC transfer out of the group's treasury Safe to an address. " +
+      "Officers sign it in-app; the platform relayer executes at threshold. Requires admin authority. Creates the " +
+      "proposal only — it does not move money until the officers sign.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["toAddress", "amountUsd"],
+      properties: {
+        ...GROUP_ID_PROP,
+        toAddress: { type: "string", description: "Recipient wallet address (0x…, 42 chars)." },
+        amountUsd: { type: "number", description: "Amount in US dollars, e.g. 50 for $50 USDC." },
+      },
+    },
+    run: (args, ctx) =>
+      createTransferProposalAction(
+        pickGroup(args, ctx),
+        requireStr(args, "toAddress"),
+        Math.round((num(args.amountUsd) ?? 0) * 100),
+      ),
   },
 ];
 

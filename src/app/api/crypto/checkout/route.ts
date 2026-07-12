@@ -21,7 +21,7 @@ import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { getResource } from '@/lib/queries/resources';
 import { getAgentEthAddressAction } from '@/app/actions/wallet/reads';
-import { recordEthPaymentAction } from '@/app/actions/wallet/ethereum';
+import { recordLocalCryptoPurchase } from '@/lib/crypto-settlement';
 import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from '@/lib/wallet-constants';
 import {
   buildAuthorizationTypedData,
@@ -210,27 +210,30 @@ export async function POST(request: NextRequest) {
       });
 
       const nonce = computeSplitNonce(salt as `0x${string}`, split.payouts);
-      const record = await recordEthPaymentAction(
-        split.sellerId,
-        split.buyerTotalCents,
-        txHash,
-        `Mart purchase (one-signature USDC split): ${split.listingTitle} ` +
-          `($${(split.totalCents / 100).toFixed(2)} seller, $${(split.platformFeeCents / 100).toFixed(2)} platform fee) [nonce ${nonce}]`,
-        listingId,
-        txHash,
-      );
-      if (!record.success) {
-        return NextResponse.json(
-          {
-            error:
-              record.error ??
-              `Payment settled on-chain (${txHash}) but recording failed — contact support with this hash.`,
-            txHash,
-          },
-          { status: STATUS_INTERNAL_ERROR },
-        );
+      // Settlement is FINAL on-chain (atomic split). The receipt is a local
+      // artifact of a sale that happened on THIS instance — recorded locally,
+      // never through the federation-forwarding facade (which fails for a
+      // federated buyer in this relayer context). A record failure must NOT
+      // lose the money linkage: return success + txHash so the buyer has proof
+      // and the settlement can be reconciled.
+      let receiptId: string | null = null;
+      try {
+        const record = await recordLocalCryptoPurchase({
+          buyerAgentId: actorId,
+          sellerAgentId: split.sellerId,
+          amountCents: split.buyerTotalCents,
+          txHash,
+          listingId,
+          description:
+            `Mart purchase (one-signature USDC split): ${split.listingTitle} ` +
+            `($${(split.totalCents / 100).toFixed(2)} seller, $${(split.platformFeeCents / 100).toFixed(2)} platform fee) [nonce ${nonce}]`,
+          platformFeeTxHash: txHash,
+        });
+        receiptId = record.receiptId;
+      } catch (recErr) {
+        console.error('[crypto-checkout] settled on-chain but local record failed:', txHash, recErr);
       }
-      return NextResponse.json({ txHash, receiptId: record.receiptId ?? null });
+      return NextResponse.json({ txHash, receiptId, recorded: receiptId !== null });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: STATUS_BAD_REQUEST });
