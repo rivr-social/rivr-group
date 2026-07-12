@@ -122,7 +122,7 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
     if (customSoulMd.length > MAX_SOUL_MD_LENGTH) {
       toast({
         title: "Instructions too long",
-        description: `Operator instructions must be under ${MAX_SOUL_MD_LENGTH} characters.`,
+        description: `Personality & tone instructions must be under ${MAX_SOUL_MD_LENGTH} characters.`,
         variant: "destructive",
       });
       return;
@@ -247,7 +247,9 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
           {/* Operator soul prompt */}
           <div className="grid gap-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="assistant-soul">Operator instructions</Label>
+              <Label htmlFor="assistant-soul">
+                Assistant personality &amp; tone
+              </Label>
               <span className="text-[10px] text-muted-foreground">
                 {customSoulMd.length}/{MAX_SOUL_MD_LENGTH}
               </span>
@@ -258,31 +260,37 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
               onChange={(event) => setCustomSoulMd(event.target.value)}
               maxLength={MAX_SOUL_MD_LENGTH}
               rows={6}
-              placeholder="Describe the assistant's persona, tone, and any group-specific guidance. This is prepended to the assistant's system prompt."
+              placeholder="Describe how the assistant should sound — its personality, tone, and any group-specific guidance."
             />
             <p className="text-xs text-muted-foreground">
-              Persona and tone guidance layered on top of the built-in group
-              assistant behavior. Leave blank to use the default persona.
+              How the assistant should sound and behave when it replies for
+              this group. Leave blank to use the default personality.
             </p>
           </div>
 
           {/* KG scope ids */}
-          <div className="grid gap-2">
-            <Label htmlFor="assistant-kg-scopes">Knowledge graph scopes</Label>
-            <Textarea
-              id="assistant-kg-scopes"
-              value={scopeIdsText}
-              onChange={(event) => setScopeIdsText(event.target.value)}
-              rows={3}
-              placeholder="One KG scope id per line. Leave blank to use the group's default scope."
-              className="font-mono text-xs"
-            />
-            <p className="text-xs text-muted-foreground">
-              Extra knowledge-graph scope ids the assistant may pull context
-              from, one per line. Visitor-facing chat is always limited to the
-              group&apos;s public scope regardless of this list.
-            </p>
-          </div>
+          <details className="grid gap-2">
+            <summary className="cursor-pointer text-sm font-medium">
+              Advanced
+            </summary>
+            <div className="mt-2 grid gap-2">
+              <Label htmlFor="assistant-kg-scopes">
+                Extra knowledge sources (advanced)
+              </Label>
+              <Textarea
+                id="assistant-kg-scopes"
+                value={scopeIdsText}
+                onChange={(event) => setScopeIdsText(event.target.value)}
+                rows={3}
+                placeholder="One source ID per line."
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                Usually leave blank — the group&apos;s own knowledge is included
+                automatically. Your operator can give you additional source IDs.
+              </p>
+            </div>
+          </details>
         </CardContent>
       </Card>
 

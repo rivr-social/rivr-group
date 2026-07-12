@@ -80,8 +80,14 @@ export function ConnectorsSettingsPanel({ targetAgentId }: { targetAgentId?: str
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1"><Label>{definition.accountLabel}</Label><Input value={value.accountLabel} onChange={(event) => setValues((current) => ({ ...current, [definition.id]: { ...value, accountLabel: event.target.value } }))} /></div>
-          {definition.credentialLabel ? <div className="space-y-1"><Label>{definition.credentialLabel}</Label><Input type="password" value={value.credential} placeholder={connection?.hasCredential ? "Leave blank to keep current credential" : "Required"} onChange={(event) => setValues((current) => ({ ...current, [definition.id]: { ...value, credential: event.target.value } }))} /></div> : null}
-          {definition.refreshCredentialLabel ? <div className="space-y-1"><Label>{definition.refreshCredentialLabel}</Label><Input type="password" value={value.refreshCredential} placeholder="Required for long-running sync" onChange={(event) => setValues((current) => ({ ...current, [definition.id]: { ...value, refreshCredential: event.target.value } }))} /></div> : null}
+          {definition.credentialLabel || definition.refreshCredentialLabel ? <details className="rounded-md border p-3">
+            <summary className="cursor-pointer text-sm font-medium">Advanced: paste a connection token</summary>
+            <div className="mt-3 space-y-3">
+              <p className="text-xs text-muted-foreground">Most people get these from their instance operator. If you&apos;re not sure, ask them.</p>
+              {definition.credentialLabel ? <div className="space-y-1"><Label>{definition.credentialLabel}</Label><Input type="password" value={value.credential} placeholder={connection?.hasCredential ? "Leave blank to keep current credential" : "Required"} onChange={(event) => setValues((current) => ({ ...current, [definition.id]: { ...value, credential: event.target.value } }))} /></div> : null}
+              {definition.refreshCredentialLabel ? <div className="space-y-1"><Label>{definition.refreshCredentialLabel}</Label><Input type="password" value={value.refreshCredential} placeholder="Keeps the connection alive in the background" onChange={(event) => setValues((current) => ({ ...current, [definition.id]: { ...value, refreshCredential: event.target.value } }))} /></div> : null}
+            </div>
+          </details> : null}
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => void mutate(definition.id, "save")} disabled={busy !== null}>{connection ? "Update" : "Connect"}</Button>
             {connection && definition.supportsTest !== false ? <Button size="sm" variant="outline" onClick={() => void mutate(definition.id, "test")} disabled={busy !== null}>Test</Button> : null}

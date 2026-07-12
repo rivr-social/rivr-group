@@ -1038,24 +1038,6 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label>Stripe Price ID (Monthly)</Label>
-                      <Input
-                        value={plan.stripePriceIdMonthly ?? ""}
-                        onChange={(event) => onPlanFieldChange(plan.id, "stripePriceIdMonthly", event.target.value)}
-                        placeholder="price_..."
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Stripe Price ID (Yearly)</Label>
-                      <Input
-                        value={plan.stripePriceIdYearly ?? ""}
-                        onChange={(event) => onPlanFieldChange(plan.id, "stripePriceIdYearly", event.target.value)}
-                        placeholder="price_..."
-                      />
-                    </div>
-                  </div>
 
                   <div className="space-y-2">
                     <Label>Perks (one per line)</Label>
@@ -1251,8 +1233,8 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
             <CardHeader>
               <CardTitle>Chat Settings</CardTitle>
               <CardDescription>
-                Configure how group members communicate. Choose between the public
-                knowledge graph feed, private Matrix chat, or both.
+                Choose how members communicate: public posts, private chat,
+                or both.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1268,17 +1250,17 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
                         setChatMode(event.target.value as ChatMode)
                       }
                     >
-                      <option value="both">Both (Feed + Chat)</option>
-                      <option value="ledger">Feed Only (Knowledge Graph)</option>
-                      <option value="matrix">Chat Only (Private Matrix)</option>
+                      <option value="both">Public posts + private chat</option>
+                      <option value="ledger">Public posts only</option>
+                      <option value="matrix">Private chat only</option>
                     </select>
                     <p className="text-xs text-muted-foreground">
                       {chatMode === "both" &&
-                        "Members can use both the public feed for discoverable content and private Matrix chat."}
+                        "Members can post publicly and message each other in the group's private chat."}
                       {chatMode === "ledger" &&
-                        "Members can only post to the public feed. All content is searchable in the knowledge graph."}
+                        "Members post to the public feed only; posts are searchable across the community."}
                       {chatMode === "matrix" &&
-                        "Members use private Matrix chat only. Messages are not indexed in the knowledge graph."}
+                        "Members talk in the group's private chat only; messages stay private and unsearchable."}
                     </p>
                   </div>
 
@@ -1292,9 +1274,8 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  Matrix chat has not been configured for this group yet. It will
-                  be set up automatically when the group is created with chat
-                  enabled.
+                  Group chat isn&apos;t on yet. It turns on automatically
+                  when the group is created with chat enabled.
                 </p>
               )}
             </CardContent>

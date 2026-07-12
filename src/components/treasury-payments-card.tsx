@@ -115,7 +115,7 @@ export function TreasuryPaymentsCard({
       }
 
       toast({
-        title: "Unable to set up payments",
+        title: "Couldn't set up payments",
         description: result.error ?? "Please try again.",
         variant: "destructive",
       })
@@ -137,7 +137,7 @@ export function TreasuryPaymentsCard({
       const result = await requestPayoutAction(amountCents, speed, ownerId)
       if (!result.success) {
         toast({
-          title: "Payout failed",
+          title: "Couldn't send the payout",
           description: result.error ?? "Please try again.",
           variant: "destructive",
         })
@@ -161,7 +161,7 @@ export function TreasuryPaymentsCard({
       const result = await releaseTestConnectBalanceToWalletAction(ownerId)
       if (!result.success) {
         toast({
-          title: "Release failed",
+          title: "Couldn't release test sales",
           description: result.error ?? "Please try again.",
           variant: "destructive",
         })
@@ -200,14 +200,14 @@ export function TreasuryPaymentsCard({
       const result = await provisionTreasuryFinancialAccountAction(ownerId)
       if (!result.success) {
         toast({
-          title: "Unable to set up treasury account",
+          title: "Couldn't set up banking",
           description: result.error ?? "Please try again.",
           variant: "destructive",
         })
         return
       }
 
-      toast({ title: "Treasury account ready", description: "Its Stripe balance now shows here." })
+      toast({ title: "Banking is ready", description: "Its balance now shows here." })
       await refreshExtraBalances()
     })
   }
@@ -236,13 +236,18 @@ export function TreasuryPaymentsCard({
         {!status?.hasAccount ? (
           <Button onClick={handleSetup} disabled={isLoading}>
             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}
-            Set up Stripe Connect
+            Set up payments
           </Button>
         ) : (
           <>
             <div className="grid gap-2 text-sm">
-              <div>Charges enabled: {status.chargesEnabled ? "Yes" : "No"}</div>
-              <div>Payouts enabled: {status.payoutsEnabled ? "Yes" : "No"}</div>
+              <div>
+                {status.chargesEnabled && status.payoutsEnabled
+                  ? "Ready to accept payments"
+                  : status.detailsSubmitted
+                    ? "A few more details needed"
+                    : "Not set up yet"}
+              </div>
               <div>Available Stripe balance: {formatCents(balance?.availableCents ?? 0)}</div>
               <div>Pending Stripe balance: {formatCents(balance?.pendingCents ?? 0)}</div>
               {extraBalances?.treasuryUsdCents != null ? (
@@ -253,9 +258,25 @@ export function TreasuryPaymentsCard({
               ) : null}
             </div>
 
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Details</summary>
+              <div className="mt-2 grid gap-2">
+                <div>Charges enabled: {status.chargesEnabled ? "Yes" : "No"}</div>
+                <div>Payouts enabled: {status.payoutsEnabled ? "Yes" : "No"}</div>
+                <div>Details submitted: {status.detailsSubmitted ? "Yes" : "No"}</div>
+                {isStripeTestMode && status.payoutsEnabled ? (
+                  <div>
+                    <Button variant="outline" size="sm" onClick={handleReleaseTestSales} disabled={isLoading}>
+                      Release test sales
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </details>
+
             {!status.chargesEnabled || !status.payoutsEnabled ? (
               <Button variant="outline" onClick={handleSetup} disabled={isLoading}>
-                Finish onboarding
+                Finish verifying your account
               </Button>
             ) : null}
 
@@ -266,14 +287,14 @@ export function TreasuryPaymentsCard({
             {extraBalances?.canProvisionTreasury ? (
               <Button variant="outline" onClick={handleProvisionTreasury} disabled={isLoading}>
                 {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wallet className="mr-2 h-4 w-4" />}
-                Set up treasury account
+                Set up banking (advanced)
               </Button>
             ) : null}
 
             {status.dashboardUrl ? (
               <Button variant="outline" asChild>
                 <a href={status.dashboardUrl} target="_blank" rel="noreferrer">
-                  Open Stripe dashboard
+                  Open payment dashboard
                 </a>
               </Button>
             ) : null}
@@ -296,12 +317,10 @@ export function TreasuryPaymentsCard({
                   <Button variant="outline" onClick={() => handlePayout("instant")} disabled={isLoading}>
                     Instant payout
                   </Button>
-                  {isStripeTestMode ? (
-                    <Button variant="outline" onClick={handleReleaseTestSales} disabled={isLoading}>
-                      Release test sales
-                    </Button>
-                  ) : null}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Standard: free, 1–2 business days · Instant: small fee, arrives in minutes
+                </p>
               </div>
             ) : null}
           </>
