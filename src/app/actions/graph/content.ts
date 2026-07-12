@@ -1,6 +1,7 @@
 "use server";
 
-import { auth } from "@/auth";
+import { getSession } from "@/lib/auth/get-session";
+import { resolveLocalActorId } from "@/lib/federation/resolution";
 import { db } from "@/db";
 import type { Resource } from "@/db/schema";
 import { agents as agentsTable, resources as resourcesTable } from "@/db/schema";
@@ -147,8 +148,18 @@ export async function fetchMyReceipts(): Promise<{
     seller: { id: string; name: string; username: string | null; image: string | null } | null;
   }>;
 }> {
-  const session = await auth();
+  // Unified session: a federated remote-viewer's crypto/marketplace receipt is
+  // owned by their LOCAL projected agent id on this instance, not their remote
+  // session id — resolve to the local actor so their receipts (and the receipt
+  // detail page's lookup) match. Plain `auth()` returned an empty list for
+  // federated buyers, so a real purchase showed "Receipt not found"
+  // (toybox crypto campaign, 2026-07-12).
+  const session = await getSession();
   if (!session?.user?.id) return { receipts: [] };
+  const ownerAgentId =
+    session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id;
 
   const receiptRows = await db
     .select({
@@ -160,7 +171,7 @@ export async function fetchMyReceipts(): Promise<{
     .from(resourcesTable)
     .where(
       and(
-        eq(resourcesTable.ownerId, session.user.id),
+        eq(resourcesTable.ownerId, ownerAgentId),
         eq(resourcesTable.type, 'receipt')
       )
     )
