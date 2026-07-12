@@ -26,6 +26,16 @@ here.
 - **Send thanks tokens** — gift one or more thanks tokens to another agent,
   optionally attaching a message or the resource being thanked.
 
+## Paying with crypto (USDC)
+
+Listings priced in USDC can be paid straight from a browser wallet on the Base
+network. Where this instance has the settlement splitter enabled, it is **one
+signature**: you approve a single payment authorization (no gas, no
+transaction to submit) and the platform settles the seller's share and the
+platform fee atomically in one on-chain transaction — neither leg can happen
+without the other. The instance's network is operator-configured; the current
+posture is **Base Sepolia (testnet)**, matching the Stripe test-keys posture.
+
 ## Permissions / gating
 
 - **Public** listing browse (`/marketplace`, `/products` are public prefixes).

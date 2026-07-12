@@ -43,6 +43,27 @@ demurrage (decay) mechanic.
 - Billing actions derive the subject from the session; membership entitlements
   gate certain create/sell capabilities (seller/host/organizer/steward tiers).
 
+## Membership dues pricing
+
+This group's paid membership plans (dues) are priced with a **gross-up**: the
+member's recurring charge is the plan price plus the platform fee plus
+card-processing costs, so the group nets the full plan price it set (shown at
+Stripe Checkout before paying). Federated members — people homed on another
+RIVR instance — can pay dues, subscribe, deposit, and buy here with their
+verified identity.
+
+## Crypto treasury (USDC on Base)
+
+This group can hold a digital-dollar treasury in a **Safe multisig its
+officers control** — the platform never holds a key. From the Treasury tab,
+admins bind or deploy the officer Safe (2-of-N); officers approve treasury
+actions by signing **in the app** with their own wallets, and the platform
+submits execution (officers need no gas). Officers approve a per-lead spending
+**budget** once, and the lead then pays recipients within it with a single
+signature — no per-payment officer sign-off, remaining budget enforced
+on-chain. USDC marketplace sales settle to the treasury atomically. Current
+posture: Base Sepolia (testnet).
+
 ## Group treasury banking (flag-gated, not yet live)
 
 Group admins will find a **Banking** area in the group Treasury tab once the
