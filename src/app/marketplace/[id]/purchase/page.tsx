@@ -11,6 +11,7 @@ import { getResource } from "@/lib/queries/resources"
 import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
 import { getSession } from "@/lib/auth/get-session"
 import { resolveLocalActorId } from "@/lib/federation/resolution"
+import { splitterCheckoutEnabled } from "@/lib/crypto-splitter"
 
 export default async function MarketplaceItemPurchasePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -45,6 +46,7 @@ export default async function MarketplaceItemPurchasePage({ params }: { params: 
       serverViewerId={serverViewerId}
       cryptoNetwork={cryptoNetwork}
       cryptoPlatformWallet={cryptoPlatformWallet}
+      cryptoOneSignature={splitterCheckoutEnabled()}
     />
   )
 }

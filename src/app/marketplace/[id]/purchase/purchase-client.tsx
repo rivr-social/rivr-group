@@ -20,7 +20,7 @@ import { resourceToMarketplaceListing } from "@/lib/graph-adapters"
 import { AuthModal } from "@/components/auth-modal"
 import { BookingWeekScheduler } from "@/components/booking-week-scheduler"
 import { PaymentMethodSelector, type PaymentMethod } from "@/components/payment-method-selector"
-import { executeSplitCryptoPayment, ensureBaseNetwork, connectMetaMask, type CryptoNetworkKey } from "@/lib/metamask"
+import { executeSplitCryptoPayment, ensureBaseNetwork, connectMetaMask, getConnectedAddress, signTypedDataV4, type CryptoNetworkKey } from "@/lib/metamask"
 import { calculateCheckoutFees } from "@/lib/checkout-fees"
 import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from "@/lib/wallet-constants"
 import { getPrimaryListingImage } from "@/lib/listing-images"
@@ -33,6 +33,7 @@ export function PurchasePageClient({
   serverViewerId = null,
   cryptoNetwork = "base",
   cryptoPlatformWallet = null,
+  cryptoOneSignature = false,
 }: {
   id: string
   /**
@@ -45,6 +46,8 @@ export function PurchasePageClient({
   cryptoNetwork?: CryptoNetworkKey
   /** Server-selected platform fee wallet override (CRYPTO_PLATFORM_WALLET). */
   cryptoPlatformWallet?: string | null
+  /** One-signature splitter checkout available (SPLITTER_ADDRESS + relayer configured). */
+  cryptoOneSignature?: boolean
 }) {
   const resolvedParams = { id }
   const router = useRouter()
@@ -384,6 +387,47 @@ export function PurchasePageClient({
       // Ensure MetaMask is connected and on Base
       await connectMetaMask()
       await ensureBaseNetwork(cryptoNetwork)
+
+      // One-signature atomic checkout: the server quotes the split, the buyer
+      // signs a single EIP-3009 authorization (free, no gas), and the
+      // platform relayer settles seller + fee atomically via the splitter —
+      // the fee cannot be skipped and no second confirmation exists.
+      if (cryptoOneSignature && currency === "USDC") {
+        const buyerAddress = await getConnectedAddress()
+        const quoteRes = await fetch("/api/crypto/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "quote", listingId: resolvedParams.id, quantity, buyerAddress }),
+        })
+        const quote = await quoteRes.json()
+        if (!quoteRes.ok) throw new Error(quote.error || "Could not quote the crypto checkout.")
+
+        toast({ title: "One signature", description: "Sign the payment authorization in your wallet — no gas needed." })
+        const signature = await signTypedDataV4(buyerAddress, quote.typedData)
+
+        const submitRes = await fetch("/api/crypto/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "submit",
+            listingId: resolvedParams.id,
+            quantity,
+            buyerAddress,
+            salt: quote.salt,
+            validBefore: quote.validBefore,
+            signature,
+          }),
+        })
+        const submitted = await submitRes.json()
+        if (!submitRes.ok) throw new Error(submitted.error || "Crypto settlement failed.")
+
+        router.push(
+          submitted.receiptId
+            ? `/marketplace/${resolvedParams.id}/receipt/${submitted.receiptId}`
+            : `/marketplace/${resolvedParams.id}/confirmed`,
+        )
+        return
+      }
 
       // Calculate fee split
       const totalCents = Math.round(finalTotal * 100)

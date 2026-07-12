@@ -2,7 +2,9 @@
   "name": "rivr-group",
   "version": "0.1.0",
   "packageManager": "pnpm@8.15.9",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "description": "Standalone Rivr group-instance app",
   "private": true,
   "type": "module",
@@ -109,6 +111,7 @@
     "tailwind-merge": "^3.4.0",
     "three": "^0.183.2",
     "vaul": "^0.9.6",
+    "viem": "2.55.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -140,12 +143,12 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "sharp",
+      "@node-rs/bcrypt",
       "esbuild",
-      "protobufjs",
       "onnxruntime-node",
-      "unrs-resolver",
-      "@node-rs/bcrypt"
+      "protobufjs",
+      "sharp",
+      "unrs-resolver"
     ],
     "overrides": {
       "react-konva": "^19.2.5"

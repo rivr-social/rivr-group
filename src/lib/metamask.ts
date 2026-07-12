@@ -331,6 +331,34 @@ export async function sendUsdcPayment(
   return txHash
 }
 
+
+/** Returns the first connected wallet account (throws if none). */
+export async function getConnectedAddress(): Promise<string> {
+  if (typeof window === "undefined" || !window.ethereum) {
+    throw new Error("MetaMask is not available.")
+  }
+  const accounts = (await window.ethereum.request({ method: "eth_accounts" })) as string[]
+  if (!accounts || accounts.length === 0) {
+    throw new Error("No connected wallet account. Please connect first.")
+  }
+  return accounts[0]
+}
+
+/**
+ * Asks the wallet to sign EIP-712 typed data (eth_signTypedData_v4). Free and
+ * offline for the signer — used by the one-signature USDC checkout, where the
+ * platform relayer submits the transaction.
+ */
+export async function signTypedDataV4(address: string, typedData: unknown): Promise<string> {
+  if (typeof window === "undefined" || !window.ethereum) {
+    throw new Error("MetaMask is not available.")
+  }
+  return (await window.ethereum.request({
+    method: "eth_signTypedData_v4",
+    params: [address, JSON.stringify(typedData)],
+  })) as string
+}
+
 // ─── Split Payments ──────────────────────────────────────────────────────────
 
 /** Result of a split crypto payment (seller + platform fee). */
@@ -376,9 +404,15 @@ export async function executeSplitCryptoPayment(
   await ensureBaseNetwork(network)
 
   if (currency === "USDC") {
-    // USDC is 1:1 with USD
-    const sellerTxHash = await sendUsdcPayment(sellerAddress, sellerAmountUsd, network)
+    // USDC is 1:1 with USD. The platform fee is collected FIRST and GATES the
+    // purchase (Cameron, 2026-07-12): if the buyer rejects or the fee transfer
+    // fails, the seller payment never happens and no sale occurs — previously
+    // the seller was paid first, so a rejected second signature meant the sale
+    // completed with the platform fee silently skipped. (Two signatures remain
+    // an interim rail — the Phase 2 splitter contract collapses this into ONE
+    // signed authorization that fans out atomically.)
     const platformFeeTxHash = await sendUsdcPayment(platformWallet, platformFeeUsd, network)
+    const sellerTxHash = await sendUsdcPayment(sellerAddress, sellerAmountUsd, network)
 
     return {
       sellerTxHash,
@@ -402,8 +436,9 @@ export async function executeSplitCryptoPayment(
   const sellerWei = BigInt(Math.round(sellerEth * 1e18)).toString()
   const platformFeeWei = BigInt(Math.round(platformFeeEth * 1e18)).toString()
 
-  const sellerTxHash = await sendEthPayment(sellerAddress, sellerWei)
+  // Fee-first gating — same rationale as the USDC path above.
   const platformFeeTxHash = await sendEthPayment(platformWallet, platformFeeWei)
+  const sellerTxHash = await sendEthPayment(sellerAddress, sellerWei)
 
   return {
     sellerTxHash,
