@@ -46,6 +46,12 @@ vi.mock("@/app/actions/wallet/connect-backfill", () => ({
   backfillConnectAccountsAction: vi.fn(),
 }));
 
+vi.mock("@/app/actions/wallet/crypto-treasury", () => ({
+  getCryptoTreasuryOverviewAction: vi.fn(),
+  createBudgetProposalsAction: vi.fn(),
+  createTransferProposalAction: vi.fn(),
+}));
+
 vi.mock("@/lib/queries/resources", () => ({
   getResourcesByOwnerAndType: (...args: unknown[]) => mockGetResourcesByOwnerAndType(...args),
 }));
