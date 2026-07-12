@@ -1123,15 +1123,42 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="invite-link">Invite Link</Label>
-                <Input
-                  id="invite-link"
-                  value={joinSettings.inviteLink ?? ""}
-                  onChange={(event) =>
-                    setJoinSettings((prev) => ({ ...prev, inviteLink: event.target.value }))
-                  }
-                  placeholder="https://..."
-                />
+                <Label htmlFor="invite-link">Invite link</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="invite-link"
+                    value={joinSettings.inviteLink ?? ""}
+                    readOnly
+                    placeholder="No invite link yet — generate one"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+                      setJoinSettings((prev) => ({
+                        ...prev,
+                        inviteLink: `${window.location.origin}/groups/${groupId}?invite=${token}`,
+                      }));
+                    }}
+                  >
+                    {joinSettings.inviteLink ? "New link" : "Generate"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!joinSettings.inviteLink}
+                    onClick={() => {
+                      if (joinSettings.inviteLink) void navigator.clipboard.writeText(joinSettings.inviteLink);
+                    }}
+                  >
+                    Copy
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Share this link to invite people. Generating a new link retires the old one once you save.
+                </p>
               </div>
 
               <div className="space-y-2">

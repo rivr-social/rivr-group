@@ -190,6 +190,10 @@ export function ShareClassesCard({ groupId, canManage = false }: ShareClassesCar
             <CardDescription>
               Equity classes that receive a percentage of the org&apos;s net, split by shares held.
             </CardDescription>
+            <CardDescription>
+              A share class receives a slice of the group&apos;s net income; members split that slice
+              by the shares they hold.
+            </CardDescription>
           </div>
           {canManage && (
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -236,6 +240,11 @@ export function ShareClassesCard({ groupId, canManage = false }: ShareClassesCar
                     {pct(totalNetBps)} of net allocated
                   </Badge>
                 </div>
+                {totalNetBps > 10000 && (
+                  <p className="text-xs text-destructive">
+                    You&apos;ve allocated more than 100% of net — reduce a class.
+                  </p>
+                )}
                 {classes.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     No share classes yet. Create a Stewards or Workers class to allocate equity.
@@ -312,8 +321,8 @@ export function ShareClassesCard({ groupId, canManage = false }: ShareClassesCar
           <DialogHeader>
             <DialogTitle>New share class</DialogTitle>
             <DialogDescription>
-              A hidden equity class that receives a percentage of the org&apos;s net, split among its
-              members by shares held.
+              An equity class (not shown in public directories) that receives a percentage of the
+              org&apos;s net, split among its members by shares held.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">

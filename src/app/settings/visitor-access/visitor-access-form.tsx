@@ -35,6 +35,13 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -86,6 +93,38 @@ const CAPABILITY_DESCRIPTIONS: Record<string, string> = {
   rsvp: "RSVP to events.",
   message: "Start direct message threads.",
 };
+
+/**
+ * Plain-language labels for capability slugs, matched by substring (first
+ * match wins). Unknown slugs fall back to a humanized form of the slug.
+ */
+const CAPABILITY_LABEL_RULES: Array<{ match: RegExp; label: string }> = [
+  { match: /comment/, label: "Comment on posts" },
+  { match: /react/, label: "React to posts" },
+  { match: /rsvp|attend/, label: "RSVP to events" },
+  { match: /view|read/, label: "Browse public content" },
+  { match: /message|dm/, label: "Message members" },
+  { match: /post/, label: "Create posts" },
+];
+
+/**
+ * Human label for a capability slug: the first matching plain-language rule,
+ * or the slug with dashes/underscores as spaces in sentence case.
+ */
+function capabilityLabel(slug: string): string {
+  const lower = slug.toLowerCase();
+  const rule = CAPABILITY_LABEL_RULES.find(({ match }) => match.test(lower));
+  if (rule) return rule.label;
+  const humanized = lower.replace(/[-_]+/g, " ").trim();
+  return humanized.charAt(0).toUpperCase() + humanized.slice(1);
+}
+
+/** Session-length presets offered by the select, in minutes. */
+const SESSION_TTL_PRESETS: Array<{ minutes: number; label: string }> = [
+  { minutes: 60, label: "1 hour (60)" },
+  { minutes: 480, label: "8 hours (480)" },
+  { minutes: 1440, label: "1 day (1440)" },
+];
 
 export function VisitorAccessForm({
   initial,
@@ -181,7 +220,8 @@ export function VisitorAccessForm({
             Federated visitor policy
           </CardTitle>
           <CardDescription>
-            Instance: <code>{initial.instanceSlug}</code> ({initial.instanceType})
+            Who can visit from other RIVR communities, and what they can do
+            here.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -199,15 +239,19 @@ export function VisitorAccessForm({
           <div className="space-y-3">
             <Label className="text-base">Visitor capabilities</Label>
             <p className="text-sm text-muted-foreground">
-              The <code>{initial.baselineCapability}</code> baseline is always
-              granted. Enable any additional capabilities visitors should have.
+              &ldquo;{capabilityLabel(initial.baselineCapability)}&rdquo; is
+              always granted. Enable any additional capabilities visitors
+              should have.
             </p>
             <div className="space-y-3 rounded-md border p-4">
               <div className="flex items-center gap-3 opacity-70">
                 <Checkbox checked disabled aria-label="read (baseline)" />
                 <div className="space-y-0.5">
-                  <span className="text-sm font-medium">
-                    {initial.baselineCapability}
+                  <span
+                    className="text-sm font-medium"
+                    title={initial.baselineCapability}
+                  >
+                    {capabilityLabel(initial.baselineCapability)}
                   </span>
                   <p className="text-xs text-muted-foreground">
                     {CAPABILITY_DESCRIPTIONS[initial.baselineCapability] ??
@@ -227,8 +271,12 @@ export function VisitorAccessForm({
                     aria-label={cap}
                   />
                   <div className="space-y-0.5">
-                    <Label htmlFor={`cap-${cap}`} className="text-sm font-medium">
-                      {cap}
+                    <Label
+                      htmlFor={`cap-${cap}`}
+                      className="text-sm font-medium"
+                      title={cap}
+                    >
+                      {capabilityLabel(cap)}
                     </Label>
                     <p className="text-xs text-muted-foreground">
                       {CAPABILITY_DESCRIPTIONS[cap] ?? "Additional capability."}
@@ -240,21 +288,54 @@ export function VisitorAccessForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="visitor-ttl">Session length (minutes)</Label>
-            <Input
-              id="visitor-ttl"
-              type="number"
-              min={1}
-              max={1440}
-              value={ttl}
+            <Label htmlFor="visitor-ttl-preset">Session length</Label>
+            <Select
+              value={String(ttl)}
               disabled={!enabled}
-              onChange={(e) => setTtl(Number(e.target.value))}
-              className="max-w-[12rem]"
-            />
+              onValueChange={(value) => setTtl(Number(value))}
+            >
+              <SelectTrigger id="visitor-ttl-preset" className="max-w-[12rem]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SESSION_TTL_PRESETS.map((preset) => (
+                  <SelectItem key={preset.minutes} value={String(preset.minutes)}>
+                    {preset.label}
+                  </SelectItem>
+                ))}
+                {!SESSION_TTL_PRESETS.some(
+                  (preset) => preset.minutes === ttl,
+                ) && (
+                  <SelectItem value={String(ttl)}>
+                    Custom: {ttl} minutes
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
             <p className="text-sm text-muted-foreground">
-              How long a visitor stays signed in before their session expires
-              (1–1440 minutes).
+              How long a visitor stays signed in before their session expires.
             </p>
+            <details className="space-y-2">
+              <summary className="cursor-pointer text-sm font-medium">
+                Advanced
+              </summary>
+              <div className="mt-2 space-y-2">
+                <Label htmlFor="visitor-ttl">Session length (minutes)</Label>
+                <Input
+                  id="visitor-ttl"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={ttl}
+                  disabled={!enabled}
+                  onChange={(e) => setTtl(Number(e.target.value))}
+                  className="max-w-[12rem]"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Exact session length (1–1440 minutes).
+                </p>
+              </div>
+            </details>
           </div>
 
           <div className="flex items-center justify-between rounded-md border p-4">

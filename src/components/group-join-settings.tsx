@@ -128,7 +128,8 @@ export function GroupJoinSettings({ group, onSave, isAdmin }: GroupJoinSettingsP
   }
 
   const generateInviteLink = () => {
-    const newLink = `https://onelocal.com/groups/${group.id}/join?invite=${Date.now().toString(36)}`
+    const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16)
+    const newLink = `${window.location.origin}/groups/${group.id}?invite=${token}`
     if (!joinSettings) return
     setJoinSettings({
       ...joinSettings,

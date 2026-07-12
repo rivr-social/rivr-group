@@ -62,7 +62,7 @@ export function SubgroupBankingCard({ groupId }: SubgroupBankingCardProps) {
     try {
       const result = await provisionSubgroupFinancialAccountAction(groupId, subgroupId)
       if (result.success) {
-        toast({ title: "Treasury account ready", description: "The subgroup now has its own financial account." })
+        toast({ title: "Treasury account ready", description: "The subgroup now has its own sub-treasury account." })
         await loadOverview()
       } else {
         toast({ title: "Could not provision", description: result.error, variant: "destructive" })
@@ -111,7 +111,10 @@ export function SubgroupBankingCard({ groupId }: SubgroupBankingCardProps) {
           <Landmark className="h-4 w-4" /> Subgroup banking
         </CardTitle>
         <CardDescription>
-          Each subgroup treasury can hold its own financial account and spending-limited virtual card,
+          Give a subgroup its own balance and a spending-limited virtual card.
+        </CardDescription>
+        <CardDescription>
+          Each subgroup treasury can hold its own sub-treasury account and spending-limited virtual card,
           funded from and isolated to that subgroup&apos;s balance.
         </CardDescription>
       </CardHeader>
@@ -123,7 +126,7 @@ export function SubgroupBankingCard({ groupId }: SubgroupBankingCardProps) {
         )}
         {overview.groupConnectAccountId && !overview.treasuryEnabled && (
           <p className="text-sm text-muted-foreground">
-            Stripe Treasury is not enabled on this platform yet; subgroup accounts activate automatically once it is.
+            Subgroup bank accounts aren&apos;t available on this community yet.
           </p>
         )}
         {overview.groupConnectAccountId && overview.treasuryEnabled && !hasSubgroups && (

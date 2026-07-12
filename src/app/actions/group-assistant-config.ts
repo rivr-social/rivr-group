@@ -14,6 +14,9 @@
  * as the assistant.
  */
 
+import { and, asc, eq, sql } from "drizzle-orm";
+import { db } from "@/db";
+import { agents } from "@/db/schema";
 import { getAuthenticatedActorId } from "@/lib/server-auth";
 import { isGroupAdmin } from "@/app/actions/group-admin";
 import { resolveGroupDirectAgent } from "@/lib/group-assistant";
@@ -21,6 +24,7 @@ import {
   saveGroupAssistantSettings,
   type GroupAssistantSettings,
 } from "@/lib/group-assistant-settings";
+import { SHARE_CLASS_GROUP_TYPE } from "./wallet/share-classes-types";
 import { ALLOWED_ASSISTANT_MODELS } from "./group-assistant-config-types";
 
 const UUID_RE =
@@ -33,6 +37,16 @@ const ALLOWED_MODEL_SET = new Set<string>(ALLOWED_ASSISTANT_MODELS);
 export interface AssistantConfigResult {
   success: boolean;
   error?: string;
+}
+
+/** A knowledge-source scope the admin picker can toggle by name. */
+export interface AssistantScopeOption {
+  id: string;
+  name: string;
+}
+
+export interface AssistantScopeOptionsResult extends AssistantConfigResult {
+  options?: AssistantScopeOption[];
 }
 
 export interface AssistantConfigFetchResult extends AssistantConfigResult {
@@ -82,6 +96,42 @@ export async function fetchGroupAssistantConfig(
       includedKgScopeIds: direct.settings.includedKgScopeIds,
       publicChatEnabled: direct.settings.publicChatEnabled,
     },
+  };
+}
+
+/**
+ * List the knowledge-source scopes the admin picker can offer by name: the
+ * group itself (first) plus its non-deleted DIRECT subgroups, excluding hidden
+ * share-class subgroups. Gated exactly like {@link fetchGroupAssistantConfig}.
+ */
+export async function getAssistantScopeOptionsAction(
+  groupId: string,
+): Promise<AssistantScopeOptionsResult> {
+  const auth = await requireAdmin(groupId);
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  const [group] = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.id, groupId), sql`${agents.deletedAt} IS NULL`))
+    .limit(1);
+  if (!group) return { success: false, error: "Group not found." };
+
+  const subgroups = await db
+    .select({ id: agents.id, name: agents.name })
+    .from(agents)
+    .where(
+      and(
+        eq(agents.parentId, groupId),
+        sql`${agents.deletedAt} IS NULL`,
+        sql`COALESCE(${agents.metadata} ->> 'groupType', '') <> ${SHARE_CLASS_GROUP_TYPE}`,
+      ),
+    )
+    .orderBy(asc(agents.name));
+
+  return {
+    success: true,
+    options: [{ id: group.id, name: group.name }, ...subgroups],
   };
 }
 

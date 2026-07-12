@@ -281,7 +281,7 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
     try {
       const result = await provisionFundFinancialAccountAction(groupId, fund.fundId)
       if (result.success) {
-        toast({ title: "Fund account ready", description: `"${fund.name}" now has its own financial account.` })
+        toast({ title: "Fund account ready", description: `"${fund.name}" now has its own fund bank account.` })
         await loadOverview()
       } else {
         toast({ title: "Could not provision", description: result.error, variant: "destructive" })
@@ -483,13 +483,13 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
 
         {!overview.treasuryEnabled && (
           <p className="text-sm text-muted-foreground">
-            Stripe Treasury is not enabled on this platform yet — fund bank accounts and cards
-            activate automatically once it is. Internal fund balances and transfers work today.
+            Fund bank accounts aren&apos;t available on this community yet. Internal fund balances and
+            transfers work today.
           </p>
         )}
         {overview.treasuryEnabled && !overview.issuingEnabled && (
           <p className="text-sm text-muted-foreground">
-            Card issuing is not enabled on this platform yet; fund cards activate automatically once it is.
+            Fund cards aren&apos;t available on this community yet.
           </p>
         )}
 

@@ -300,8 +300,8 @@ export function OutgoingEmailForm({ initial }: { initial: OutgoingEmailInitial }
             <div className="space-y-0.5">
               <Label className="text-base">Enable peer outgoing SMTP</Label>
               <p className="text-sm text-muted-foreground">
-                When off, outgoing transactional email for this peer falls
-                through to the global federation relay.
+                When off, this community&apos;s emails are sent through the
+                shared RIVR mail service instead of your own account.
               </p>
             </div>
             <Switch
@@ -310,6 +310,41 @@ export function OutgoingEmailForm({ initial }: { initial: OutgoingEmailInitial }
                 setConfig((c) => ({ ...c, enabled }))
               }
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="smtp-provider">Email provider</Label>
+            <select
+              id="smtp-provider"
+              className="w-full border rounded-md px-3 py-2 text-sm bg-background"
+              value={
+                config.host === "smtp.gmail.com"
+                  ? "gmail"
+                  : config.host === "smtp.office365.com"
+                    ? "outlook"
+                    : config.host === "smtp.fastmail.com"
+                      ? "fastmail"
+                      : "custom"
+              }
+              onChange={(e) => {
+                const preset = e.target.value;
+                if (preset === "gmail") {
+                  setConfig((c) => ({ ...c, host: "smtp.gmail.com", port: 587, secure: false }));
+                } else if (preset === "outlook") {
+                  setConfig((c) => ({ ...c, host: "smtp.office365.com", port: 587, secure: false }));
+                } else if (preset === "fastmail") {
+                  setConfig((c) => ({ ...c, host: "smtp.fastmail.com", port: 465, secure: true }));
+                }
+              }}
+            >
+              <option value="gmail">Gmail / Google Workspace</option>
+              <option value="outlook">Outlook / Microsoft 365</option>
+              <option value="fastmail">Fastmail</option>
+              <option value="custom">Other (enter details below)</option>
+            </select>
+            <p className="text-sm text-muted-foreground">
+              Picking a provider fills in the technical details for you.
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -366,10 +401,10 @@ export function OutgoingEmailForm({ initial }: { initial: OutgoingEmailInitial }
 
           <div className="flex items-center justify-between rounded-md border p-4">
             <div className="space-y-0.5">
-              <Label className="text-base">Implicit TLS (port 465)</Label>
+              <Label className="text-base">Encrypted from the start (port 465)</Label>
               <p className="text-sm text-muted-foreground">
-                Off uses STARTTLS (typical for port 587). On uses implicit
-                TLS (typical for port 465).
+                Set automatically when you pick a provider. Leave off for
+                port 587, on for port 465.
               </p>
             </div>
             <Switch
@@ -380,26 +415,39 @@ export function OutgoingEmailForm({ initial }: { initial: OutgoingEmailInitial }
             />
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="smtp-secret-ref">Password secret reference</Label>
-            <Input
-              id="smtp-secret-ref"
-              placeholder={DEFAULT_PASSWORD_REF}
-              value={config.passwordSecretRef}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  passwordSecretRef: e.target.value,
-                }))
-              }
-            />
+          <div className="rounded-md border p-4 space-y-2">
+            <p className="text-sm font-medium">Email password</p>
             <p className="text-sm text-muted-foreground">
-              Never paste the actual password here. Provide either a{" "}
-              <code>process.env</code> variable name (e.g.{" "}
-              <code>{DEFAULT_PASSWORD_REF}</code>) or a Docker secret mount
-              path (e.g. <code>/run/secrets/peer_smtp_password</code>). The
-              password is read from that source at send time.
+              For security, the password is never typed or stored here — your
+              server operator sets it on the server itself. Ask them to set{" "}
+              <code>{DEFAULT_PASSWORD_REF}</code> to your email password; the
+              default below already points at it, so most people don&apos;t
+              need to change anything.
             </p>
+            <details>
+              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                Advanced: change where the password is read from
+              </summary>
+              <div className="mt-2 space-y-2">
+                <Input
+                  id="smtp-secret-ref"
+                  placeholder={DEFAULT_PASSWORD_REF}
+                  value={config.passwordSecretRef}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      passwordSecretRef: e.target.value,
+                    }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  An environment variable name (e.g.{" "}
+                  <code>{DEFAULT_PASSWORD_REF}</code>) or a secret file path
+                  (e.g. <code>/run/secrets/peer_smtp_password</code>), read at
+                  send time.
+                </p>
+              </div>
+            </details>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 pt-2">

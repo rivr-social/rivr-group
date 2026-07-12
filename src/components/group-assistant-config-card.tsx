@@ -25,6 +25,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Bot, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -46,8 +47,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import {
   fetchGroupAssistantConfig,
+  getAssistantScopeOptionsAction,
   updateGroupAssistantConfig,
   type AssistantConfigFetchResult,
+  type AssistantScopeOption,
+  type AssistantScopeOptionsResult,
 } from "@/app/actions/group-assistant-config";
 import { ALLOWED_ASSISTANT_MODELS } from "@/app/actions/group-assistant-config-types";
 
@@ -68,6 +72,22 @@ const MODEL_LABELS: Record<string, string> = {
 const MAX_SOUL_MD_LENGTH = 8000;
 
 type AssistantConfig = NonNullable<AssistantConfigFetchResult["config"]>;
+
+/**
+ * Parse the KG-scope editor text: one id per line (or comma-separated),
+ * trimmed, de-duplicated. Shared by the checkbox picker and the save path so
+ * both always see the same id list.
+ */
+function parseScopeIds(text: string): string[] {
+  return Array.from(
+    new Set(
+      text
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -92,6 +112,10 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
   const [scopeIdsText, setScopeIdsText] = useState("");
   const [publicChatEnabled, setPublicChatEnabled] = useState(false);
 
+  // Knowledge-source picker options (the group + its direct subgroups).
+  // Non-fatal on failure — an empty list falls back to the advanced textarea.
+  const [scopeOptions, setScopeOptions] = useState<AssistantScopeOption[]>([]);
+
   const applyConfig = useCallback((config: AssistantConfig) => {
     setIsPersona(config.isPersona);
     setHasAutobotPersona(config.hasAutobotPersona);
@@ -104,19 +128,46 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const result = await fetchGroupAssistantConfig(groupId);
+    const [result, optionsResult] = await Promise.all([
+      fetchGroupAssistantConfig(groupId),
+      getAssistantScopeOptionsAction(groupId).catch(
+        (): AssistantScopeOptionsResult => ({ success: false }),
+      ),
+    ]);
     if (!result.success || !result.config) {
       setError(result.error ?? "Unable to load assistant configuration.");
       setLoading(false);
       return;
     }
     applyConfig(result.config);
+    setScopeOptions(
+      optionsResult.success && optionsResult.options
+        ? optionsResult.options
+        : [],
+    );
     setLoading(false);
   }, [groupId, applyConfig]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Add/remove a picker id in the SAME `scopeIdsText` state the advanced
+   * textarea and the save path read — ids the picker doesn't know about
+   * round-trip untouched.
+   */
+  const toggleScopeId = useCallback((id: string, checked: boolean) => {
+    setScopeIdsText((prev) => {
+      const ids = parseScopeIds(prev);
+      const next = checked
+        ? ids.includes(id)
+          ? ids
+          : [...ids, id]
+        : ids.filter((value) => value !== id);
+      return next.join("\n");
+    });
+  }, []);
 
   const onSave = useCallback(async () => {
     if (customSoulMd.length > MAX_SOUL_MD_LENGTH) {
@@ -129,14 +180,7 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
     }
 
     // Parse the KG-scope editor: one id per line, trimmed, de-duplicated.
-    const includedKgScopeIds = Array.from(
-      new Set(
-        scopeIdsText
-          .split(/[\n,]/)
-          .map((value) => value.trim())
-          .filter(Boolean),
-      ),
-    );
+    const includedKgScopeIds = parseScopeIds(scopeIdsText);
 
     setSaving(true);
     const result = await updateGroupAssistantConfig({
@@ -166,6 +210,10 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
     publicChatEnabled,
     toast,
   ]);
+
+  // Current scope-id list, derived from the same text the textarea edits, so
+  // the picker checkboxes and the advanced editor never disagree.
+  const selectedScopeIds = new Set(parseScopeIds(scopeIdsText));
 
   if (loading) {
     return (
@@ -269,28 +317,57 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
           </div>
 
           {/* KG scope ids */}
-          <details className="grid gap-2">
-            <summary className="cursor-pointer text-sm font-medium">
-              Advanced
-            </summary>
-            <div className="mt-2 grid gap-2">
-              <Label htmlFor="assistant-kg-scopes">
-                Extra knowledge sources (advanced)
-              </Label>
-              <Textarea
-                id="assistant-kg-scopes"
-                value={scopeIdsText}
-                onChange={(event) => setScopeIdsText(event.target.value)}
-                rows={3}
-                placeholder="One source ID per line."
-                className="font-mono text-xs"
-              />
-              <p className="text-xs text-muted-foreground">
-                Usually leave blank — the group&apos;s own knowledge is included
-                automatically. Your operator can give you additional source IDs.
-              </p>
-            </div>
-          </details>
+          <div className="grid gap-2">
+            <Label>Knowledge sources</Label>
+            {scopeOptions.length > 0 && (
+              <div className="space-y-2 rounded-md border p-3">
+                {scopeOptions.map((option) => (
+                  <div key={option.id} className="flex items-center gap-3">
+                    <Checkbox
+                      id={`assistant-scope-${option.id}`}
+                      checked={selectedScopeIds.has(option.id)}
+                      onCheckedChange={(checked) =>
+                        toggleScopeId(option.id, checked === true)
+                      }
+                    />
+                    <Label
+                      htmlFor={`assistant-scope-${option.id}`}
+                      className="cursor-pointer text-sm font-normal"
+                    >
+                      {option.name}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Pick which parts of the group the assistant may draw knowledge
+              from. Usually leave everything unchecked — the group&apos;s own
+              knowledge is included automatically.
+            </p>
+            <details className="grid gap-2">
+              <summary className="cursor-pointer text-sm font-medium">
+                Advanced: paste source IDs
+              </summary>
+              <div className="mt-2 grid gap-2">
+                <Label htmlFor="assistant-kg-scopes">
+                  Extra knowledge sources (advanced)
+                </Label>
+                <Textarea
+                  id="assistant-kg-scopes"
+                  value={scopeIdsText}
+                  onChange={(event) => setScopeIdsText(event.target.value)}
+                  rows={3}
+                  placeholder="One source ID per line."
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs text-muted-foreground">
+                  One source ID per line. Your operator can give you additional
+                  source IDs that aren&apos;t in the picker above.
+                </p>
+              </div>
+            </details>
+          </div>
         </CardContent>
       </Card>
 
