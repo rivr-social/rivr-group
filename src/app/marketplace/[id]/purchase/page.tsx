@@ -33,5 +33,18 @@ export default async function MarketplaceItemPurchasePage({ params }: { params: 
       ? await resolveLocalActorId(session.user.id)
       : session.user.id
     : null
-  return <PurchasePageClient id={id} serverViewerId={serverViewerId} />
+  // Crypto checkout network selection is SERVER policy (per-instance env),
+  // threaded down as props — the fleet is on test rails (Base Sepolia) until
+  // real-money cutover, mirroring the Stripe test-keys posture.
+  const cryptoNetwork =
+    process.env.CRYPTO_NETWORK === "base-sepolia" ? ("base-sepolia" as const) : ("base" as const)
+  const cryptoPlatformWallet = process.env.CRYPTO_PLATFORM_WALLET || null
+  return (
+    <PurchasePageClient
+      id={id}
+      serverViewerId={serverViewerId}
+      cryptoNetwork={cryptoNetwork}
+      cryptoPlatformWallet={cryptoPlatformWallet}
+    />
+  )
 }

@@ -23,6 +23,44 @@ declare global {
 
 // ─── Base Network Constants ──────────────────────────────────────────────────
 
+/**
+ * Crypto checkout runs on one of two Base networks, selected SERVER-side per
+ * instance (`CRYPTO_NETWORK` env, threaded down as a prop — never trusted
+ * from the client): `base` (mainnet, the default) or `base-sepolia`
+ * (testnet — the fleet's current test-keys posture, 2026-07-12).
+ */
+export type CryptoNetworkKey = "base" | "base-sepolia"
+
+export interface CryptoNetworkConfig {
+  chainId: number
+  chainIdHex: string
+  chainName: string
+  usdcAddress: string
+  rpcUrl: string
+  blockExplorerUrl: string
+}
+
+export const CRYPTO_NETWORKS: Record<CryptoNetworkKey, CryptoNetworkConfig> = {
+  base: {
+    chainId: 8453,
+    chainIdHex: "0x2105",
+    chainName: "Base",
+    // Base mainnet USDC contract (Circle bridged)
+    usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    rpcUrl: "https://mainnet.base.org",
+    blockExplorerUrl: "https://basescan.org",
+  },
+  "base-sepolia": {
+    chainId: 84532,
+    chainIdHex: "0x14a34",
+    chainName: "Base Sepolia",
+    // Base Sepolia USDC (Circle testnet)
+    usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    rpcUrl: "https://sepolia.base.org",
+    blockExplorerUrl: "https://sepolia.basescan.org",
+  },
+}
+
 /** Base mainnet chain ID */
 export const BASE_CHAIN_ID = 8453
 export const BASE_CHAIN_ID_HEX = "0x2105"
@@ -33,7 +71,8 @@ export const BASE_USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 /** USDC uses 6 decimals on Base */
 export const USDC_DECIMALS = 6
 
-/** Platform safe wallet on Base */
+/** Default platform fee wallet on Base mainnet (override per network via the
+ * server-provided platform wallet prop). */
 export const PLATFORM_BASE_WALLET = "0x8C01957270a9ce581adEB3C8187EB187E1C94549"
 
 /** ERC-20 transfer function selector: transfer(address,uint256) */
@@ -89,21 +128,22 @@ export async function connectMetaMask(): Promise<string> {
  *
  * @throws {Error} If the user rejects the network switch.
  */
-export async function ensureBaseNetwork(): Promise<void> {
+export async function ensureBaseNetwork(network: CryptoNetworkKey = "base"): Promise<void> {
   if (typeof window === "undefined" || !window.ethereum) {
     throw new Error("MetaMask is not available.")
   }
 
+  const cfg = CRYPTO_NETWORKS[network]
   const currentChainId = (await window.ethereum.request({
     method: "eth_chainId",
   })) as string
 
-  if (currentChainId === BASE_CHAIN_ID_HEX) return
+  if (currentChainId.toLowerCase() === cfg.chainIdHex.toLowerCase()) return
 
   try {
     await window.ethereum.request({
       method: "wallet_switchEthereumChain",
-      params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      params: [{ chainId: cfg.chainIdHex }],
     })
   } catch (switchError: unknown) {
     const err = switchError as { code?: number }
@@ -113,18 +153,73 @@ export async function ensureBaseNetwork(): Promise<void> {
         method: "wallet_addEthereumChain",
         params: [
           {
-            chainId: BASE_CHAIN_ID_HEX,
-            chainName: "Base",
+            chainId: cfg.chainIdHex,
+            chainName: cfg.chainName,
             nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-            rpcUrls: ["https://mainnet.base.org"],
-            blockExplorerUrls: ["https://basescan.org"],
+            rpcUrls: [cfg.rpcUrl],
+            blockExplorerUrls: [cfg.blockExplorerUrl],
           },
         ],
       })
     } else {
-      throw new Error("Please switch to Base network in MetaMask to continue.")
+      throw new Error(`Please switch to ${cfg.chainName} network in MetaMask to continue.`)
     }
   }
+}
+
+export async function ensureEvmNetwork(chainId: number): Promise<void> {
+  if (chainId === BASE_CHAIN_ID) {
+    await ensureBaseNetwork()
+    return
+  }
+
+  if (typeof window === "undefined" || !window.ethereum) {
+    throw new Error("MetaMask is not available.")
+  }
+
+  const chainIdHex = `0x${chainId.toString(16)}`
+  const currentChainId = (await window.ethereum.request({
+    method: "eth_chainId",
+  })) as string
+
+  if (currentChainId.toLowerCase() === chainIdHex.toLowerCase()) return
+
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: chainIdHex }],
+    })
+  } catch {
+    throw new Error(`Please switch your wallet to chain ${chainId} before continuing.`)
+  }
+}
+
+export async function sendEvmTransaction(input: {
+  to: string
+  data?: string
+  value?: string
+  chainId: number
+}): Promise<{ txHash: string; from: string }> {
+  if (typeof window === "undefined" || !window.ethereum) {
+    throw new Error("MetaMask is not available in this browser.")
+  }
+
+  const from = await connectMetaMask()
+  await ensureEvmNetwork(input.chainId)
+
+  const txHash = (await window.ethereum.request({
+    method: "eth_sendTransaction",
+    params: [
+      {
+        from,
+        to: input.to,
+        data: input.data ?? "0x",
+        value: input.value ?? "0x0",
+      },
+    ],
+  })) as string
+
+  return { txHash, from }
 }
 
 /**
@@ -198,12 +293,16 @@ function encodeErc20Transfer(toAddress: string, amount: bigint): string {
  * @param amountUsdc - The amount in USDC (e.g. 10.50 for $10.50).
  * @returns The transaction hash.
  */
-export async function sendUsdcPayment(toAddress: string, amountUsdc: number): Promise<string> {
+export async function sendUsdcPayment(
+  toAddress: string,
+  amountUsdc: number,
+  network: CryptoNetworkKey = "base",
+): Promise<string> {
   if (typeof window === "undefined" || !window.ethereum) {
     throw new Error("MetaMask is not available in this browser.")
   }
 
-  await ensureBaseNetwork()
+  await ensureBaseNetwork(network)
 
   const accounts = (await window.ethereum.request({
     method: "eth_accounts",
@@ -222,7 +321,7 @@ export async function sendUsdcPayment(toAddress: string, amountUsdc: number): Pr
     params: [
       {
         from: accounts[0],
-        to: BASE_USDC_ADDRESS,
+        to: CRYPTO_NETWORKS[network].usdcAddress,
         data,
         value: "0x0",
       },
@@ -239,7 +338,7 @@ export interface CryptoPaymentResult {
   sellerTxHash: string
   platformFeeTxHash: string
   currency: "ETH" | "USDC"
-  network: "base"
+  network: CryptoNetworkKey
   sellerAmountFormatted: string
   platformFeeFormatted: string
 }
@@ -264,24 +363,28 @@ export async function executeSplitCryptoPayment(
   sellerAddress: string,
   sellerAmountUsd: number,
   platformFeeUsd: number,
-  ethPriceUsd?: number
+  ethPriceUsd?: number,
+  options?: { network?: CryptoNetworkKey; platformWallet?: string },
 ): Promise<CryptoPaymentResult> {
   if (typeof window === "undefined" || !window.ethereum) {
     throw new Error("MetaMask is not available in this browser.")
   }
 
-  await ensureBaseNetwork()
+  const network = options?.network ?? "base"
+  const platformWallet = options?.platformWallet || PLATFORM_BASE_WALLET
+
+  await ensureBaseNetwork(network)
 
   if (currency === "USDC") {
     // USDC is 1:1 with USD
-    const sellerTxHash = await sendUsdcPayment(sellerAddress, sellerAmountUsd)
-    const platformFeeTxHash = await sendUsdcPayment(PLATFORM_BASE_WALLET, platformFeeUsd)
+    const sellerTxHash = await sendUsdcPayment(sellerAddress, sellerAmountUsd, network)
+    const platformFeeTxHash = await sendUsdcPayment(platformWallet, platformFeeUsd, network)
 
     return {
       sellerTxHash,
       platformFeeTxHash,
       currency: "USDC",
-      network: "base",
+      network,
       sellerAmountFormatted: `${sellerAmountUsd.toFixed(2)} USDC`,
       platformFeeFormatted: `${platformFeeUsd.toFixed(2)} USDC`,
     }
@@ -300,13 +403,13 @@ export async function executeSplitCryptoPayment(
   const platformFeeWei = BigInt(Math.round(platformFeeEth * 1e18)).toString()
 
   const sellerTxHash = await sendEthPayment(sellerAddress, sellerWei)
-  const platformFeeTxHash = await sendEthPayment(PLATFORM_BASE_WALLET, platformFeeWei)
+  const platformFeeTxHash = await sendEthPayment(platformWallet, platformFeeWei)
 
   return {
     sellerTxHash,
     platformFeeTxHash,
     currency: "ETH",
-    network: "base",
+    network,
     sellerAmountFormatted: `${sellerEth.toFixed(6)} ETH`,
     platformFeeFormatted: `${platformFeeEth.toFixed(6)} ETH`,
   }

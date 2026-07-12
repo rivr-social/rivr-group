@@ -20,7 +20,7 @@ import { resourceToMarketplaceListing } from "@/lib/graph-adapters"
 import { AuthModal } from "@/components/auth-modal"
 import { BookingWeekScheduler } from "@/components/booking-week-scheduler"
 import { PaymentMethodSelector, type PaymentMethod } from "@/components/payment-method-selector"
-import { executeSplitCryptoPayment, ensureBaseNetwork, connectMetaMask } from "@/lib/metamask"
+import { executeSplitCryptoPayment, ensureBaseNetwork, connectMetaMask, type CryptoNetworkKey } from "@/lib/metamask"
 import { calculateCheckoutFees } from "@/lib/checkout-fees"
 import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from "@/lib/wallet-constants"
 import { getPrimaryListingImage } from "@/lib/listing-images"
@@ -31,6 +31,8 @@ import { claimVoucherWithThanksEscrowAction, fetchVoucherEscrowStateAction, type
 export function PurchasePageClient({
   id,
   serverViewerId = null,
+  cryptoNetwork = "base",
+  cryptoPlatformWallet = null,
 }: {
   id: string
   /**
@@ -39,6 +41,10 @@ export function PurchasePageClient({
    * it alone forced logged-in federated members into the guest/sign-in modal.
    */
   serverViewerId?: string | null
+  /** Server-selected crypto network (per-instance CRYPTO_NETWORK env). */
+  cryptoNetwork?: CryptoNetworkKey
+  /** Server-selected platform fee wallet override (CRYPTO_PLATFORM_WALLET). */
+  cryptoPlatformWallet?: string | null
 }) {
   const resolvedParams = { id }
   const router = useRouter()
@@ -377,7 +383,7 @@ export function PurchasePageClient({
       setCheckoutError(null)
       // Ensure MetaMask is connected and on Base
       await connectMetaMask()
-      await ensureBaseNetwork()
+      await ensureBaseNetwork(cryptoNetwork)
 
       // Calculate fee split
       const totalCents = Math.round(finalTotal * 100)
@@ -410,7 +416,8 @@ export function PurchasePageClient({
         sellerEthAddress,
         sellerAmountUsd,
         platformFeeUsd,
-        ethPriceUsd
+        ethPriceUsd,
+        { network: cryptoNetwork, platformWallet: cryptoPlatformWallet ?? undefined }
       )
 
       // Record both transactions on the backend
