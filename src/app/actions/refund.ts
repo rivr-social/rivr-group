@@ -1,6 +1,7 @@
 'use server';
 
-import { auth } from '@/auth';
+import { getSession } from '@/lib/auth/get-session';
+import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { db } from '@/db';
 import { resources, ledger, type NewLedgerEntry } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -14,13 +15,20 @@ import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
  * Creates a Stripe refund and updates the receipt status.
  */
 export async function requestRefundAction(receiptId: string): Promise<{ success: boolean; error?: string }> {
-  const session = await auth();
+  // Unified session: a federated remote-viewer's receipt is owned by their
+  // LOCAL projected agent id, not their remote session id — plain `auth()`
+  // denied them a refund on their own purchase ("Not authorized").
+  const session = await getSession();
   if (!session?.user?.id) return { success: false, error: 'Not authenticated' };
+  const actorId =
+    session.user.authMethod === 'federated'
+      ? await resolveLocalActorId(session.user.id)
+      : session.user.id;
 
   const headersList = await headers();
   const clientIp = getClientIp(headersList);
   const limiter = await rateLimit(
-    `refund:${clientIp}:${session.user.id}`,
+    `refund:${clientIp}:${actorId}`,
     RATE_LIMITS.WALLET.limit,
     RATE_LIMITS.WALLET.windowMs,
   );
@@ -35,7 +43,7 @@ export async function requestRefundAction(receiptId: string): Promise<{ success:
     .limit(1);
 
   if (!receipt) return { success: false, error: 'Receipt not found' };
-  if (receipt.ownerId !== session.user.id) return { success: false, error: 'Not authorized' };
+  if (receipt.ownerId !== actorId) return { success: false, error: 'Not authorized' };
 
   const meta = (receipt.metadata ?? {}) as Record<string, unknown>;
 
@@ -71,7 +79,7 @@ export async function requestRefundAction(receiptId: string): Promise<{ success:
 
     await db.insert(ledger).values({
       verb: 'refund',
-      subjectId: session.user.id,
+      subjectId: actorId,
       objectId: meta.sellerAgentId as string,
       objectType: 'agent',
       resourceId: receiptId,
