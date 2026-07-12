@@ -52,15 +52,31 @@ describe("calculateLegacyCheckoutFeesCents", () => {
     }
   });
 
-  it("paymentFee covers Stripe's exact 2.9% + 30¢ on the charged total", () => {
+  it("preserves the historical buyer total (the profit model's pricing)", () => {
+    // The legacy float pipeline that the profit model is based on.
+    function legacyTotalCents(subtotalCents: number): number {
+      const basePrice = subtotalCents / 100;
+      const platformFee = basePrice * 0.033 + 1.44;
+      const salesTax = (basePrice + platformFee) * 0.0905;
+      const paymentFee = (basePrice + platformFee + salesTax) * 0.04 + 0.4;
+      return Math.round((basePrice + platformFee + salesTax + paymentFee) * 100);
+    }
+    for (const sub of [1_00, 6_00, 10_00, 45_00, 100_00, 1000_00]) {
+      const b = calculateLegacyCheckoutFeesCents(sub);
+      expect(Math.abs(b.totalCents - legacyTotalCents(sub))).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("reports Stripe's exact cost as paymentFee; the spread lands in platformFee", () => {
     for (const sub of [1_00, 6_00, 10_00, 45_00, 100_00]) {
       const b = calculateLegacyCheckoutFeesCents(sub);
       const stripeCost = Math.round(b.totalCents * 0.029) + 30;
-      expect(b.paymentFeeCents).toBeGreaterThanOrEqual(stripeCost - 1);
-      // …and is the exact gross-up, not the old 4% + 40¢ over-collection.
-      const preProcessing = b.subtotalCents + b.platformFeeCents + b.salesTaxCents;
-      const oldApprox = Math.round(preProcessing * 0.04) + 40;
-      expect(b.paymentFeeCents).toBeLessThan(oldApprox);
+      expect(b.paymentFeeCents).toBe(stripeCost);
+      // Platform line = base margin (3.3% + $1.44) + the payment-leg spread —
+      // strictly MORE than the base margin alone (the spread is the profit
+      // model's margin, stated explicitly instead of hiding in paymentFee).
+      const baseMargin = Math.round(sub * 0.033) + 144;
+      expect(b.platformFeeCents).toBeGreaterThan(baseMargin);
     }
   });
 });

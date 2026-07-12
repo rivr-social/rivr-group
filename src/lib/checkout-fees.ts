@@ -25,6 +25,21 @@ export interface CheckoutFeeResult {
   connectAccountFeeEstimateCents: number;
 }
 
+
+/**
+ * Exact card-processing cost estimate for an arbitrary charged total, from
+ * the SAME constants the gross-up uses — the single place Stripe's pricing
+ * lives. Used by surfaces that price with their own policy formula but must
+ * report/verify the true processing cost (lib/fees.ts).
+ */
+export function estimateStripeProcessingFeeCents(chargedTotalCents: number): number {
+  if (!Number.isInteger(chargedTotalCents) || chargedTotalCents <= 0) return 0;
+  return (
+    Math.round((chargedTotalCents * STRIPE_CARD_PERCENT_BPS) / BPS_DIVISOR) +
+    STRIPE_CARD_FIXED_CENTS
+  );
+}
+
 export function calculateCheckoutFees(
   sellerPriceCents: number,
   options?: {

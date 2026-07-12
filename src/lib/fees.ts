@@ -2,22 +2,24 @@
  * Offering / event-ticket fee calculator ("legacy" breakdown shape).
  *
  * Purpose:
- * Preserves the historical breakdown contract (platform fee + sales tax +
- * payment fee on top of the seller's subtotal) while routing the
- * payment-processing leg through the CANONICAL gross-up engine
- * (`calculateCheckoutFees`), so Stripe's rate lives in exactly one adjustable
- * place (2026-07-11 consolidation, Cameron-approved). The old standalone
- * 4% + 40¢ approximation over-collected ~1.1% + 10¢ per order; the engine
- * recovers exactly Stripe's 2.9% + 30¢ (adjust STRIPE_CARD_PERCENT_BPS /
- * STRIPE_CARD_FIXED_CENTS in checkout-fees.ts if Stripe's pricing changes).
+ * Preserves the historical PRICING exactly — the buyer total and the
+ * platform's take are unchanged from the legacy pipeline (platform 3.3% +
+ * $1.44, tax 9.05%, payment leg 4% + 40¢; the profit model depends on the
+ * spread between the payment leg and Stripe's actual cost — Cameron,
+ * 2026-07-11). What changed in the consolidation is the ACCOUNTING and the
+ * cost parameter: `paymentFeeCents` now reports Stripe's exact processing
+ * cost (2.9% + 30¢, the single adjustable constant pair in checkout-fees.ts)
+ * and the spread above it lands explicitly in `platformFeeCents` instead of
+ * hiding inside the payment line. A canonical-engine gross-up FLOOR keeps the
+ * surface solvent even if Stripe's pricing ever exceeds the 4% + 40¢ leg.
  *
  * Key exports:
  * `LegacyFeeBreakdown` and `calculateLegacyCheckoutFeesCents` (same shape and
- * field names as before — `paymentFeeCents` is now the exact processing
- * gross-up instead of the 4% + 40¢ approximation) and
+ * field names as before — `paymentFeeCents` is the exact processing cost and
+ * `platformFeeCents` carries the margin INCLUDING the payment-leg spread) and
  * `calculateOfferingDestinationCharge`.
  */
-import { calculateCheckoutFees } from "@/lib/checkout-fees";
+import { calculateCheckoutFees, estimateStripeProcessingFeeCents } from "@/lib/checkout-fees";
 
 /**
  * Fee output shape in cents for each fee component and final total.
@@ -36,18 +38,27 @@ const PLATFORM_FEE_FIXED_CENTS = 144;
 const PLATFORM_FEE_BPS = 330;
 /** Tax rate applied after platform fee is included, in basis points. */
 const SALES_TAX_BPS = 905;
+/**
+ * PRICING leg charged on top of subtotal + platform fee + tax (4% + 40¢).
+ * Deliberately above Stripe's actual cost — the spread is platform margin
+ * (part of the profit model, NOT a rounding artifact). Adjust THESE to change
+ * what buyers pay; adjust checkout-fees.ts constants when Stripe's cost moves.
+ */
+const PAYMENT_LEG_BPS = 400;
+const PAYMENT_LEG_FIXED_CENTS = 40;
 /** Basis-point divisor. */
 const BPS_DIVISOR = 10_000;
 
 /**
  * Calculates the fee components and total charge for a checkout subtotal.
  *
- * The platform margin (3.3% + $1.44) and sales tax (9.05% of subtotal +
- * platform fee) are policy layers computed here; the processing leg is the
- * canonical engine's exact gross-up over (subtotal + margin + tax), so after
- * Stripe's cut the seller's subtotal, the platform margin, AND the tax
- * remittance all survive intact — the payer covers processing, and the
- * platform can never net negative on this surface.
+ * The buyer total = subtotal + platform fee (3.3% + $1.44) + tax (9.05%) +
+ * payment leg (4% + 40¢) — IDENTICAL to the historical pricing. The reported
+ * breakdown splits that total honestly: `paymentFeeCents` = Stripe's exact
+ * cost on the charged total, `platformFeeCents` = margin + the payment-leg
+ * spread. The canonical engine's gross-up acts as a solvency FLOOR on the
+ * total, so the platform cannot net negative even if Stripe's pricing ever
+ * exceeds the payment leg.
  *
  * @param subtotalCents Subtotal before fees/tax, in integer cents.
  * @returns A full fee breakdown in cents including the charged total.
@@ -55,7 +66,7 @@ const BPS_DIVISOR = 10_000;
  * @example
  * ```ts
  * const fees = calculateLegacyCheckoutFeesCents(10_00);
- * // => { subtotalCents: 1000, platformFeeCents: 177, salesTaxCents: 107, ... }
+ * // => totalCents identical to the historical pipeline for the same subtotal
  * ```
  */
 export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyFeeBreakdown {
@@ -74,23 +85,33 @@ export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyF
     };
   }
 
-  const platformFeeCents =
+  const baseMarginCents =
     Math.round((subtotalCents * PLATFORM_FEE_BPS) / BPS_DIVISOR) + PLATFORM_FEE_FIXED_CENTS;
   const salesTaxCents = Math.round(
-    ((subtotalCents + platformFeeCents) * SALES_TAX_BPS) / BPS_DIVISOR,
+    ((subtotalCents + baseMarginCents) * SALES_TAX_BPS) / BPS_DIVISOR,
   );
+  const preProcessingCents = subtotalCents + baseMarginCents + salesTaxCents;
 
-  // Exact processing gross-up over everything the payer owes before Stripe:
-  // the engine call carries zero margin/overhead of its own — the policy
-  // layers above are this surface's margin; the engine only guarantees the
-  // processing math (single source of truth for Stripe's rate).
-  const preProcessingCents = subtotalCents + platformFeeCents + salesTaxCents;
-  const grossUp = calculateCheckoutFees(preProcessingCents, {
+  // PRICING: the historical payment leg (4% + 40¢) sets the buyer total.
+  const paymentLegCents =
+    Math.round((preProcessingCents * PAYMENT_LEG_BPS) / BPS_DIVISOR) + PAYMENT_LEG_FIXED_CENTS;
+
+  // SOLVENCY FLOOR: the canonical engine's exact gross-up over the same base
+  // (zero engine margin/overhead — the layers above are this surface's
+  // policy). Today the payment leg exceeds it, so the floor is inert; it
+  // binds only if Stripe's cost ever outgrows the pricing leg.
+  const grossUpFloorCents = calculateCheckoutFees(preProcessingCents, {
     platformFeeBps: 0,
     connectOverheadCents: 0,
-  });
-  const totalCents = grossUp.buyerTotalCents;
-  const paymentFeeCents = totalCents - preProcessingCents;
+  }).buyerTotalCents;
+
+  const totalCents = Math.max(preProcessingCents + paymentLegCents, grossUpFloorCents);
+
+  // ACCOUNTING: report Stripe's exact cost as the payment fee; everything
+  // above cost + tax + subtotal is platform margin (base + payment-leg
+  // spread), stated explicitly instead of hiding inside the payment line.
+  const paymentFeeCents = estimateStripeProcessingFeeCents(totalCents);
+  const platformFeeCents = totalCents - subtotalCents - salesTaxCents - paymentFeeCents;
 
   return {
     subtotalCents,
