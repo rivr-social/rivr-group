@@ -80,8 +80,21 @@ export function splitterCheckoutEnabled(): boolean {
   return Boolean(splitterAddress() && process.env.CRYPTO_RELAYER_PRIVATE_KEY);
 }
 
-function config() {
+/** The platform's gas-only relayer account, or null when unconfigured. */
+export function relayerAccount() {
+  const pk = process.env.CRYPTO_RELAYER_PRIVATE_KEY;
+  if (!pk) return null;
+  return privateKeyToAccount((pk.startsWith('0x') ? pk : '0x' + pk) as Hex);
+}
+
+export function chainConfig() {
   return NETWORKS[cryptoNetwork()];
+}
+
+const config = chainConfig;
+
+export function cryptoPublicClient() {
+  return publicClient();
 }
 
 function publicClient() {
