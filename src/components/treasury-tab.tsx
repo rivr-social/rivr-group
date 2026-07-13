@@ -26,13 +26,18 @@ import {
   AlertCircle,
   Inbox,
 } from "lucide-react"
-import { getGroupWalletAction, getTransactionHistoryAction } from "@/app/actions/wallet"
+import {
+  getGroupTreasuryFundsOverviewAction,
+  getGroupWalletAction,
+  getTransactionHistoryAction,
+} from "@/app/actions/wallet"
 import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
 import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
 import { TreasuryFundsCard } from "@/components/treasury-funds-card"
 import { CryptoTreasuryCard } from "@/components/crypto-treasury-card"
 import { ShareClassesCard } from "@/components/share-classes-card"
 import { TreasuryFlowChart } from "@/components/treasury-flow-chart"
+import { computeTreasuryTopline } from "@/lib/treasury-topline"
 import type { WalletBalance, WalletTransactionView } from "@/types"
 
 interface TreasuryTabProps {
@@ -46,15 +51,20 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionView[]>([])
   const [walletError, setWalletError] = useState<string | null>(null)
   const [isLoadingWallet, setIsLoadingWallet] = useState(true)
+  // Sum of every treasury fund's own wallet balance (admin-only read; funds
+  // aren't visible to non-admins, so this stays 0 for them and the topline
+  // falls back to unallocated + Connect, same as before).
+  const [fundsTotalCents, setFundsTotalCents] = useState(0)
 
   const fetchWalletData = useCallback(async () => {
     setIsLoadingWallet(true)
     setWalletError(null)
 
     try {
-      const [walletResult, txResult] = await Promise.all([
+      const [walletResult, txResult, fundsResult] = await Promise.all([
         getGroupWalletAction(groupId),
         getTransactionHistoryAction({ limit: 20 }),
+        canManageStripe ? getGroupTreasuryFundsOverviewAction(groupId) : Promise.resolve(null),
       ])
 
       if (walletResult.success && walletResult.wallet) {
@@ -66,12 +76,20 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
       if (txResult.success && txResult.transactions) {
         setWalletTransactions(txResult.transactions)
       }
+
+      if (fundsResult?.success && fundsResult.overview) {
+        setFundsTotalCents(
+          fundsResult.overview.funds.reduce((sum, fund) => sum + fund.balanceCents, 0)
+        )
+      } else {
+        setFundsTotalCents(0)
+      }
     } catch {
       setWalletError("An unexpected error occurred loading wallet data.")
     } finally {
       setIsLoadingWallet(false)
     }
-  }, [groupId])
+  }, [groupId, canManageStripe])
 
   useEffect(() => {
     fetchWalletData()
@@ -185,6 +203,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         entityLabel="group"
         returnPath={`/groups/${groupId}?tab=treasury`}
         canManage={canManageStripe}
+        onBalancesChanged={fetchWalletData}
       />
 
       {canManageStripe && <SubgroupBankingCard groupId={groupId} />}
@@ -218,27 +237,30 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
                 </p>
               </div>
             ) : walletBalance ? (
-              <div>
-                <div className="text-2xl font-bold">
-                  {formatCurrency(
-                    walletBalance.balanceDollars +
-                    (walletBalance.hasConnectAccount ? (walletBalance.connectAvailableCents ?? 0) / 100 : 0)
-                  )}
-                </div>
-                {walletBalance.hasConnectAccount && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Treasury: {formatCurrency(walletBalance.balanceDollars)} + Sales: {formatCurrency((walletBalance.connectAvailableCents ?? 0) / 100)}
-                  </p>
-                )}
-                {walletBalance.hasConnectAccount && (walletBalance.connectPendingCents ?? 0) > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    Pending: {formatCurrency((walletBalance.connectPendingCents ?? 0) / 100)}
-                  </p>
-                )}
-                {walletBalance.isFrozen && (
-                  <p className="text-xs text-red-600 mt-1">Wallet is frozen</p>
-                )}
-              </div>
+              (() => {
+                const { totalDollars, breakdown } = computeTreasuryTopline(
+                  walletBalance,
+                  fundsTotalCents,
+                  formatCurrency
+                )
+
+                return (
+                  <div>
+                    <div className="text-2xl font-bold">{formatCurrency(totalDollars)}</div>
+                    {breakdown.length > 1 && (
+                      <p className="text-xs text-muted-foreground mt-1">{breakdown.join(" + ")}</p>
+                    )}
+                    {walletBalance.hasConnectAccount && (walletBalance.connectPendingCents ?? 0) > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Pending: {formatCurrency((walletBalance.connectPendingCents ?? 0) / 100)}
+                      </p>
+                    )}
+                    {walletBalance.isFrozen && (
+                      <p className="text-xs text-red-600 mt-1">Wallet is frozen</p>
+                    )}
+                  </div>
+                )
+              })()
             ) : (
               <div className="text-2xl font-bold">{formatCurrency(0)}</div>
             )}

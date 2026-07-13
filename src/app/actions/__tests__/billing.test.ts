@@ -31,7 +31,7 @@ vi.mock("@/lib/billing", () => ({
       yearlyPriceId: "price_seller_yearly",
     },
     organizer: {
-      name: "Organizer",
+      name: "Organization",
       monthlyPriceId: "price_organizer_monthly",
       yearlyPriceId: "price_organizer_yearly",
     },

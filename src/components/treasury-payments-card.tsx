@@ -22,6 +22,12 @@ interface TreasuryPaymentsCardProps {
   entityLabel: string
   returnPath: string
   canManage: boolean
+  /**
+   * Called after a payout or test-sales release changes the Connect
+   * available balance, so a parent headline balance card (if any) can
+   * refetch instead of showing the pre-payout number.
+   */
+  onBalancesChanged?: () => void
 }
 
 export function TreasuryPaymentsCard({
@@ -29,6 +35,7 @@ export function TreasuryPaymentsCard({
   entityLabel,
   returnPath,
   canManage,
+  onBalancesChanged,
 }: TreasuryPaymentsCardProps) {
   const isStripeTestMode =
     typeof process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY === "string" &&
@@ -153,6 +160,7 @@ export function TreasuryPaymentsCard({
       if (balanceResult.success && balanceResult.balance) {
         setBalance(balanceResult.balance)
       }
+      onBalancesChanged?.()
     })
   }
 
@@ -179,6 +187,7 @@ export function TreasuryPaymentsCard({
       if (balanceResult.success && balanceResult.balance) {
         setBalance(balanceResult.balance)
       }
+      onBalancesChanged?.()
     })
   }
 

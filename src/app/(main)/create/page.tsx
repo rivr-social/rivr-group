@@ -1471,7 +1471,7 @@ export default function CreatePage() {
           persistPendingOrganizationDraft()
           setGateAction("group")
           setGateRequiredTier((result.error.requiredTier ?? "organizer") as MembershipTier)
-          setGateFeatureDescription("Creating an organization requires an Organizer membership or higher.")
+          setGateFeatureDescription("Creating an organization requires an Organization membership or higher.")
           setShowMembershipGate(true)
           return
         }

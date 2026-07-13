@@ -475,7 +475,7 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
         window.location.href = result.url;
         return;
       }
-      toast({ title: "Trial already active", description: "Your Organizer trial is already active. You can now sell tickets." });
+      toast({ title: "Trial already active", description: "Your Organization trial is already active. You can now sell tickets." });
       setShowMembershipGate(false);
       setIsMembershipActionPending(false);
       await handleSubmit(new Event("submit") as unknown as React.FormEvent);

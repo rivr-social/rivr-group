@@ -147,7 +147,7 @@ describe('billing – MEMBERSHIP_TIERS', () => {
     expect(MEMBERSHIP_TIERS.host.name).toBe('Host');
     expect(MEMBERSHIP_TIERS.seller.name).toBe('Seller');
     expect(MEMBERSHIP_TIERS.provider.name).toBe('Provider');
-    expect(MEMBERSHIP_TIERS.organizer.name).toBe('Organizer');
+    expect(MEMBERSHIP_TIERS.organizer.name).toBe('Organization');
     expect(MEMBERSHIP_TIERS.steward.name).toBe('Steward');
     expect(MEMBERSHIP_TIERS.worker.name).toBe('Worker');
   });
