@@ -17,9 +17,11 @@
  * - `hourly`: `hourlyRateCents` × each assignee's tracked job-timer time
  *   (stopped `time_entry` ledger rows on the job).
  * - `volunteer`: no cash — per assignee, post-hoc, mint a Thanks voucher owned
- *   by the volunteer and have the GROUP claim/redeem it through the shared
- *   voucher-redemption rail (`mintThanksTokensForVoucherRedemption`), valued
- *   from their claim-complete skillfulness/difficulty ratings × hours worked.
+ *   by the volunteer and have the GROUP claim/redeem it by TRANSFERRING its own
+ *   held Thanks tokens (oldest first) to the volunteer, valued from their
+ *   claim-complete skillfulness/difficulty ratings × hours worked. All-or-
+ *   nothing per assignee: if the group holds too few Thanks the entry parks as
+ *   `volunteer_pending_thanks` and a re-run retries it.
  * - `null`: points-only job — completion records contributions, moves no cash.
  *
  * Money safety: cash moves ONLY inside this instance's internal USD ledger
@@ -40,7 +42,6 @@ import { getOrCreateProjectWallet, getSettlementWalletForAgent, transferP2P } fr
 import { MAX_TRANSFER_CENTS, MIN_TRANSFER_CENTS } from "@/lib/wallet-constants";
 import { getCurrentUserId } from "@/app/actions/interactions/helpers";
 import { recordJobContributionAction } from "@/app/actions/interactions/project-team";
-import { mintThanksTokensForVoucherRedemption } from "@/app/actions/interactions/thanks-tokens";
 import { computeVoucherThanksValue } from "@/lib/voucher-valuation";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -62,6 +63,9 @@ const JOB_VOLUNTEER_VOUCHER_INTERACTION = "job-volunteer-voucher";
 
 /** Interaction type of the group's redemption edge on a volunteer voucher. */
 const VOUCHER_REDEMPTION_INTERACTION = "voucher-redemption";
+
+/** Interaction type of the group→volunteer Thanks-token transfer edge (mirrors thanks-tokens.ts). */
+const THANKS_TOKEN_TRANSFER_INTERACTION = "thanks-token-transfer";
 
 /**
  * Fallback skillfulness/difficulty when a volunteer never recorded
@@ -91,8 +95,10 @@ export interface JobPayoutEntry {
    * `already_paid`: an earlier run settled this assignee (idempotency skip).
    * `no_tracked_time`: hourly job, assignee has no stopped timer segments.
    * `below_minimum`: computed amount is under the ledger's minimum transfer.
-   * `volunteer_voucher`: volunteer job — a Thanks voucher was minted for the
-   *   volunteer and claimed by the group (no cash moved).
+   * `volunteer_voucher`: volunteer job — a Thanks voucher was settled for the
+   *   volunteer; the group claimed it and transferred its own Thanks (no cash).
+   * `volunteer_pending_thanks`: volunteer job — the group holds too few Thanks
+   *   to cover the voucher; nothing moved (re-run after it acquires more).
    */
   status:
     | "paid"
@@ -100,11 +106,12 @@ export interface JobPayoutEntry {
     | "already_paid"
     | "no_tracked_time"
     | "below_minimum"
-    | "volunteer_voucher";
-  /** Payment-stub receipt id (cash payouts) or minted voucher id (volunteer). */
+    | "volunteer_voucher"
+    | "volunteer_pending_thanks";
+  /** Payment-stub receipt id (cash payouts) or settled voucher id (volunteer). */
   receiptId?: string;
-  /** Thanks tokens minted to the volunteer (set when status is `volunteer_voucher`). */
-  thanksMinted?: number;
+  /** Thanks tokens the group transferred to the volunteer (set when status is `volunteer_voucher`). */
+  thanksTransferred?: number;
 }
 
 export interface MarkJobDoneResult {
@@ -405,20 +412,33 @@ async function resolveVolunteerHours(
 }
 
 /**
- * Post-hoc volunteer settlement for one assignee, atomically in a transaction:
- *   1. mints a `voucher` resource OWNED BY THE VOLUNTEER, valued in Thanks from
- *      their claim-complete ratings × hours (voucher already marked completed,
- *      claimed by the group);
- *   2. records the group's `voucher-redemption` edge — the group is the
- *      redeemer/claimant, the volunteer is the owner;
- *   3. mints `thanksCount` Thanks to the volunteer via the SAME
- *      `mintThanksTokensForVoucherRedemption` rail any voucher redemption uses
- *      (voucher owner = volunteer receives the Thanks);
- *   4. writes the `job-volunteer-voucher` earn edge that anchors idempotency.
- *
- * No cash moves. Returns the voucher id and Thanks minted.
+ * The outcome of settling one volunteer's voucher: either fully settled (the
+ * group transferred `thanksTransferred` of its own Thanks) or parked because
+ * the group holds too few Thanks to cover the voucher (all-or-nothing).
  */
-async function mintVolunteerVoucher(input: {
+type VolunteerSettlement =
+  | { status: "settled"; voucherId: string; thanksTransferred: number }
+  | { status: "insufficient"; available: number };
+
+/**
+ * Post-hoc volunteer settlement for one assignee, atomically in a transaction.
+ * The group "claims" the volunteer's work by paying Thanks IT ALREADY HOLDS —
+ * no new Thanks are minted:
+ *   1. lock the group's own Thanks tokens (oldest first, demurrage order) and
+ *      bail out `insufficient` if it holds fewer than `thanksCount` — nothing
+ *      is written, so a re-run after the group acquires Thanks retries it;
+ *   2. reassign exactly `thanksCount` of those tokens to the volunteer,
+ *      appending transfer history (mirrors `sendThanksTokensAction`);
+ *   3. mint a `voucher` resource OWNED BY THE VOLUNTEER (valued in Thanks from
+ *      their claim-complete ratings × hours), marked completed + claimed by the
+ *      group, recording the transferred token ids;
+ *   4. record the group's `voucher-redemption` edge + a `thanks-token-transfer`
+ *      edge (group → volunteer) so wallet histories reconcile;
+ *   5. write the `job-volunteer-voucher` earn edge that anchors idempotency.
+ *
+ * No cash moves.
+ */
+async function settleVolunteerVoucher(input: {
   jobId: string;
   jobName: string;
   groupId: string;
@@ -428,11 +448,64 @@ async function mintVolunteerVoucher(input: {
   difficulty: number;
   projectId: string | null;
   recordedBy: string;
-}): Promise<{ voucherId: string; thanksMinted: number }> {
+}): Promise<VolunteerSettlement> {
   return db.transaction(async (tx) => {
-    const redeemedAt = new Date().toISOString();
+    // 1. Lock the group's oldest Thanks tokens (oldest first = demurrage order,
+    //    matching sendThanksTokensAction). All-or-nothing: bail if too few.
+    const tokenRows = await tx
+      .select({ id: resources.id, metadata: resources.metadata })
+      .from(resources)
+      .where(
+        and(
+          eq(resources.ownerId, input.groupId),
+          eq(resources.type, "thanks_token"),
+          sql`${resources.deletedAt} IS NULL`,
+        ),
+      )
+      .orderBy(resources.enteredAccountAt, resources.createdAt)
+      .for("update")
+      .limit(input.thanksCount);
 
-    // 1. Voucher owned by the volunteer, already claimed/redeemed by the group.
+    if (tokenRows.length < input.thanksCount) {
+      return { status: "insufficient", available: tokenRows.length };
+    }
+
+    const tokenIds = tokenRows.map((row) => row.id);
+    const redeemedAt = new Date().toISOString();
+    const enteredAccountAt = new Date();
+
+    // 2. Reassign the group's tokens to the volunteer (mirror sendThanksTokensAction).
+    for (const token of tokenRows) {
+      const metadata = (token.metadata ?? {}) as Record<string, unknown>;
+      const priorHistory = Array.isArray(metadata.transferHistory)
+        ? metadata.transferHistory.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+        : [];
+      const transferHistory = [
+        ...priorHistory,
+        {
+          from: input.groupId,
+          to: input.assigneeId,
+          at: redeemedAt,
+          message: `Volunteer voucher: ${input.jobName}`,
+          kind: "send",
+        },
+      ];
+      await tx
+        .update(resources)
+        .set({
+          ownerId: input.assigneeId,
+          enteredAccountAt,
+          metadata: {
+            ...metadata,
+            currentOwnerId: input.assigneeId,
+            transferHistory,
+            lastTransferredAt: enteredAccountAt.toISOString(),
+          },
+        })
+        .where(eq(resources.id, token.id));
+    }
+
+    // 3. Voucher owned by the volunteer, already claimed/redeemed by the group.
     const [voucher] = await tx
       .insert(resources)
       .values({
@@ -453,9 +526,10 @@ async function mintVolunteerVoucher(input: {
           projectId: input.projectId,
           skillfulness: input.skillfulness,
           difficulty: input.difficulty,
-          // Thanks valuation (same field the redemption rail reads).
+          // Thanks valuation record (how the transferred count was derived).
           voucherValues: { thanksValue: input.thanksCount },
           thanksValue: input.thanksCount,
+          transferredThanksTokenIds: tokenIds,
           status: "completed",
           claimedBy: input.groupId,
           claimedAt: redeemedAt,
@@ -466,8 +540,8 @@ async function mintVolunteerVoucher(input: {
       } as typeof resources.$inferInsert)
       .returning({ id: resources.id });
 
-    // 2. The group's redemption edge — group redeems (claims) the volunteer's
-    //    voucher; the Thanks flow to the voucher owner (the volunteer).
+    // 4a. The group's redemption edge — group redeems (claims) the voucher,
+    //     paying the volunteer (owner) Thanks it already held.
     await tx.insert(ledger).values({
       subjectId: input.groupId,
       verb: "redeem",
@@ -483,22 +557,34 @@ async function mintVolunteerVoucher(input: {
         voucherOwnerId: input.assigneeId,
         redeemedAt,
         thanksTokenCount: input.thanksCount,
+        transferredTokenIds: tokenIds,
         source: "volunteer-job",
         jobId: input.jobId,
         projectId: input.projectId,
       },
     } as NewLedgerEntry);
 
-    // 3. Mint the Thanks to the volunteer (voucher owner) via the shared rail.
-    await mintThanksTokensForVoucherRedemption(
-      tx,
-      voucher.id,
-      input.assigneeId,
-      input.groupId,
-      input.thanksCount,
-    );
+    // 4b. Thanks-token transfer edge (group → volunteer) so wallet counts/history
+    //     reconcile (same shape a voucher escrow release records).
+    await tx.insert(ledger).values({
+      subjectId: input.groupId,
+      verb: "gift",
+      objectId: input.assigneeId,
+      objectType: "agent",
+      isActive: true,
+      metadata: {
+        interactionType: THANKS_TOKEN_TRANSFER_INTERACTION,
+        targetId: input.assigneeId,
+        targetType: "agent",
+        count: input.thanksCount,
+        tokenCount: input.thanksCount,
+        tokenIds,
+        sourceVoucherId: voucher.id,
+        transferredAt: redeemedAt,
+      },
+    } as NewLedgerEntry);
 
-    // 4. Idempotency anchor: one active edge per assignee+job.
+    // 5. Idempotency anchor: one active edge per assignee+job.
     await tx.insert(ledger).values({
       verb: "earn",
       subjectId: input.assigneeId,
@@ -512,6 +598,7 @@ async function mintVolunteerVoucher(input: {
         projectId: input.projectId,
         voucherId: voucher.id,
         thanksTokenCount: input.thanksCount,
+        transferredTokenIds: tokenIds,
         skillfulness: input.skillfulness,
         difficulty: input.difficulty,
         recordedBy: input.recordedBy,
@@ -519,7 +606,7 @@ async function mintVolunteerVoucher(input: {
       },
     } as NewLedgerEntry);
 
-    return { voucherId: voucher.id, thanksMinted: input.thanksCount };
+    return { status: "settled", voucherId: voucher.id, thanksTransferred: input.thanksCount };
   });
 }
 
@@ -622,9 +709,10 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
 
       if (mintsVolunteerVouchers) {
         // Volunteer pay: no cash moves. Per assignee, post-hoc, mint a Thanks
-        // voucher owned by the volunteer and have the GROUP claim/redeem it —
-        // the same voucher-redemption rail that mints Thanks to a voucher's
-        // owner on any redemption. Idempotent per assignee+job.
+        // voucher owned by the volunteer and have the GROUP claim/redeem it by
+        // TRANSFERRING its own held Thanks (oldest first). All-or-nothing: if
+        // the group holds too few Thanks the entry parks as pending and a
+        // re-run retries it. Idempotent per assignee+job.
         for (const assigneeId of assignees) {
           if (await hasExistingVolunteerVoucher(jobId, assigneeId)) {
             entries.push({ assigneeId, amountCents: 0, status: "already_paid" });
@@ -633,7 +721,7 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
           const { skillfulness, difficulty } = await getAssigneeClaimRatings(jobId, assigneeId);
           const hours = await resolveVolunteerHours(jobId, assigneeId, maxHours);
           const thanksCount = computeVoucherThanksValue({ skillfulness, difficulty, hours });
-          const { voucherId, thanksMinted } = await mintVolunteerVoucher({
+          const settlement = await settleVolunteerVoucher({
             jobId,
             jobName: job.name,
             groupId: job.ownerId,
@@ -644,12 +732,16 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
             projectId,
             recordedBy: userId,
           });
+          if (settlement.status === "insufficient") {
+            entries.push({ assigneeId, amountCents: 0, status: "volunteer_pending_thanks", thanksTransferred: 0 });
+            continue;
+          }
           entries.push({
             assigneeId,
             amountCents: 0,
             status: "volunteer_voucher",
-            receiptId: voucherId,
-            thanksMinted,
+            receiptId: settlement.voucherId,
+            thanksTransferred: settlement.thanksTransferred,
           });
         }
       } else if (paysCash) {
@@ -719,7 +811,9 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
 
       const payoutStatuses = new Set(entries.map((entry) => entry.status));
       const payoutStatus = mintsVolunteerVouchers
-        ? "voucher"
+        ? payoutStatuses.has("volunteer_pending_thanks")
+          ? "partial"
+          : "voucher"
         : !paysCash
           ? "none"
           : payoutStatuses.has("pending_funds")
@@ -754,11 +848,14 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
       const paidCount = entries.filter((entry) => entry.status === "paid").length;
       const pendingCount = entries.filter((entry) => entry.status === "pending_funds").length;
       const voucherEntries = entries.filter((entry) => entry.status === "volunteer_voucher");
-      const thanksMintedTotal = voucherEntries.reduce((sum, entry) => sum + (entry.thanksMinted ?? 0), 0);
+      const pendingThanksCount = entries.filter((entry) => entry.status === "volunteer_pending_thanks").length;
+      const thanksTransferredTotal = voucherEntries.reduce((sum, entry) => sum + (entry.thanksTransferred ?? 0), 0);
       const message = mintsVolunteerVouchers
-        ? voucherEntries.length > 0
-          ? `Job marked done — minted ${thanksMintedTotal} Thanks across ${voucherEntries.length} volunteer voucher${voucherEntries.length === 1 ? "" : "s"} (claimed by the group).`
-          : "Job marked done — volunteer vouchers already settled."
+        ? pendingThanksCount > 0
+          ? `Job marked done — the group transferred ${thanksTransferredTotal} Thanks to ${voucherEntries.length} volunteer${voucherEntries.length === 1 ? "" : "s"}; ${pendingThanksCount} pending (the group holds too few Thanks — re-run after it acquires more).`
+          : voucherEntries.length > 0
+            ? `Job marked done — the group transferred ${thanksTransferredTotal} Thanks across ${voucherEntries.length} volunteer voucher${voucherEntries.length === 1 ? "" : "s"}.`
+            : "Job marked done — volunteer vouchers already settled."
         : payKind === null
           ? "Job marked done."
           : pendingCount > 0
