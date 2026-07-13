@@ -16,6 +16,7 @@
  * @module jobs/[id]/page
  */
 import { getCurrentUserId } from "@/app/actions/interactions/helpers"
+import { getAuthenticatedActorId } from "@/lib/server-auth"
 import { getJobById, getShifts, getProjects, getUserBadgeIds, getResource, getResourcesByJobId } from "@/lib/queries/resources"
 import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
 import { getJobShareData } from "@/app/actions/job-peer-allocation"
@@ -28,7 +29,11 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   const jobId = params.id as string
   // Unified session (local or federated remote-viewer, normalized to a local
   // agent id) so sovereign-homed admins get their claim/edit affordances.
-  const currentUserId = await getCurrentUserId()
+  // getCurrentUserId covers local + federated *sessions* only; an SSO-landed
+  // admin holds just the remote-viewer COOKIE, which only
+  // getAuthenticatedActorId reads — without the fallback they render as
+  // anonymous and lose every manage/attest affordance.
+  const currentUserId = (await getCurrentUserId()) ?? (await getAuthenticatedActorId())
 
   // Fetch the job DIRECTLY by id (type job OR legacy shift). Resolving via
   // getShifts() alone capped at 100 rows and 404'd every older job.
