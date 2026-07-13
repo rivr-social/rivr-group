@@ -32,7 +32,7 @@ import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
-import { getSettlementWalletForAgent, transferP2P } from "@/lib/wallet";
+import { getOrCreateProjectWallet, getSettlementWalletForAgent, transferP2P } from "@/lib/wallet";
 import { MAX_TRANSFER_CENTS, MIN_TRANSFER_CENTS } from "@/lib/wallet-constants";
 import { getCurrentUserId } from "@/app/actions/interactions/helpers";
 import { recordJobContributionAction } from "@/app/actions/interactions/project-team";
@@ -219,7 +219,9 @@ async function payAssignee(input: {
   jobId: string;
   jobName: string;
   groupId: string;
-  groupWalletId: string;
+  /** Wallet the payout debits: the job's project treasury wallet when the job
+   * belongs to a project, else the owning group/subgroup settlement wallet. */
+  payerWalletId: string;
   assigneeId: string;
   amountCents: number;
   payKind: "fixed" | "hourly";
@@ -234,7 +236,7 @@ async function payAssignee(input: {
   while (remaining > 0) {
     const chunk = Math.min(remaining, MAX_TRANSFER_CENTS);
     await transferP2P(
-      input.groupWalletId,
+      input.payerWalletId,
       assigneeWallet.id,
       chunk,
       `Job payout: ${input.jobName}`,
@@ -396,7 +398,15 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
           (payKind === "hourly" && hourlyRateCents !== null));
 
       if (paysCash) {
-        const groupWallet = await getSettlementWalletForAgent(job.ownerId);
+        // Paying wallet: a job on a PROJECT draws from the project's treasury
+        // wallet — the budget the group approved INTO the project is what its
+        // jobs spend. An underfunded project parks payouts as pending_funds
+        // (fund the project wallet, then re-run mark-done); it never silently
+        // dips into the group settlement wallet. Project-less jobs pay from
+        // the owning group/subgroup settlement wallet as before.
+        const payerWallet = projectId
+          ? await getOrCreateProjectWallet(projectId, job.ownerId)
+          : await getSettlementWalletForAgent(job.ownerId);
         const owed = await computeOwedPay(
           jobId,
           payKind,
@@ -428,7 +438,7 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
               jobId,
               jobName: job.name,
               groupId: job.ownerId,
-              groupWalletId: groupWallet.id,
+              payerWalletId: payerWallet.id,
               assigneeId,
               amountCents,
               payKind,

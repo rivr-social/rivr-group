@@ -50,6 +50,12 @@ project's QA before stake moves.
 - **Time bounds** — jobs and tasks carry a work window (start → deadline) and
   a **max-hours budget**; hourly pay never exceeds the job's budget (overage
   stays visible on the timesheet but doesn't pay).
+- **Job payouts draw from the project's treasury** — when a cash job belongs
+  to a project, marking it done pays assignees from that **project's wallet**
+  (the budget the group approved into it). An underfunded project parks the
+  payout as *pending funds* — top up the project wallet and re-run mark-done;
+  it never silently dips into the group treasury. Jobs outside any project
+  pay from the owning group's treasury as before.
 - **Complete a project (settles the treasury)** — a group admin or the
   project lead completes the project; expenses are already first-class
   debits, so the remaining project-wallet balance — the **net** — sweeps
