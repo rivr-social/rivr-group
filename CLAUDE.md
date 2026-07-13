@@ -293,20 +293,30 @@ resolves principals via the unified session (`getSession` +
 (`ensureLocalActorAgent` / `getCurrentUserIdForWrite` in `actions/wallet/helpers.ts`)
 before actor-keyed writes. Do not reintroduce plain `auth()` on economic routes.
 
-## Job cash pay + completion payout (2026-07-07)
+## Job cash pay + completion payout (2026-07-07; project-wallet + volunteer 2026-07-13)
 
 Jobs carry cash compensation alongside task points: `metadata.payKind`
-(`'fixed' | 'hourly' | null`), `payAmountCents`, `hourlyRateCents` — threaded
-through `JobShift`, `resourceToJobShift`, project creation, the create-page
-job composer, and `rivr.jobs.update`. `markJobDoneAction`
-(`actions/job-completion.ts`, also `rivr.jobs.mark_done`) is admin/owner
-gated: flips the job to completed, records a `job-contribution` edge per
-assignee (active `job-claim` holders, legacy `metadata.assignees` fallback),
-and settles cash from the group settlement wallet via `transferP2P` (fixed =
-equal split, deterministic remainder; hourly = rate × stopped `time_entry`
-ledger segments). Idempotent per assignee via the `job-cash-payout` earn
-edge; underfunded-treasury payouts park as `pending_funds` and re-running
-retries them. Structural adds post-creation: `actions/job-management.ts` —
+(`'fixed' | 'hourly' | 'volunteer' | null`), `payAmountCents`,
+`hourlyRateCents` — threaded through `JobShift`, `resourceToJobShift`, project
+creation, the create-page job composer, and `rivr.jobs.update`.
+`markJobDoneAction` (`actions/job-completion.ts`, also `rivr.jobs.mark_done`)
+is admin/owner gated: flips the job to completed, records a `job-contribution`
+edge per assignee (active `job-claim` holders, legacy `metadata.assignees`
+fallback), and settles cash via `transferP2P` (fixed = equal split,
+deterministic remainder; hourly = rate × stopped `time_entry` ledger
+segments). **Payout source (2026-07-13): a job with a `projectId` debits the
+PROJECT's treasury wallet** (`getOrCreateProjectWallet` — the budget the group
+approved into it; underfunded → `pending_funds`, never a silent group-wallet
+dip); project-less jobs pay from the group settlement wallet. Idempotent per
+assignee via the `job-cash-payout` earn edge; re-running retries pending
+payouts. **Volunteer pay (2026-07-13):** `payKind:'volunteer'` moves no cash —
+on mark-done each volunteer gets a post-hoc Thanks VOUCHER (owned by the
+volunteer, valued by `computeVoucherThanksValue` in `lib/voucher-valuation.ts`
+— the VoucherBuilder formula, skill×difficulty×hours) which the GROUP redeems
+by TRANSFERRING its own held thanks_token resources (oldest-first, no minting)
+to the volunteer; all-or-nothing per assignee, `volunteer_pending_thanks` when
+the group's pool is short, idempotent via the `job-volunteer-voucher` earn
+edge (written only on successful transfer). Structural adds post-creation: `actions/job-management.ts` —
 `addJobToProjectAction` / `addTaskToJobAction` (mirror the lifecycle nested
 inserts, inherit parent visibility/scope; MCP `rivr.jobs.create` /
 `rivr.tasks.create`). UI: `job-admin-panel.tsx` above the job tabs (edit
