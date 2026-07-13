@@ -73,6 +73,17 @@ export interface BridgeProvisioningConfig {
   baseUrl: string;
 }
 
+/**
+ * Matrix identity driving the flow. The bridge's `allow_matrix_auth` requires
+ * BOTH the Bearer token AND the caller-asserted `user_id` (verified live
+ * against mautrix-signal, which rejects a bare token with "'' is not a valid
+ * user ID").
+ */
+export interface MatrixAuth {
+  token: string;
+  userId: string;
+}
+
 type FetchImpl = typeof fetch;
 
 const PROVISION_BASE = "/_matrix/provision/v3";
@@ -94,16 +105,16 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 async function request<T>(
   cfg: BridgeProvisioningConfig,
-  matrixToken: string,
+  auth: MatrixAuth,
   path: string,
   init: { method: string; body?: unknown },
   fetchImpl: FetchImpl,
 ): Promise<T> {
-  const url = `${normalizeBaseUrl(cfg.baseUrl)}${PROVISION_BASE}${path}`;
+  const url = `${normalizeBaseUrl(cfg.baseUrl)}${PROVISION_BASE}${path}?user_id=${encodeURIComponent(auth.userId)}`;
   const response = await fetchImpl(url, {
     method: init.method,
     headers: {
-      Authorization: `Bearer ${matrixToken}`,
+      Authorization: `Bearer ${auth.token}`,
       "Content-Type": "application/json",
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -133,12 +144,12 @@ async function request<T>(
 /** Lists the login flows a bridge supports for the given Matrix user. */
 export async function listLoginFlows(
   cfg: BridgeProvisioningConfig,
-  matrixToken: string,
+  auth: MatrixAuth,
   fetchImpl: FetchImpl = fetch,
 ): Promise<LoginFlow[]> {
   const result = await request<{ flows?: LoginFlow[] }>(
     cfg,
-    matrixToken,
+    auth,
     "/login/flows",
     { method: "GET" },
     fetchImpl,
@@ -149,13 +160,13 @@ export async function listLoginFlows(
 /** Starts a login flow, returning the first step. */
 export async function startLogin(
   cfg: BridgeProvisioningConfig,
-  matrixToken: string,
+  auth: MatrixAuth,
   flowId: string,
   fetchImpl: FetchImpl = fetch,
 ): Promise<LoginStep> {
   return request<LoginStep>(
     cfg,
-    matrixToken,
+    auth,
     `/login/start/${encodeURIComponent(flowId)}`,
     { method: "POST" },
     fetchImpl,
@@ -169,14 +180,14 @@ export async function startLogin(
  */
 export async function submitLoginStep(
   cfg: BridgeProvisioningConfig,
-  matrixToken: string,
+  auth: MatrixAuth,
   params: { loginId: string; stepId: string; stepType: LoginStepType; inputs?: Record<string, string> },
   fetchImpl: FetchImpl = fetch,
 ): Promise<LoginStep> {
   const { loginId, stepId, stepType, inputs } = params;
   return request<LoginStep>(
     cfg,
-    matrixToken,
+    auth,
     `/login/step/${encodeURIComponent(loginId)}/${encodeURIComponent(stepId)}/${encodeURIComponent(stepType)}`,
     { method: "POST", body: inputs ?? {} },
     fetchImpl,

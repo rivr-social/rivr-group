@@ -132,7 +132,7 @@ export async function POST(request: Request) {
 
   try {
     if (body.action === "start") {
-      const flows = await listLoginFlows(bridge.config, matrixAuth.token);
+      const flows = await listLoginFlows(bridge.config, matrixAuth);
       if (flows.length === 0) {
         return NextResponse.json({ error: "This bridge has no login flows available." }, { status: 502 });
       }
@@ -141,7 +141,7 @@ export async function POST(request: Request) {
         bridge.loginKind === "qr"
           ? flows.find((flow) => /qr/i.test(flow.id) || /qr/i.test(flow.name)) ?? flows[0]
           : flows[0];
-      const step = await startLogin(bridge.config, matrixAuth.token, preferred.id);
+      const step = await startLogin(bridge.config, matrixAuth, preferred.id);
       await persistCompletion(subject.targetAgentId, provider, step);
       return NextResponse.json({ hint: bridge.hint, loginKind: bridge.loginKind, step: publicStep(step) });
     }
@@ -153,7 +153,7 @@ export async function POST(request: Request) {
       if (!loginId || !stepId || !VALID_STEP_TYPES.includes(stepType as LoginStepType)) {
         return NextResponse.json({ error: "Missing or invalid step parameters." }, { status: 400 });
       }
-      const step = await submitLoginStep(bridge.config, matrixAuth.token, {
+      const step = await submitLoginStep(bridge.config, matrixAuth, {
         loginId,
         stepId,
         stepType: stepType as LoginStepType,

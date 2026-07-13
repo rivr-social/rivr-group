@@ -14,6 +14,8 @@ import {
 
 const CFG = { baseUrl: "https://bridge.example.test/" };
 const TOKEN = "syt_matrix_token";
+const MXID = "@alice:example.test";
+const AUTH = { token: TOKEN, userId: MXID };
 
 /** Builds a fetch stub that returns JSON with a chosen status, capturing calls. */
 function jsonFetch(status: number, payload: unknown) {
@@ -28,11 +30,11 @@ function jsonFetch(status: number, payload: unknown) {
 describe("provisioning client — requests", () => {
   it("lists login flows with a Bearer token against the normalized base URL", async () => {
     const fetchImpl = jsonFetch(200, { flows: [{ id: "qr", name: "QR" }] });
-    const flows = await listLoginFlows(CFG, TOKEN, fetchImpl as unknown as typeof fetch);
+    const flows = await listLoginFlows(CFG, AUTH, fetchImpl as unknown as typeof fetch);
     expect(flows).toEqual([{ id: "qr", name: "QR" }]);
     const [url, init] = fetchImpl.mock.calls[0];
     // Trailing slash on baseUrl is normalized (no double slash).
-    expect(url).toBe("https://bridge.example.test/_matrix/provision/v3/login/flows");
+    expect(url).toBe("https://bridge.example.test/_matrix/provision/v3/login/flows?user_id=%40alice%3Aexample.test");
     expect((init as RequestInit).method).toBe("GET");
     expect((init as RequestInit).headers).toMatchObject({ Authorization: `Bearer ${TOKEN}` });
   });
@@ -45,11 +47,11 @@ describe("provisioning client — requests", () => {
       display_and_wait: { type: "qr", data: "sgnl://link?uuid=abc" },
     };
     const fetchImpl = jsonFetch(200, step);
-    const result = await startLogin(CFG, TOKEN, "qr-flow", fetchImpl as unknown as typeof fetch);
+    const result = await startLogin(CFG, AUTH, "qr-flow", fetchImpl as unknown as typeof fetch);
     expect(result.type).toBe("display_and_wait");
     expect(result.display_and_wait?.data).toContain("sgnl://");
     expect(fetchImpl.mock.calls[0][0]).toBe(
-      "https://bridge.example.test/_matrix/provision/v3/login/start/qr-flow",
+      "https://bridge.example.test/_matrix/provision/v3/login/start/qr-flow?user_id=%40alice%3Aexample.test",
     );
   });
 
@@ -58,7 +60,7 @@ describe("provisioning client — requests", () => {
     const fetchImpl = jsonFetch(200, next);
     const result = await submitLoginStep(
       CFG,
-      TOKEN,
+      AUTH,
       { loginId: "login-1", stepId: "phone", stepType: "user_input", inputs: { phone_number: "+15551234567" } },
       fetchImpl as unknown as typeof fetch,
     );
@@ -66,7 +68,7 @@ describe("provisioning client — requests", () => {
     expect(result.complete?.user_login_name).toBe("+15551234567");
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe(
-      "https://bridge.example.test/_matrix/provision/v3/login/step/login-1/phone/user_input",
+      "https://bridge.example.test/_matrix/provision/v3/login/step/login-1/phone/user_input?user_id=%40alice%3Aexample.test",
     );
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({ phone_number: "+15551234567" });
   });
@@ -76,7 +78,7 @@ describe("provisioning client — requests", () => {
     const fetchImpl = jsonFetch(200, done);
     await submitLoginStep(
       CFG,
-      TOKEN,
+      AUTH,
       { loginId: "login-1", stepId: "qr-step", stepType: "display_and_wait" },
       fetchImpl as unknown as typeof fetch,
     );
@@ -86,13 +88,13 @@ describe("provisioning client — requests", () => {
   it("throws a typed error carrying the bridge's message + status on failure", async () => {
     const fetchImpl = jsonFetch(403, { error: "user not whitelisted" });
     await expect(
-      startLogin(CFG, TOKEN, "qr", fetchImpl as unknown as typeof fetch),
+      startLogin(CFG, AUTH, "qr", fetchImpl as unknown as typeof fetch),
     ).rejects.toMatchObject({ name: "BridgeProvisioningError", status: 403, message: "user not whitelisted" });
   });
 
   it("surfaces a generic message when the error body has no error field", async () => {
     const fetchImpl = jsonFetch(500, "upstream boom");
-    const error = await startLogin(CFG, TOKEN, "qr", fetchImpl as unknown as typeof fetch).catch((e) => e);
+    const error = await startLogin(CFG, AUTH, "qr", fetchImpl as unknown as typeof fetch).catch((e) => e);
     expect(error).toBeInstanceOf(BridgeProvisioningError);
     expect((error as BridgeProvisioningError).status).toBe(500);
   });
