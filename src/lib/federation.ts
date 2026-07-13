@@ -906,6 +906,75 @@ async function ensureProjectedAgent(params: {
     .onConflictDoNothing({ target: agents.id });
 }
 
+/**
+ * Materialize + bind a home-signed remote actor for the OWNER-ROUTED write rail
+ * (buyer rail, open-issues P0). Composes the two importer primitives above:
+ *
+ *  1. `resolveLocalEntityId` mints the `federation_entity_map` row binding the
+ *     authenticated sending peer → the actor (local id == external id when it is
+ *     a UUID, converging on the same row the importer/projection uses).
+ *  2. A private projected `agents` row is created (mirrors `ensureProjectedAgent`)
+ *     enriched with the asserted display identity, so `ledger.subject_id` FKs
+ *     hold and the UI has a name/avatar for the cross-instance buyer.
+ *
+ * Invoked ONLY after a home-signed actor assertion has been verified against the
+ * peer's registered key (see `@/lib/federation/owner-routed-actor`), so identity
+ * is never invented — it is vouched-for by the authenticated home instance. It
+ * grants NO authority; the subsequent authority checks run against this
+ * instance's own graph.
+ *
+ * @returns The receiver-local agent id the write should be attributed to.
+ */
+export async function materializeFederatedActor(params: {
+  peerNode: { id: string; slug: string };
+  externalActorId: string;
+  identity?: {
+    name?: string | null;
+    avatarUrl?: string | null;
+    parentAgentId?: string | null;
+  };
+}): Promise<string> {
+  const localId = await resolveLocalEntityId(
+    params.peerNode.id,
+    params.externalActorId,
+    "agent",
+  );
+
+  const existing = await db.query.agents.findFirst({
+    where: eq(agents.id, localId),
+    columns: { id: true },
+  });
+  if (existing) return localId;
+
+  const assertedName =
+    typeof params.identity?.name === "string" && params.identity.name.trim().length > 0
+      ? params.identity.name.trim()
+      : null;
+
+  await db
+    .insert(agents)
+    .values({
+      id: localId,
+      name: assertedName ?? `Federated agent (${params.peerNode.slug})`,
+      image: params.identity?.avatarUrl ?? null,
+      type: "person",
+      visibility: "private",
+      metadata: {
+        federatedPlaceholder: true,
+        isProjection: true,
+        sourceNodeId: params.peerNode.id,
+        sourceNodeSlug: params.peerNode.slug,
+        externalEntityId: params.externalActorId,
+        ...(params.identity?.parentAgentId
+          ? { parentAgentId: params.identity.parentAgentId }
+          : {}),
+      },
+    })
+    .onConflictDoNothing({ target: agents.id });
+
+  return localId;
+}
+
 /** Strips a trailing slash from a base URL for stable comparison/storage. */
 function normalizeBaseUrl(rawUrl: string): string {
   return rawUrl.replace(/\/+$/, "");
