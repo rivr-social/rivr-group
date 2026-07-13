@@ -86,7 +86,7 @@ export const MEMBERSHIP_TIERS: Record<
     yearlyPriceId: process.env.STRIPE_PRICE_PROVIDER_YEARLY,
   },
   organizer: {
-    name: 'Organizer',
+    name: 'Organization',
     monthlyPriceId: process.env.STRIPE_PRICE_ORGANIZER_MONTHLY,
     yearlyPriceId: process.env.STRIPE_PRICE_ORGANIZER_YEARLY,
   },

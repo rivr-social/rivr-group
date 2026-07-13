@@ -1378,7 +1378,7 @@ export default function ProfilePage() {
                           { name: "Basic Member", href: "/products/membership-basic", billingTier: "basic", level: 1 },
                           { name: "Host Membership", href: "/products/membership-host", billingTier: "host", level: 2 },
                           { name: "Seller Membership", href: "/products/membership-seller", billingTier: "seller", level: 2 },
-                          { name: "Organizer Membership", href: "/products/membership-organizer", billingTier: "organizer", level: 3 },
+                          { name: "Organization Membership", href: "/products/membership-organizer", billingTier: "organizer", level: 3 },
                           { name: "Steward Membership", href: "/products/membership-steward", billingTier: "steward", level: 4 },
                         ].map((tier) => {
                           const isActive = activeTiers.has(tier.billingTier);
@@ -1388,7 +1388,7 @@ export default function ProfilePage() {
 
                           let subtitle = "Upgrade to access more tools";
                           if (isActive) subtitle = "Current membership tier";
-                          else if (isIncluded) subtitle = "Included with Organizer";
+                          else if (isIncluded) subtitle = "Included with Organization";
                           else if (isDowngrade) subtitle = "Lower tier than current";
 
                           return (

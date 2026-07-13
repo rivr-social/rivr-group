@@ -75,9 +75,9 @@ export default function OrganizerMembershipPage() {
             <div className="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center">
               <Building2 className="h-6 w-6 text-purple-600" />
             </div>
-            <Badge className="bg-purple-100 text-purple-800">ORGANIZER MEMBERSHIP</Badge>
+            <Badge className="bg-purple-100 text-purple-800">ORGANIZATION MEMBERSHIP</Badge>
           </div>
-          <h1 className="text-4xl font-bold mb-4">Organizer Membership</h1>
+          <h1 className="text-4xl font-bold mb-4">Organization Membership</h1>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
             Full organizational features including ticket sales and advanced coordination tools
           </p>
@@ -162,7 +162,7 @@ export default function OrganizerMembershipPage() {
                   <div className="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center">
                     <Building2 className="h-6 w-6 text-purple-600" />
                   </div>
-                  <Badge className="bg-purple-100 text-purple-800">Organizer</Badge>
+                  <Badge className="bg-purple-100 text-purple-800">Organization</Badge>
                 </div>
               </CardHeader>
               <CardContent>
@@ -222,7 +222,7 @@ export default function OrganizerMembershipPage() {
                         Redirecting...
                       </>
                     ) : (
-                      "Upgrade to Organizer"
+                      "Upgrade to Organization"
                     )}
                   </Button>
 

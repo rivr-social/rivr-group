@@ -928,7 +928,7 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
               <CardHeader>
                 <CardTitle>Upgrade To Organization</CardTitle>
                 <CardDescription>
-                  Convert this basic group into an organization. Organizer membership is required.
+                  Convert this basic group into an organization. Organization membership is required.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1488,7 +1488,7 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
         open={showMembershipGate}
         onOpenChange={setShowMembershipGate}
         requiredTier="organizer"
-        featureDescription="Changing a basic group into an organization requires an Organizer membership or higher."
+        featureDescription="Changing a basic group into an organization requires an Organization membership or higher."
         onTrialStarted={() => void upgradeToOrganization()}
         returnPath={`/groups/${groupId}/settings?${RESUME_ORG_UPGRADE_PARAM}=1`}
       />
