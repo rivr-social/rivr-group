@@ -25,7 +25,6 @@ import type { GroupWorkPeriodItem } from "@/app/actions/calendar-work"
 import { InviteMemberCard } from "@/components/invite-member-card"
 import type { GroupInvite } from "@/app/actions/group-members"
 import { AboutDocumentsCard } from "@/components/about-documents-card"
-import { AgentGraph } from "@/components/agent-graph"
 import { FlowPassModal } from "@/components/flow-pass-modal"
 import { GroupAccessDialog } from "@/components/group-access-dialog"
 import type {
@@ -47,6 +46,14 @@ import dynamic from "next/dynamic"
 const tabLoading = () => (
   <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
 )
+// The agent graph pulls d3; keep it off the group page's first-load chunk and
+// out of SSR so it downloads only when the relationships graph mounts.
+const AgentGraph = dynamic(() => import("@/components/agent-graph").then((m) => m.AgentGraph), {
+  ssr: false,
+  loading: () => (
+    <div className="py-8 text-center text-sm text-muted-foreground">Loading graph…</div>
+  ),
+})
 const GovernanceTab = dynamic(() => import("@/components/governance-tab").then((m) => m.GovernanceTab), { loading: tabLoading })
 const StakeTab = dynamic(() => import("@/components/stake-tab").then((m) => m.StakeTab), { loading: tabLoading })
 const TreasuryTab = dynamic(() => import("@/components/treasury-tab").then((m) => m.TreasuryTab), { loading: tabLoading })

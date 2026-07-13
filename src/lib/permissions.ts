@@ -19,6 +19,7 @@
  * - `drizzle-orm` query helpers (`eq`, `and`, `or`, `sql`, `isNull`, `inArray`)
  */
 
+import { cache } from "react";
 import { db } from "@/db";
 import { agents, resources, ledger } from "@/db/schema";
 import type { VerbType, VisibilityLevel, Resource, NewResource } from "@/db/schema";
@@ -976,19 +977,24 @@ export async function checkGroupAccess(
 // Internal query helpers
 // =============================================================================
 
-async function fetchAgent(id: string) {
+// Request-memoized so the several places a single `check()` call (and multiple
+// `check()`/`listObjects()` calls within one render) touch the same agent/
+// resource row collapse to one round-trip per id within a request. Outside an
+// RSC request scope `cache()` degrades to a plain pass-through (no memoization,
+// identical behavior), so cron/route-handler callers are unaffected.
+const fetchAgent = cache(async (id: string) => {
   const [agent] = await db.select().from(agents).where(
     and(eq(agents.id, id), isNull(agents.deletedAt))
   ).limit(1);
   return agent || null;
-}
+});
 
-async function fetchResource(id: string) {
+const fetchResource = cache(async (id: string) => {
   const [resource] = await db.select().from(resources).where(
     and(eq(resources.id, id), isNull(resources.deletedAt))
   ).limit(1);
   return resource || null;
-}
+});
 
 /** Find an active ledger edge between subject and object with the given verb.
  *  Also matches grant-style entries (verb="grant") where metadata.action equals the requested verb,
