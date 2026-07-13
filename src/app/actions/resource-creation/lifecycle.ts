@@ -1149,9 +1149,14 @@ export async function createProjectResource(input: {
               maxAssignees: job.maxAssignees ?? null,
               requiredBadges: Array.isArray(job.requiredBadges) ? job.requiredBadges : [],
               skills: Array.isArray(job.skills) ? job.skills : [],
-              // Cash compensation (alongside task points): a fixed amount for
-              // the whole job or an hourly rate against tracked timer time.
-              payKind: job.payKind === "fixed" || job.payKind === "hourly" ? job.payKind : null,
+              // Pay model (alongside task points): a fixed cash amount for the
+              // whole job, an hourly cash rate against tracked timer time, or
+              // `volunteer` (no cash — completion mints a Thanks voucher the
+              // group claims from each volunteer).
+              payKind:
+                job.payKind === "fixed" || job.payKind === "hourly" || job.payKind === "volunteer"
+                  ? job.payKind
+                  : null,
               payAmountCents:
                 job.payKind === "fixed" && Number.isInteger(job.payAmountCents) && (job.payAmountCents as number) > 0
                   ? job.payAmountCents

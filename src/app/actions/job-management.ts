@@ -46,8 +46,8 @@ export interface AddJobToProjectInput {
   /** Job-level points for task-less jobs — split across assignees at
    *  completion (peer allocation, equal fallback). */
   points?: number | null;
-  /** Cash compensation alongside task points; null/omitted = points-only. */
-  payKind?: "fixed" | "hourly" | null;
+  /** Pay model alongside task points; 'volunteer' mints a Thanks voucher, null/omitted = points-only. */
+  payKind?: "fixed" | "hourly" | "volunteer" | null;
   payAmountCents?: number | null;
   hourlyRateCents?: number | null;
   /** Claim gating (mirrors create-page options). */
@@ -142,11 +142,18 @@ async function canManageParent(userId: string, parent: ParentResource): Promise<
 
 /** Normalizes the pay-field triple, dropping values inconsistent with payKind. */
 function normalizePayFields(input: {
-  payKind?: "fixed" | "hourly" | null;
+  payKind?: "fixed" | "hourly" | "volunteer" | null;
   payAmountCents?: number | null;
   hourlyRateCents?: number | null;
-}): { payKind: "fixed" | "hourly" | null; payAmountCents: number | null; hourlyRateCents: number | null } {
-  const payKind = input.payKind === "fixed" || input.payKind === "hourly" ? input.payKind : null;
+}): {
+  payKind: "fixed" | "hourly" | "volunteer" | null;
+  payAmountCents: number | null;
+  hourlyRateCents: number | null;
+} {
+  const payKind =
+    input.payKind === "fixed" || input.payKind === "hourly" || input.payKind === "volunteer"
+      ? input.payKind
+      : null;
   const payAmountCents =
     payKind === "fixed" && Number.isInteger(input.payAmountCents) && (input.payAmountCents as number) > 0
       ? (input.payAmountCents as number)

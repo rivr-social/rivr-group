@@ -44,11 +44,13 @@ export interface JobShift {
   duration: string
   totalPoints: number
   /**
-   * How the job pays cash (alongside task points): a fixed amount for the
-   * whole job, an hourly rate against tracked job-timer time, or null for
-   * points-only jobs.
+   * How the job pays (alongside task points): a fixed cash amount for the
+   * whole job, an hourly cash rate against tracked job-timer time,
+   * `volunteer` (no cash — completion mints a Thanks voucher the group claims
+   * from each volunteer, valued from their claim-complete ratings), or null
+   * for points-only jobs.
    */
-  payKind: "fixed" | "hourly" | null
+  payKind: "fixed" | "hourly" | "volunteer" | null
   /** Fixed cash value for the whole job, in cents. Meaningful when payKind is "fixed". */
   payAmountCents: number | null
   /** Hourly rate in cents, paid against tracked time. Meaningful when payKind is "hourly". */
