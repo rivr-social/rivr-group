@@ -50,7 +50,6 @@ import {
   resourceToPost,
 } from "@/lib/graph-adapters";
 import { PostFeed } from "@/components/post-feed";
-import { AgentGraph } from "@/components/agent-graph";
 import { ReceiptCard } from "@/components/receipt-card";
 import { setEventRsvp, toggleJoinGroup, toggleLikeOnTarget, toggleSaveListing } from "@/app/actions/interactions";
 import { updateProfileImageAction } from "@/app/actions/settings";
@@ -65,6 +64,14 @@ import dynamic from "next/dynamic";
 const tabLoading = () => (
   <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
 );
+// The agent graph pulls d3; keep it off the profile's first-load chunk and out
+// of SSR so it downloads only when the relationships graph actually mounts.
+const AgentGraph = dynamic(() => import("@/components/agent-graph").then((m) => m.AgentGraph), {
+  ssr: false,
+  loading: () => (
+    <div className="py-8 text-center text-sm text-muted-foreground">Loading graph…</div>
+  ),
+});
 const EventFeed = dynamic(() => import("@/components/event-feed").then((m) => m.EventFeed), { loading: tabLoading });
 const ProfileGroupFeed = dynamic(() => import("@/components/profile-group-feed").then((m) => m.ProfileGroupFeed), { loading: tabLoading });
 const ProfileCalendar = dynamic(() => import("@/components/profile-calendar").then((m) => m.ProfileCalendar), { loading: tabLoading });

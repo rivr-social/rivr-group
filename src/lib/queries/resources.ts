@@ -21,7 +21,8 @@
 import { db } from "@/db";
 import { resources, ledger } from "@/db/schema";
 import { eq, and, isNull, asc, desc, sql, inArray } from "drizzle-orm";
-import type { Resource, ResourceType } from "@/db/schema";
+import type { Agent, Resource, ResourceType } from "@/db/schema";
+import { AGENT_LIST_COLUMNS_EXCLUDED } from "@/lib/queries/agents";
 import { parseFacetedTagsFromMetadata } from "@/lib/parachute-doc";
 import type {
   Document,
@@ -35,6 +36,22 @@ import type {
   ProjectMilestone,
   ProjectResource,
 } from "@/types/domain";
+
+/**
+ * Column-projection exclusion set applied to every resource feed/list read
+ * (DMP-PERF-001). Drizzle reads an all-`false` `columns` config as "every
+ * column EXCEPT these", so it is strictly behavior-preserving and only drops:
+ *
+ * - `embedding`: 384-float pgvector (~1.5KB/row). Only read by raw-SQL semantic
+ *   search (`searchResourcesBySemantic`, `actions/graph/search.ts`) and the
+ *   backfill script — never off these list results.
+ * - `searchVector`: legacy tsvector. No app consumer reads it off a resource
+ *   row; only the federation upsert writes the column.
+ */
+const RESOURCE_LIST_COLUMNS_EXCLUDED = {
+  embedding: false,
+  searchVector: false,
+} as const;
 
 /**
  * Maps a raw SQL row (`snake_case` columns) into the typed `Resource` shape.
@@ -103,14 +120,22 @@ export async function getResourcesByType(
   type: ResourceType,
   limit = 50
 ) {
-  return await db.query.resources.findMany({
+  const rows = await db.query.resources.findMany({
     where: and(eq(resources.type, type), isNull(resources.deletedAt)),
+    columns: RESOURCE_LIST_COLUMNS_EXCLUDED,
     limit,
     orderBy: [desc(resources.createdAt)],
     with: {
-      owner: true,
+      // The owner join materializes a full agent per row; exclude its
+      // embedding/tsvector/secret columns so up-to-N owner agents don't carry
+      // ~1.5KB vectors or credentials into the feed payload.
+      owner: {
+        columns: AGENT_LIST_COLUMNS_EXCLUDED,
+      },
     },
   });
+  // Projection omits only never-read columns; preserve the original row shape.
+  return rows as Array<Resource & { owner: Agent }>;
 }
 
 /**
@@ -125,10 +150,12 @@ export async function getResourcesByType(
  * ```
  */
 export async function getResourcesByOwner(ownerId: string) {
-  return await db.query.resources.findMany({
+  const rows = await db.query.resources.findMany({
     where: and(eq(resources.ownerId, ownerId), isNull(resources.deletedAt)),
+    columns: RESOURCE_LIST_COLUMNS_EXCLUDED,
     orderBy: [desc(resources.createdAt)],
   });
+  return rows as Resource[];
 }
 
 /**
@@ -149,15 +176,17 @@ export async function getResourcesByOwnerAndType(
   type: ResourceType,
   limit = 50
 ) {
-  return await db.query.resources.findMany({
+  const rows = await db.query.resources.findMany({
     where: and(
       eq(resources.ownerId, ownerId),
       eq(resources.type, type),
       isNull(resources.deletedAt)
     ),
+    columns: RESOURCE_LIST_COLUMNS_EXCLUDED,
     limit,
     orderBy: [desc(resources.createdAt)],
   });
+  return rows as Resource[];
 }
 
 /**
@@ -413,19 +442,23 @@ export async function getResourcesByTag(tag: string, limit = 50) {
  * ```
  */
 export async function getPublicResources(limit = 50) {
-  return await db.query.resources.findMany({
+  const rows = await db.query.resources.findMany({
     where: and(
       eq(resources.isPublic, true),
       isNull(resources.deletedAt),
       sql`(${resources.metadata}->>'eventId') IS NULL`,
       sql`(${resources.metadata}->>'groupId') IS NULL`
     ),
+    columns: RESOURCE_LIST_COLUMNS_EXCLUDED,
     limit,
     orderBy: [desc(resources.createdAt)],
     with: {
-      owner: true,
+      owner: {
+        columns: AGENT_LIST_COLUMNS_EXCLUDED,
+      },
     },
   });
+  return rows as Array<Resource & { owner: Agent }>;
 }
 
 /**
@@ -547,12 +580,14 @@ export async function getResourcesByIds(ids: string[]): Promise<Resource[]> {
   // Empty-list guard avoids issuing an `IN ()` style query.
   if (ids.length === 0) return [];
 
-  return await db.query.resources.findMany({
+  const rows = await db.query.resources.findMany({
     where: and(
       inArray(resources.id, ids),
       isNull(resources.deletedAt)
     ),
+    columns: RESOURCE_LIST_COLUMNS_EXCLUDED,
   });
+  return rows as Resource[];
 }
 
 /**
@@ -582,15 +617,19 @@ export async function getAllResources(options?: {
     conditions.push(eq(resources.type, type));
   }
 
-  return await db.query.resources.findMany({
+  const rows = await db.query.resources.findMany({
     where: and(...conditions),
+    columns: RESOURCE_LIST_COLUMNS_EXCLUDED,
     limit,
     offset,
     orderBy: [desc(resources.createdAt)],
     with: {
-      owner: true,
+      owner: {
+        columns: AGENT_LIST_COLUMNS_EXCLUDED,
+      },
     },
   });
+  return rows as Array<Resource & { owner: Agent }>;
 }
 
 // ─── Resource → Domain Type Mappers ──────────────────────────────────────────

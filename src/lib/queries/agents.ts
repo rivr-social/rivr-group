@@ -27,6 +27,37 @@ import { toContainsLikePattern } from "@/lib/sql-like";
 import { GROUP_AGENT_TYPES } from "@/lib/agent-types";
 
 /**
+ * Column-projection exclusion set applied to every agent feed/list read
+ * (DMP-PERF-001).
+ *
+ * Drizzle interprets an all-`false` `columns` config as "return every column
+ * EXCEPT these", so this stays strictly behavior-preserving: it keeps id, name,
+ * type, description, email, image, visibility, metadata, hierarchy refs, social
+ * links, federation identity, timestamps, etc. — everything any list/feed
+ * consumer actually reads — while dropping only:
+ *
+ * - Heavy, always-discarded read-path columns: `embedding` (384-float pgvector,
+ *   ~1.5KB/row) and `searchVector` (legacy tsvector). No list consumer reads
+ *   either off these results; the only `embedding` readers are raw-SQL semantic
+ *   search (`actions/graph/search.ts`) and the backfill script, none of which
+ *   route through these functions.
+ * - Credential/secret columns that must NEVER be materialized into list memory:
+ *   `passwordHash`, `groupPasswordHash`, `matrixAccessToken`, `totpSecret`,
+ *   `totpRecoveryCodes`. All readers of these go through dedicated
+ *   `.select({...})` / `findFirst` projections (auth, password-reset,
+ *   group-access, matrix-identity, stripe webhook), never a list/feed read.
+ */
+export const AGENT_LIST_COLUMNS_EXCLUDED = {
+  embedding: false,
+  searchVector: false,
+  passwordHash: false,
+  groupPasswordHash: false,
+  matrixAccessToken: false,
+  totpSecret: false,
+  totpRecoveryCodes: false,
+} as const;
+
+/**
  * Maps a raw SQL row (`snake_case` columns) into the typed `Agent` shape.
  *
  * This adapter is used for `db.execute(...)` queries that bypass Drizzle's model mapping.
@@ -169,11 +200,15 @@ export async function getAgentsByType(
   type: AgentType,
   limit = 50
 ): Promise<Agent[]> {
-  return await db.query.agents.findMany({
+  const rows = await db.query.agents.findMany({
     where: and(eq(agents.type, type), isNull(agents.deletedAt)),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
     limit,
     orderBy: [desc(agents.createdAt)],
   });
+  // The projection omits only columns no list consumer reads
+  // (embedding/searchVector/secrets), so the public `Agent[]` shape is preserved.
+  return rows as Agent[];
 }
 
 /**
@@ -230,13 +265,15 @@ export async function getAgentsNearby(
 export async function searchAgents(query: string, limit = 20): Promise<Agent[]> {
   // Escape wildcard tokens (`%`, `_`, `\`) before using LIKE to avoid pattern injection.
   const escaped = toContainsLikePattern(query);
-  return await db.query.agents.findMany({
+  const rows = await db.query.agents.findMany({
     where: and(
       ilike(agents.name, escaped),
       isNull(agents.deletedAt)
     ),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
     limit,
   });
+  return rows as Agent[];
 }
 
 /**
@@ -251,9 +288,11 @@ export async function searchAgents(query: string, limit = 20): Promise<Agent[]> 
  * ```
  */
 export async function getAgentChildren(parentId: string): Promise<Agent[]> {
-  return await db.query.agents.findMany({
+  const rows = await db.query.agents.findMany({
     where: and(eq(agents.parentId, parentId), isNull(agents.deletedAt)),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
   });
+  return rows as Agent[];
 }
 
 /**
@@ -268,12 +307,18 @@ export async function getAgentChildren(parentId: string): Promise<Agent[]> {
  * ```
  */
 export async function getAgentWithChildren(id: string) {
-  return await db.query.agents.findFirst({
+  const row = await db.query.agents.findFirst({
     where: and(eq(agents.id, id), isNull(agents.deletedAt)),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
     with: {
-      children: true,
+      // The children relation materializes a full agent list; apply the same
+      // exclusion so the nested join never carries embeddings/tsvectors/secrets.
+      children: {
+        columns: AGENT_LIST_COLUMNS_EXCLUDED,
+      },
     },
   });
+  return row as (Agent & { children: Agent[] }) | undefined;
 }
 
 /**
@@ -347,9 +392,10 @@ export async function getGroupMembers(groupId: string): Promise<Agent[]> {
       eq(agents.type, "person"),
       isNull(agents.deletedAt)
     ),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
   });
 
-  if (children.length > 0) return children;
+  if (children.length > 0) return children as Agent[];
 
   // Fallback supports legacy/event-sourced membership when hierarchy links are unavailable.
   const membershipEntries = await db.query.ledger.findMany({
@@ -383,12 +429,14 @@ export async function getGroupMembers(groupId: string): Promise<Agent[]> {
 
   if (agentIds.size === 0) return [];
 
-  return await db.query.agents.findMany({
+  const members = await db.query.agents.findMany({
     where: and(
       inArray(agents.id, [...agentIds]),
       isNull(agents.deletedAt)
     ),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
   });
+  return members as Agent[];
 }
 
 /**
@@ -553,12 +601,14 @@ export async function getAgentsByIds(ids: string[]): Promise<Agent[]> {
   // Short-circuit empty `IN` lists to avoid unnecessary queries.
   if (ids.length === 0) return [];
 
-  return await db.query.agents.findMany({
+  const rows = await db.query.agents.findMany({
     where: and(
       inArray(agents.id, ids),
       isNull(agents.deletedAt)
     ),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
   });
+  return rows as Agent[];
 }
 
 /**
@@ -588,12 +638,14 @@ export async function getAllAgents(options?: {
     conditions.push(eq(agents.type, type));
   }
 
-  return await db.query.agents.findMany({
+  const rows = await db.query.agents.findMany({
     where: and(...conditions),
+    columns: AGENT_LIST_COLUMNS_EXCLUDED,
     limit,
     offset,
     orderBy: [desc(agents.createdAt)],
   });
+  return rows as Agent[];
 }
 
 /**
