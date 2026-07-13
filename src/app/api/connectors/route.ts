@@ -11,6 +11,7 @@ import { runConnectorItemSave, ITEM_SAVE_PROVIDERS } from "@/lib/connectors/gmai
 import { runConnectorEventPublish, EVENT_PUBLISH_PROVIDERS } from "@/lib/connectors/luma-publish";
 import { runConnectorSendEmail, EMAIL_SEND_PROVIDERS } from "@/lib/connectors/gmail-send";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box";
+import { listDeployedBridgeProviders } from "@/lib/matrix-bridge/bridge-registry";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +80,9 @@ export async function GET(request: Request) {
     targetAgentId: subject.targetAgentId,
     definitions: CONNECTOR_CATALOG,
     connections: rows.map(({ accessToken, ...row }) => ({ ...row, hasCredential: Boolean(accessToken) })),
+    // Messenger providers whose mautrix bridge is deployed on this instance —
+    // the panel shows a guided-login button for these instead of token paste.
+    bridgeProviders: listDeployedBridgeProviders(),
   });
 }
 

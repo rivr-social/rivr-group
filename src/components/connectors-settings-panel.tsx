@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
+import { BridgeLoginDialog } from "@/components/bridge-login-dialog";
 import type { ConnectorProvider } from "@/lib/connectors/catalog";
 
 type Definition = { id: ConnectorProvider; label: string; credentialLabel: string | null; refreshCredentialLabel?: string; accountLabel: string; supportsTest?: boolean };
@@ -19,6 +20,8 @@ export function ConnectorsSettingsPanel({ targetAgentId }: { targetAgentId?: str
   const [values, setValues] = useState<Record<string, { accountLabel: string; credential: string; refreshCredential: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [bridgeProviders, setBridgeProviders] = useState<string[]>([]);
+  const [bridgeDialog, setBridgeDialog] = useState<{ id: ConnectorProvider; label: string } | null>(null);
 
   const load = useCallback(async () => {
     const query = targetAgentId ? `?targetAgentId=${encodeURIComponent(targetAgentId)}` : "";
@@ -27,6 +30,7 @@ export function ConnectorsSettingsPanel({ targetAgentId }: { targetAgentId?: str
     if (!response.ok) throw new Error(data.error || "Could not load connectors");
     setDefinitions(data.definitions ?? []);
     setConnections(data.connections ?? []);
+    setBridgeProviders(data.bridgeProviders ?? []);
     setValues((current) => Object.fromEntries((data.definitions ?? []).map((definition: Definition) => {
       const connection = (data.connections ?? []).find((item: Connection) => item.provider === definition.id);
       return [definition.id, {
@@ -73,6 +77,7 @@ export function ConnectorsSettingsPanel({ targetAgentId }: { targetAgentId?: str
     {definitions.map((definition) => {
       const connection = connections.find((item) => item.provider === definition.id);
       const value = values[definition.id] ?? { accountLabel: "", credential: "", refreshCredential: "" };
+      const hasBridge = bridgeProviders.includes(definition.id);
       return <Card key={definition.id}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base"><Plug className="h-4 w-4" />{definition.label}</CardTitle>
@@ -89,12 +94,26 @@ export function ConnectorsSettingsPanel({ targetAgentId }: { targetAgentId?: str
             </div>
           </details> : null}
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => void mutate(definition.id, "save")} disabled={busy !== null}>{connection ? "Update" : "Connect"}</Button>
-            {connection && definition.supportsTest !== false ? <Button size="sm" variant="outline" onClick={() => void mutate(definition.id, "test")} disabled={busy !== null}>Test</Button> : null}
+            {hasBridge ? (
+              <Button size="sm" onClick={() => setBridgeDialog({ id: definition.id, label: definition.label })} disabled={busy !== null}>{connection ? `Reconnect ${definition.label}` : `Connect ${definition.label}`}</Button>
+            ) : (
+              <Button size="sm" onClick={() => void mutate(definition.id, "save")} disabled={busy !== null}>{connection ? "Update" : "Connect"}</Button>
+            )}
+            {connection && !hasBridge && definition.supportsTest !== false ? <Button size="sm" variant="outline" onClick={() => void mutate(definition.id, "test")} disabled={busy !== null}>Test</Button> : null}
             {connection ? <Button size="sm" variant="ghost" onClick={() => void mutate(definition.id, "delete")} disabled={busy !== null}><Trash2 className="mr-1 h-3.5 w-3.5" />Disconnect</Button> : null}
           </div>
         </CardContent>
       </Card>;
     })}
+    {bridgeDialog ? (
+      <BridgeLoginDialog
+        provider={bridgeDialog.id}
+        providerLabel={bridgeDialog.label}
+        targetAgentId={targetAgentId}
+        open={Boolean(bridgeDialog)}
+        onOpenChange={(next) => { if (!next) setBridgeDialog(null); }}
+        onConnected={() => { void load(); }}
+      />
+    ) : null}
   </div>;
 }
