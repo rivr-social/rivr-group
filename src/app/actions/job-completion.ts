@@ -474,38 +474,9 @@ async function settleVolunteerVoucher(input: {
     const redeemedAt = new Date().toISOString();
     const enteredAccountAt = new Date();
 
-    // 2. Reassign the group's tokens to the volunteer (mirror sendThanksTokensAction).
-    for (const token of tokenRows) {
-      const metadata = (token.metadata ?? {}) as Record<string, unknown>;
-      const priorHistory = Array.isArray(metadata.transferHistory)
-        ? metadata.transferHistory.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
-        : [];
-      const transferHistory = [
-        ...priorHistory,
-        {
-          from: input.groupId,
-          to: input.assigneeId,
-          at: redeemedAt,
-          message: `Volunteer voucher: ${input.jobName}`,
-          kind: "send",
-        },
-      ];
-      await tx
-        .update(resources)
-        .set({
-          ownerId: input.assigneeId,
-          enteredAccountAt,
-          metadata: {
-            ...metadata,
-            currentOwnerId: input.assigneeId,
-            transferHistory,
-            lastTransferredAt: enteredAccountAt.toISOString(),
-          },
-        })
-        .where(eq(resources.id, token.id));
-    }
-
-    // 3. Voucher owned by the volunteer, already claimed/redeemed by the group.
+    // 2. Voucher owned by the volunteer, already claimed/redeemed by the group.
+    //    Minted before the token reassignment so the transfer history can carry
+    //    the redemption context (source voucher).
     const [voucher] = await tx
       .insert(resources)
       .values({
@@ -539,6 +510,42 @@ async function settleVolunteerVoucher(input: {
         },
       } as typeof resources.$inferInsert)
       .returning({ id: resources.id });
+
+    // 3. Reassign the group's OWN Thanks tokens to the volunteer (mirror
+    //    sendThanksTokensAction: ownership + transferHistory append). Kind
+    //    'transfer' with the source voucher marks the volunteer-redemption
+    //    context. No tokens are minted — ownership simply moves.
+    for (const token of tokenRows) {
+      const metadata = (token.metadata ?? {}) as Record<string, unknown>;
+      const priorHistory = Array.isArray(metadata.transferHistory)
+        ? metadata.transferHistory.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+        : [];
+      const transferHistory = [
+        ...priorHistory,
+        {
+          from: input.groupId,
+          to: input.assigneeId,
+          at: redeemedAt,
+          message: `Volunteer voucher: ${input.jobName}`,
+          kind: "transfer",
+          sourceVoucherId: voucher.id,
+          jobId: input.jobId,
+        },
+      ];
+      await tx
+        .update(resources)
+        .set({
+          ownerId: input.assigneeId,
+          enteredAccountAt,
+          metadata: {
+            ...metadata,
+            currentOwnerId: input.assigneeId,
+            transferHistory,
+            lastTransferredAt: enteredAccountAt.toISOString(),
+          },
+        })
+        .where(eq(resources.id, token.id));
+    }
 
     // 4a. The group's redemption edge — group redeems (claims) the voucher,
     //     paying the volunteer (owner) Thanks it already held.

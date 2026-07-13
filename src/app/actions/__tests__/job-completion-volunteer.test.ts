@@ -92,6 +92,19 @@ async function voucherCount(
   return Number(rows[0]?.n ?? 0);
 }
 
+/** Ordered thanks_token ids owned by an agent (oldest first — transfer order). */
+async function thanksTokenIds(
+  db: { execute: (q: unknown) => Promise<unknown> },
+  ownerId: string,
+): Promise<string[]> {
+  const rows = (await db.execute(sql`
+    SELECT id FROM resources
+    WHERE owner_id = ${ownerId}::uuid AND type = 'thanks_token' AND deleted_at IS NULL
+    ORDER BY entered_account_at, created_at
+  `)) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
 /** Seeds `count` thanks_token resources owned by an agent (the group's holdings). */
 async function seedThanksTokens(
   db: Parameters<Parameters<typeof withTestTransaction>[0]>[0],
@@ -169,6 +182,11 @@ describe("markJobDoneAction — volunteer pay", () => {
       });
       // The group holds more Thanks than owed (120) — none are minted.
       await seedThanksTokens(db, group.id, 120);
+      // Capture the exact tokens the transfer should move (oldest 100).
+      const groupTokensBefore = await thanksTokenIds(db, group.id);
+      expect(groupTokensBefore).toHaveLength(120);
+      const expectedMovedIds = [...groupTokensBefore.slice(0, 100)].sort();
+      const expectedRetainedIds = [...groupTokensBefore.slice(100)].sort();
 
       currentUserId.mockResolvedValue(admin.id);
       const result = await markJobDoneAction(job.id);
@@ -203,6 +221,10 @@ describe("markJobDoneAction — volunteer pay", () => {
       // the group's 120 became 20, the volunteer's 0 became 100 (total unchanged).
       expect(await thanksTokenCount(db, volunteer.id)).toBe(100);
       expect(await thanksTokenCount(db, group.id)).toBe(20);
+      // The volunteer now owns the EXACT oldest-100 token ids (ownership moved,
+      // not minted); the group retains the other 20.
+      expect([...(await thanksTokenIds(db, volunteer.id))].sort()).toEqual(expectedMovedIds);
+      expect([...(await thanksTokenIds(db, group.id))].sort()).toEqual(expectedRetainedIds);
 
       // Redemption edge: the GROUP is the redeemer/claimant.
       const redemptionRows = (await db.execute(sql`
