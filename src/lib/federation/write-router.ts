@@ -313,6 +313,29 @@ async function forwardToHomeInstance<T, R>(
       { type: write.type, targetAgentId: write.targetAgentId, url },
     );
 
+    // Buyer-rail owner-routed actor assertion (open-issues P0). Mint a
+    // short-lived, audience-bound home-signed identity voucher for the acting
+    // actor so a receiver with no pre-existing peer→actor binding can verify +
+    // materialize them before the write. Minted ONLY when the actor is locally
+    // homed here (we must never sign for another home); `mintOwnerRoutedActor…`
+    // returns null otherwise and we forward without it — the receiver then
+    // rejects an unbound actor exactly as today (no regression). Dynamic import
+    // avoids a static federation.ts cycle (mirrors resolution's usage).
+    let actorAssertion: unknown;
+    try {
+      const { mintOwnerRoutedActorAssertion } = await import(
+        "@/lib/federation/owner-routed-actor"
+      );
+      actorAssertion =
+        (await mintOwnerRoutedActorAssertion(write.actorId, homeInstance.baseUrl)) ??
+        undefined;
+    } catch (err) {
+      console.warn(
+        "[write-router] owner-routed actor-assertion minting failed; forwarding without it.",
+        err,
+      );
+    }
+
     // Cross-instance auth: prefer peer-secret (per-peer scoped) over the
     // global admin key. Receiver hashes the secret and matches against its
     // node_peers row keyed by our slug.
@@ -348,6 +371,7 @@ async function forwardToHomeInstance<T, R>(
         targetAgentId: write.targetAgentId,
         payload: write.payload,
         routedFrom: routingProvenance,
+        ...(actorAssertion ? { actorAssertion } : {}),
       }),
       signal: AbortSignal.timeout(REMOTE_WRITE_TIMEOUT_MS),
     });

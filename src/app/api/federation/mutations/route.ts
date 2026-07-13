@@ -30,6 +30,12 @@ import { createOfferingResource } from "@/app/actions/resource-creation/offering
 import { createPostResource } from "@/app/actions/resource-creation/posts";
 import { updateResource, deleteResource } from "@/app/actions/resource-creation/lifecycle";
 import type { UpdateResourceInput } from "@/app/actions/resource-creation/types";
+import {
+  createBookingAction,
+  bookAssetAction,
+  applyToJob,
+} from "@/app/actions/interactions";
+import { purchaseWithWalletAction } from "@/app/actions/wallet";
 import * as kg from "@/lib/kg/autobot-kg-client";
 import { authorizeKgScope } from "@/lib/federation/kg-scope-authz";
 import {
@@ -60,6 +66,13 @@ const KNOWN_MUTATION_TYPES = [
   "toggleReaction",
   "projectResourceBundle",
   "applyMembershipProjection",
+  // Buyer-rail owner-routed actions (open-issues P0). Dispatched to this
+  // instance's local action logic under a federation execution context when it
+  // is the resource's home.
+  "createBookingAction",
+  "bookAssetAction",
+  "applyToJob",
+  "purchaseWithWalletAction",
 ] as const;
 
 const INTERACTION_HANDLERS: Record<
@@ -87,6 +100,14 @@ type MutationRequestBody = {
   targetInstanceNodeId?: string;
   idempotencyKey?: string;
   routedFrom?: RoutingProvenance;
+  /**
+   * Home-signed actor identity voucher (buyer rail, open-issues P0). Additive;
+   * old senders omit it. When the peer→actor binding does not yet exist, the
+   * receiver verifies this against the authenticated peer's registered key and
+   * materializes + binds the actor before dispatch. See
+   * `@/lib/federation/owner-routed-actor`.
+   */
+  actorAssertion?: unknown;
 };
 
 export async function POST(request: Request) {
@@ -225,7 +246,42 @@ export async function POST(request: Request) {
     // as an arbitrary actor (F1). Downstream authority checks
     // (e.g. hasGroupWriteAccess for post-as-group) then run against the
     // receiver-local id.
-    const actorBinding = await bindAuthorizedFederationActor(authorization, body.actorId);
+    let actorBinding = await bindAuthorizedFederationActor(authorization, body.actorId);
+
+    // Buyer-rail fallback (open-issues P0): a first-time cross-instance actor
+    // (e.g. a dev/global user booking a group-homed offering) has no
+    // pre-existing federation_entity_map row, so the strict F1 bind above
+    // (correctly) rejects. If the forward carried a home-signed actorAssertion,
+    // verify it against the AUTHENTICATED peer's registered Ed25519 key, burn
+    // its nonce (single-use), and materialize + bind the actor via the
+    // projection rail — THEN re-bind. Nothing here grants authority; identity is
+    // vouched-for by the actor's home, and downstream authority still runs
+    // against this instance's graph. Absent/invalid assertion → strict 403 as
+    // before (no new failure mode, no receiver-side blind minting).
+    if (
+      (!actorBinding.authorized || !actorBinding.actorId) &&
+      authorization.peerNodeId &&
+      body.actorAssertion &&
+      body.actorId
+    ) {
+      const { resolveOwnerRoutedActor } = await import(
+        "@/lib/federation/owner-routed-actor"
+      );
+      const materialized = await resolveOwnerRoutedActor({
+        peerNodeId: authorization.peerNodeId,
+        audienceBaseUrl: config.baseUrl,
+        requestedActorId: body.actorId,
+        assertion: body.actorAssertion,
+      });
+      if (materialized.ok) {
+        actorBinding = await bindAuthorizedFederationActor(authorization, body.actorId);
+      } else {
+        console.warn(
+          `[federation/mutations] owner-routed actor assertion rejected: ${materialized.reason}`,
+        );
+      }
+    }
+
     if (!actorBinding.authorized || !actorBinding.actorId) {
       return NextResponse.json(
         { success: false, error: actorBinding.reason ?? "Actor authorization failed" },
@@ -943,6 +999,110 @@ async function handleLegacyMutation(
     );
   }
 
+  // ── Buyer-rail owner-routed actions (open-issues P0) ─────────────────────
+  // A cross-instance buyer's booking/asset-booking/job-application/wallet
+  // purchase is forwarded to the RESOURCE's home (this instance). The actor was
+  // resolved above (pre-existing binding OR the verified home-signed assertion),
+  // so run the local action under a federation execution context: its own
+  // getCurrentUserId*()/getFederationExecutionContext() resolves to the bound
+  // federated actor, and the action re-derives all authority + money effects
+  // against THIS instance's graph. `targetAgentId` (the resource owner) already
+  // passed the locality gate above. The actions carry their own idempotency /
+  // rate-limit guards, so no extra check is added here.
+  if (type === "createBookingAction") {
+    const p = asPayloadObject(payload);
+    const result = await runWithFederationExecutionContext(authorizedActorId, () =>
+      createBookingAction({
+        offeringId: requireStringField(p.offeringId),
+        slotDate: requireStringField(p.slotDate),
+        slotTime: requireStringField(p.slotTime),
+        notes: optionalStringField(p.notes),
+      }),
+    );
+    return NextResponse.json({
+      success: result.success,
+      data: result,
+      accepted: result.success,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(result.success ? {} : { error: result.message }),
+      ...routedFromEcho(routedFrom),
+    });
+  }
+
+  if (type === "bookAssetAction") {
+    const p = asPayloadObject(payload);
+    const result = await runWithFederationExecutionContext(authorizedActorId, () =>
+      bookAssetAction({
+        assetId: requireStringField(p.assetId),
+        startDate: requireStringField(p.startDate),
+        endDate: requireStringField(p.endDate),
+        purpose: requireStringField(p.purpose),
+        notes: optionalStringField(p.notes),
+      }),
+    );
+    return NextResponse.json({
+      success: result.success,
+      data: result,
+      accepted: result.success,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(result.success ? {} : { error: result.message }),
+      ...routedFromEcho(routedFrom),
+    });
+  }
+
+  if (type === "applyToJob") {
+    const p = asPayloadObject(payload);
+    const result = await runWithFederationExecutionContext(authorizedActorId, () =>
+      applyToJob(requireStringField(p.jobId)),
+    );
+    return NextResponse.json({
+      success: result.success,
+      data: result,
+      accepted: result.success,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(result.success ? {} : { error: result.message }),
+      ...routedFromEcho(routedFrom),
+    });
+  }
+
+  if (type === "purchaseWithWalletAction") {
+    const p = asPayloadObject(payload);
+    const subtotalCents = p.subtotalCents;
+    if (typeof subtotalCents !== "number" || !Number.isFinite(subtotalCents)) {
+      return NextResponse.json(
+        {
+          success: false,
+          accepted: false,
+          knownType: true,
+          instanceId: config.instanceId,
+          error: "purchaseWithWalletAction requires numeric payload.subtotalCents",
+        },
+        { status: 400 },
+      );
+    }
+    const result = await runWithFederationExecutionContext(authorizedActorId, () =>
+      purchaseWithWalletAction(
+        requireStringField(p.listingId),
+        subtotalCents,
+        optionalStringField(p.dealPostId),
+        optionalStringField(p.bookingDate),
+        optionalStringField(p.bookingSlot),
+      ),
+    );
+    return NextResponse.json({
+      success: result.success,
+      data: result,
+      accepted: result.success,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(result.success ? {} : { error: result.error }),
+      ...routedFromEcho(routedFrom),
+    });
+  }
+
   // Honesty contract (rivr-group#9): mutation types without a real dispatch
   // path must NOT claim acceptance. Returning a non-2xx with accepted:false
   // lets the forwarding instance surface a real error to the acting user
@@ -968,6 +1128,41 @@ async function handleLegacyMutation(
     },
     { status: isKnownType ? 501 : 400 },
   );
+}
+
+/** Coerce a mutation `payload` into a plain object for field extraction. */
+function asPayloadObject(payload: unknown): Record<string, unknown> {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Read a required string field. Returns "" for a missing/non-string value; the
+ * called action validates and returns a structured `{ success: false }` error,
+ * so we never throw here — the honest failure surfaces to the forwarding peer.
+ */
+function requireStringField(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/** Read an optional string field, normalizing missing/non-string to undefined. */
+function optionalStringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Echo routing provenance back to the forwarder when present (audit continuity). */
+function routedFromEcho(
+  routedFrom: RoutingProvenance | null | undefined,
+): Record<string, unknown> {
+  return routedFrom
+    ? {
+        routedFrom: {
+          originInstanceSlug: routedFrom.originInstanceSlug,
+          originInstanceId: routedFrom.originInstanceId,
+        },
+      }
+    : {};
 }
 
 function withTargetOwner(payload: unknown, targetAgentId: string): Record<string, unknown> {
