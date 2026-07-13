@@ -606,8 +606,8 @@ export default function CreatePage() {
     claimGateMembership: false,
     claimGateAdmin: false,
     isGlobal: false,
-    // Cash compensation (alongside task points): "none" | "fixed" | "hourly".
-    payKind: "none" as "none" | "fixed" | "hourly",
+    // Pay model (alongside task points): "none" | "fixed" | "hourly" | "volunteer".
+    payKind: "none" as "none" | "fixed" | "hourly" | "volunteer",
     payAmountDollars: "",
     hourlyRateDollars: "",
     // Hour budget (clamps hourly pay) + job-level points for task-less jobs.
@@ -1051,7 +1051,9 @@ export default function CreatePage() {
     const newJob = {
       id: `job-${Date.now()}`,
       ...currentJob,
-      payKind: payAmountCents || hourlyRateCents ? payKind : null,
+      // Volunteer jobs carry no cash fields — keep the payKind regardless;
+      // cash pay models are only kept when an amount/rate was actually set.
+      payKind: payKind === "volunteer" ? "volunteer" : payAmountCents || hourlyRateCents ? payKind : null,
       payAmountCents,
       hourlyRateCents,
       maxHours: Number.isFinite(jobMaxHours) && jobMaxHours > 0 ? jobMaxHours : null,
@@ -2368,11 +2370,11 @@ export default function CreatePage() {
                       {/* Cash compensation (alongside task points) */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
-                          <Label htmlFor="job-pay-kind">Cash Compensation</Label>
+                          <Label htmlFor="job-pay-kind">Pay Method</Label>
                           <Select
                             value={currentJob.payKind}
                             onValueChange={(value) =>
-                              setCurrentJob({ ...currentJob, payKind: value as "none" | "fixed" | "hourly" })
+                              setCurrentJob({ ...currentJob, payKind: value as "none" | "fixed" | "hourly" | "volunteer" })
                             }
                           >
                             <SelectTrigger id="job-pay-kind">
@@ -2382,9 +2384,17 @@ export default function CreatePage() {
                               <SelectItem value="none">Points only (no cash)</SelectItem>
                               <SelectItem value="fixed">Fixed amount for the job</SelectItem>
                               <SelectItem value="hourly">Hourly rate × tracked time</SelectItem>
+                              <SelectItem value="volunteer">Volunteer (mints a Thanks voucher)</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
+                        {currentJob.payKind === "volunteer" && (
+                          <div className="space-y-1 self-end text-xs text-muted-foreground">
+                            No cash moves. When the job is marked done, each volunteer receives a
+                            Thanks voucher the group claims from them — valued from the skillfulness
+                            &amp; difficulty ratings they set when claiming the job complete.
+                          </div>
+                        )}
                         {currentJob.payKind === "fixed" && (
                           <div className="space-y-2">
                             <Label htmlFor="job-pay-amount">Cash Value (USD)</Label>

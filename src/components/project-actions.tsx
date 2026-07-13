@@ -95,7 +95,7 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
   const [isAddingJob, setIsAddingJob] = useState(false)
   const [jobTitle, setJobTitle] = useState("")
   const [jobDescription, setJobDescription] = useState("")
-  const [jobPayKind, setJobPayKind] = useState<"none" | "fixed" | "hourly">("none")
+  const [jobPayKind, setJobPayKind] = useState<"none" | "fixed" | "hourly" | "volunteer">("none")
   const [jobPayAmount, setJobPayAmount] = useState("")
   const [jobHourlyRate, setJobHourlyRate] = useState("")
   const [jobMaxAssignees, setJobMaxAssignees] = useState("1")
@@ -320,7 +320,7 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
               />
             </div>
             <div className="space-y-2">
-              <Label>Cash compensation</Label>
+              <Label>Pay method</Label>
               <Select value={jobPayKind} onValueChange={(value) => setJobPayKind(value as typeof jobPayKind)}>
                 <SelectTrigger>
                   <SelectValue />
@@ -329,8 +329,14 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
                   <SelectItem value="none">Points only (no cash)</SelectItem>
                   <SelectItem value="fixed">Fixed amount for the job</SelectItem>
                   <SelectItem value="hourly">Hourly rate × tracked time</SelectItem>
+                  <SelectItem value="volunteer">Volunteer (mints a Thanks voucher)</SelectItem>
                 </SelectContent>
               </Select>
+              {jobPayKind === "volunteer" && (
+                <p className="text-xs text-muted-foreground">
+                  No cash moves. Each volunteer receives a Thanks voucher the group claims at completion.
+                </p>
+              )}
               {jobPayKind === "fixed" && (
                 <Input
                   inputMode="decimal"
