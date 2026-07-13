@@ -88,7 +88,7 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
   // Edit drafts
   const [draftName, setDraftName] = useState(job.title)
   const [draftDescription, setDraftDescription] = useState(job.description)
-  const [draftPayKind, setDraftPayKind] = useState<"none" | "fixed" | "hourly">(job.payKind ?? "none")
+  const [draftPayKind, setDraftPayKind] = useState<"none" | "fixed" | "hourly" | "volunteer">(job.payKind ?? "none")
   const [draftPayAmount, setDraftPayAmount] = useState(centsToDollarInput(job.payAmountCents))
   const [draftHourlyRate, setDraftHourlyRate] = useState(centsToDollarInput(job.hourlyRateCents))
   const [draftMaxAssignees, setDraftMaxAssignees] = useState(String(job.maxAssignees || 1))
@@ -264,7 +264,9 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
               ? `Pays $${(job.payAmountCents / 100).toFixed(2)} (fixed)`
               : job.payKind === "hourly" && job.hourlyRateCents
                 ? `Pays $${(job.hourlyRateCents / 100).toFixed(2)}/hr (tracked time)`
-                : "Points-only job"}
+                : job.payKind === "volunteer"
+                  ? "Volunteer — mints a Thanks voucher"
+                  : "Points-only job"}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -299,7 +301,7 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Cash compensation</Label>
+                  <Label>Pay method</Label>
                   <Select value={draftPayKind} onValueChange={(value) => setDraftPayKind(value as typeof draftPayKind)}>
                     <SelectTrigger>
                       <SelectValue />
@@ -308,8 +310,15 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                       <SelectItem value="none">Points only (no cash)</SelectItem>
                       <SelectItem value="fixed">Fixed amount for the job</SelectItem>
                       <SelectItem value="hourly">Hourly rate × tracked time</SelectItem>
+                      <SelectItem value="volunteer">Volunteer (mints a Thanks voucher)</SelectItem>
                     </SelectContent>
                   </Select>
+                  {draftPayKind === "volunteer" && (
+                    <p className="text-xs text-muted-foreground">
+                      No cash moves. Marking the job done mints each volunteer a Thanks voucher the
+                      group claims — valued from their claim-complete ratings.
+                    </p>
+                  )}
                   {draftPayKind === "fixed" && (
                     <div className="space-y-1">
                       <Label htmlFor={`job-pay-${job.id}`} className="text-xs text-muted-foreground">
@@ -500,9 +509,11 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
               <AlertDialogHeader>
                 <AlertDialogTitle>Mark this job done?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  {job.payKind
-                    ? "This completes the job, records a contribution for every assignee, and pays cash compensation from the group treasury wallet. Payouts blocked by an underfunded treasury are parked and retried the next time you mark it done."
-                    : "This completes the job and records a contribution for every assignee. This is a points-only job — no cash moves."}
+                  {job.payKind === "volunteer"
+                    ? "This completes the job and records a contribution for every assignee. No cash moves — each volunteer receives a Thanks voucher the group claims from them, valued from their claim-complete ratings."
+                    : job.payKind
+                      ? "This completes the job, records a contribution for every assignee, and pays cash compensation from the group treasury wallet. Payouts blocked by an underfunded treasury are parked and retried the next time you mark it done."
+                      : "This completes the job and records a contribution for every assignee. This is a points-only job — no cash moves."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

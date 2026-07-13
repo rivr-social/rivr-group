@@ -6,6 +6,7 @@ import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Clock, Zap, Award, DollarSign } from "lucide-react";
+import { computeVoucherThanksValue } from "@/lib/voucher-valuation";
 
 export default function VoucherBuilder() {
   const [hours, setHours] = useState(1);
@@ -15,7 +16,7 @@ export default function VoucherBuilder() {
   const [resourceCost, setResourceCost] = useState("");
 
   const totalHours = hours + minutes / 60;
-  const calculatedThanks = Math.round(Math.sqrt(skill * difficulty) * totalHours);
+  const calculatedThanks = computeVoucherThanksValue({ skillfulness: skill, difficulty, hours: totalHours });
 
   return (
     <Card className="w-full max-w-2xl">

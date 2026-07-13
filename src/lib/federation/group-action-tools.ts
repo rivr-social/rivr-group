@@ -130,8 +130,8 @@ export interface ProjectListingJob {
   maxAssignees: number | null;
   /** Number of child tasks on this job — lets a caller skip already-populated jobs. */
   taskCount: number;
-  /** Cash pay model + amounts, so a caller can see which jobs still need a cost. */
-  payKind: "fixed" | "hourly" | null;
+  /** Pay model + amounts, so a caller can see which jobs still need a cost. */
+  payKind: "fixed" | "hourly" | "volunteer" | null;
   payAmountCents: number | null;
   hourlyRateCents: number | null;
 }
@@ -175,7 +175,10 @@ export function buildProjectListing(
     const meta = metadataOf(job);
     const projectId = readString(meta.projectId);
     if (!projectId) continue;
-    const payKind = meta.payKind === "fixed" || meta.payKind === "hourly" ? meta.payKind : null;
+    const payKind =
+      meta.payKind === "fixed" || meta.payKind === "hourly" || meta.payKind === "volunteer"
+        ? meta.payKind
+        : null;
     const entry: ProjectListingJob = {
       id: job.id,
       name: job.name,
@@ -506,8 +509,9 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         maxAssignees: { type: "number", description: "Maximum number of assignees (claim slots)." },
         payKind: {
           type: "string",
-          enum: ["fixed", "hourly", "none"],
-          description: "Cash pay model: 'fixed' (payAmountCents), 'hourly' (hourlyRateCents), or 'none' to clear.",
+          enum: ["fixed", "hourly", "volunteer", "none"],
+          description:
+            "Pay model: 'fixed' (payAmountCents), 'hourly' (hourlyRateCents), 'volunteer' (no cash — mints a Thanks voucher the group claims per volunteer at completion), or 'none' to clear.",
         },
         payAmountCents: { type: "number", description: "Fixed cash value in cents (payKind 'fixed')." },
         hourlyRateCents: { type: "number", description: "Hourly rate in cents (payKind 'hourly')." },
@@ -542,6 +546,11 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
       if (jobPoints !== undefined) metadataPatch.points = jobPoints > 0 ? jobPoints : null;
       if (args.payKind === "none") {
         metadataPatch.payKind = null;
+        metadataPatch.payAmountCents = null;
+        metadataPatch.hourlyRateCents = null;
+      } else if (args.payKind === "volunteer") {
+        // Volunteer pay carries no cash fields; clear any prior amounts.
+        metadataPatch.payKind = "volunteer";
         metadataPatch.payAmountCents = null;
         metadataPatch.hourlyRateCents = null;
       } else if (args.payKind === "fixed" || args.payKind === "hourly") {
@@ -968,8 +977,9 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
     name: "rivr.jobs.create",
     description:
       "Add a job to an EXISTING project (owner or group write/admin authority). The job inherits the project's " +
-      "visibility and scope. Optionally set cash compensation: payKind 'fixed' with payAmountCents, or 'hourly' " +
-      "with hourlyRateCents (both alongside task points, which live on tasks).",
+      "visibility and scope. Optionally set a pay model: payKind 'fixed' with payAmountCents, 'hourly' with " +
+      "hourlyRateCents, or 'volunteer' (no cash — mints a Thanks voucher the group claims per volunteer at " +
+      "completion; all alongside task points, which live on tasks).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -985,7 +995,11 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         requiredBadges: { type: "array", items: { type: "string" } },
         startDate: { type: "string", description: "ISO start date." },
         deadline: { type: "string", description: "ISO deadline date." },
-        payKind: { type: "string", enum: ["fixed", "hourly"], description: "Cash pay model; omit for points-only." },
+        payKind: {
+          type: "string",
+          enum: ["fixed", "hourly", "volunteer"],
+          description: "Pay model; 'volunteer' mints a Thanks voucher per volunteer at completion. Omit for points-only.",
+        },
         payAmountCents: { type: "number", description: "Fixed cash value in cents (payKind 'fixed')." },
         hourlyRateCents: { type: "number", description: "Hourly rate in cents (payKind 'hourly')." },
         maxHours: { type: "number", description: "Hour budget: hourly payout is clamped to this many hours." },
@@ -1011,7 +1025,10 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         deadline: optionalIsoDate(args, "deadline") ?? null,
         maxHours: num(args.maxHours) ?? null,
         points: num(args.points) ?? null,
-        payKind: args.payKind === "fixed" || args.payKind === "hourly" ? args.payKind : null,
+        payKind:
+          args.payKind === "fixed" || args.payKind === "hourly" || args.payKind === "volunteer"
+            ? args.payKind
+            : null,
         payAmountCents: num(args.payAmountCents) ?? null,
         hourlyRateCents: num(args.hourlyRateCents) ?? null,
         claimApprovalRequired: args.claimApprovalRequired === true,

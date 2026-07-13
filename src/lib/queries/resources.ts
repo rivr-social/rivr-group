@@ -676,7 +676,8 @@ function resourceToJobShift(resource: Resource): JobShift {
     location: (m.location as string) ?? "",
     duration: (m.duration as string) ?? "",
     totalPoints: (m.totalPoints as number) ?? 0,
-    payKind: m.payKind === "fixed" || m.payKind === "hourly" ? m.payKind : null,
+    payKind:
+      m.payKind === "fixed" || m.payKind === "hourly" || m.payKind === "volunteer" ? m.payKind : null,
     payAmountCents:
       typeof m.payAmountCents === "number" && m.payAmountCents > 0 ? m.payAmountCents : null,
     hourlyRateCents:

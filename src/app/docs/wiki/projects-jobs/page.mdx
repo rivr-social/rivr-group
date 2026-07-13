@@ -56,6 +56,17 @@ project's QA before stake moves.
   payout as *pending funds* — top up the project wallet and re-run mark-done;
   it never silently dips into the group treasury. Jobs outside any project
   pay from the owning group's treasury as before.
+- **Volunteer pay (Thanks voucher)** — a job's fourth pay method, alongside
+  fixed cash, hourly cash, and points. **No cash moves.** When a volunteer
+  job is marked done, each volunteer receives — post-hoc — a **Thanks voucher**
+  the group *claims from them*: valued from the **skillfulness × difficulty**
+  ratings they set when claiming the job complete (× hours worked, the same
+  formula the voucher builder uses). The group redeems it by paying that many
+  **Thanks tokens from its own holdings** (oldest first) to the volunteer — the
+  group spends Thanks it actually has, none are minted. If the group holds too
+  few Thanks the payout parks as *pending* (all-or-nothing per volunteer);
+  top up the group's Thanks and re-run mark-done. Idempotent — re-running
+  transfers nothing twice.
 - **Complete a project (settles the treasury)** — a group admin or the
   project lead completes the project; expenses are already first-class
   debits, so the remaining project-wallet balance — the **net** — sweeps

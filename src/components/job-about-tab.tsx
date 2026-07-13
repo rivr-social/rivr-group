@@ -143,7 +143,9 @@ export function JobAboutTab({ job, currentUserId: _currentUserId }: JobAboutTabP
                   ? `$${(job.payAmountCents / 100).toFixed(2)}`
                   : job.payKind === "hourly" && job.hourlyRateCents
                     ? `$${(job.hourlyRateCents / 100).toFixed(2)}/hr`
-                    : "Points only"}
+                    : job.payKind === "volunteer"
+                      ? "Volunteer (Thanks voucher)"
+                      : "Points only"}
               </span>
             </div>
             <div className="flex justify-between">
