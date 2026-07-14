@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition, useCallback, useRef } from "react";
-import { Briefcase, ChevronDown, ChevronUp, Clock, Edit, MessageSquare, Play, Send, Square, Star } from "lucide-react";
+import { Briefcase, CheckCircle, ChevronDown, ChevronUp, Clock, Edit, MessageSquare, Play, Send, Square, Star, XCircle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useToast } from "@/components/ui/use-toast";
 import { toggleTaskCompletion } from "@/app/actions/toggle-task-completion";
+import { updateTaskStatus } from "@/app/actions/interactions";
 import { startJobTimer, stopJobTimer } from "@/app/actions/job-timer";
 import { addTaskNote, type TaskNote } from "@/app/actions/task-notes";
 import { updateTaskDescription } from "@/app/actions/edit-task";
@@ -233,11 +235,46 @@ export function ProjectJobsTab({
 }: ProjectJobsTabProps) {
   const [expandedJobs, setExpandedJobs] = useState<Record<string, boolean>>({});
   const [optimisticTasks, setOptimisticTasks] = useState<Record<string, boolean>>({});
+  // Optimistic attestation status so the Attest/Reject buttons resolve without
+  // a reload once an admin acts on a claimed task.
+  const [optimisticStatus, setOptimisticStatus] = useState<Record<string, "completed" | "rejected">>({});
   const [isPending, startTransition] = useTransition();
   const [workPeriodSummary, setWorkPeriodSummary] = useState<WorkPeriodSummary | null>(null);
+  const { toast } = useToast();
 
   const toggleExpand = (jobId: string) => {
     setExpandedJobs((prev) => ({ ...prev, [jobId]: !prev[jobId] }));
+  };
+
+  // Attest (approve) or reject a worker's claimed-finished task. Verification
+  // is where stake points land; the server re-checks cascading admin/QA/lead
+  // authority (`updateTaskStatus`). Optimistic so the chips resolve instantly.
+  const handleAttestTask = (taskId: string, approved: boolean) => {
+    setOptimisticStatus((prev) => ({ ...prev, [taskId]: approved ? "completed" : "rejected" }));
+    setOptimisticTasks((prev) => ({ ...prev, [taskId]: approved }));
+    startTransition(async () => {
+      const result = await updateTaskStatus(taskId, approved ? "completed" : "rejected");
+      if (!result.success) {
+        setOptimisticStatus((prev) => {
+          const next = { ...prev };
+          delete next[taskId];
+          return next;
+        });
+        setOptimisticTasks((prev) => {
+          const next = { ...prev };
+          delete next[taskId];
+          return next;
+        });
+        toast({ title: "Attestation failed", description: result.message, variant: "destructive" });
+      } else {
+        toast({ title: approved ? "Task attested" : "Task rejected", description: result.message });
+      }
+    });
+  };
+
+  const resolveStatus = (task: TaskResource): string => {
+    if (task.id in optimisticStatus) return optimisticStatus[task.id];
+    return typeof task.metadata.status === "string" ? task.metadata.status : "not_started";
   };
 
   const handleToggleTask = (taskId: string, currentCompleted: boolean) => {
@@ -354,7 +391,9 @@ export function ProjectJobsTab({
           isExpanded={expandedJobs[job.id] ?? false}
           onToggleExpand={toggleExpand}
           resolveCompleted={resolveCompleted}
+          resolveStatus={resolveStatus}
           handleToggleTask={handleToggleTask}
+          handleAttestTask={handleAttestTask}
           isTaskPending={isPending}
           currentUserId={currentUserId}
           isAdmin={isAdmin}
@@ -373,7 +412,9 @@ interface JobCardProps {
   isExpanded: boolean;
   onToggleExpand: (jobId: string) => void;
   resolveCompleted: (task: TaskResource) => boolean;
+  resolveStatus: (task: TaskResource) => string;
   handleToggleTask: (taskId: string, completed: boolean) => void;
+  handleAttestTask: (taskId: string, approved: boolean) => void;
   isTaskPending: boolean;
   currentUserId?: string | null;
   isAdmin?: boolean;
@@ -386,7 +427,9 @@ function JobCard({
   isExpanded,
   onToggleExpand,
   resolveCompleted,
+  resolveStatus,
   handleToggleTask,
+  handleAttestTask,
   isTaskPending,
   currentUserId,
   isAdmin = false,
@@ -520,6 +563,7 @@ function JobCard({
                     key={task.id}
                     task={task}
                     completed={resolveCompleted(task)}
+                    status={resolveStatus(task)}
                     onToggle={(taskId, wasCompleted) => {
                       handleToggleTask(taskId, wasCompleted);
                       // Track completions during running timer period.
@@ -529,6 +573,7 @@ function JobCard({
                         untrackTaskCompletion(taskId);
                       }
                     }}
+                    onAttest={handleAttestTask}
                     isTaskPending={isTaskPending}
                     currentUserId={currentUserId}
                     isAdmin={isAdmin}
@@ -548,7 +593,9 @@ function JobCard({
 interface TaskItemProps {
   task: TaskResource;
   completed: boolean;
+  status: string;
   onToggle: (taskId: string, wasCompleted: boolean) => void;
+  onAttest: (taskId: string, approved: boolean) => void;
   isTaskPending: boolean;
   currentUserId?: string | null;
   isAdmin?: boolean;
@@ -557,7 +604,9 @@ interface TaskItemProps {
 function TaskItem({
   task,
   completed,
+  status,
   onToggle,
+  onAttest,
   isTaskPending,
   currentUserId,
   isAdmin = false,
@@ -609,18 +658,24 @@ function TaskItem({
   };
 
   const displayDescription = localDescription ?? task.description;
+  // A worker's claimed-finished task awaits attestation. For an admin the
+  // checkbox is NOT the control here — clicking it would RETRACT the claim
+  // (toggleTaskCompletion treats awaiting_approval as "done" and reopens it) —
+  // so we surface explicit Attest/Reject buttons and lock the checkbox instead.
+  const isAwaitingApproval = status === "awaiting_approval";
+  const showAttestControls = isAdmin && isAwaitingApproval;
 
   return (
     <div
       className={`rounded-lg border p-3 transition-colors ${
-        completed ? "bg-muted/50" : "bg-background"
+        completed ? "bg-muted/50" : isAwaitingApproval ? "bg-yellow-50/60" : "bg-background"
       }`}
     >
       <div className="flex items-start gap-3">
         <Checkbox
           checked={completed}
           onCheckedChange={() => onToggle(task.id, completed)}
-          disabled={isTaskPending}
+          disabled={isTaskPending || showAttestControls}
           className="mt-0.5"
         />
         <div className="flex-1 min-w-0">
@@ -682,13 +737,43 @@ function TaskItem({
             </button>
           ) : null}
         </div>
-        {taskPoints > 0 ? (
-          <Badge variant="outline" className="shrink-0 text-xs">
-            <Star className="h-3 w-3 mr-1 text-yellow-500" />
-            {taskPoints} pts
-          </Badge>
-        ) : null}
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          {taskPoints > 0 ? (
+            <Badge variant="outline" className="text-xs">
+              <Star className="h-3 w-3 mr-1 text-yellow-500" />
+              {taskPoints} pts
+            </Badge>
+          ) : null}
+          {isAwaitingApproval ? (
+            <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 text-xs">Awaiting approval</Badge>
+          ) : null}
+        </div>
       </div>
+
+      {/* Attestation controls (cascading admin / QA / lead — server re-checked).
+          The claim → attest rail: verification is where stake points land. */}
+      {showAttestControls ? (
+        <div className="mt-2 ml-8 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
+            onClick={() => onAttest(task.id, true)}
+            disabled={isTaskPending}
+          >
+            <CheckCircle className="h-4 w-4 mr-1" /> Attest
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 bg-red-50 hover:bg-red-100 text-red-700 border-red-200"
+            onClick={() => onAttest(task.id, false)}
+            disabled={isTaskPending}
+          >
+            <XCircle className="h-4 w-4 mr-1" /> Reject
+          </Button>
+        </div>
+      ) : null}
 
       {/* Notes section */}
       {(localNotes.length > 0 || isAssignee) ? (
