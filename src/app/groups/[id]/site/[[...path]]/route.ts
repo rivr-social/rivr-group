@@ -69,6 +69,26 @@ function contentTypeFor(path: string): string {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
+/**
+ * Anchors an HTML document's RELATIVE URLs to the site root. Next.js
+ * canonicalizes `/groups/<id>/site/` to `/groups/<id>/site` (no trailing
+ * slash), so a generated `<link href="style.css">` resolved against the PARENT
+ * path and 404'd — the site rendered completely unstyled. A `<base>` tag pins
+ * resolution to the snapshot root; documents that already declare one are left
+ * untouched.
+ */
+function withSiteBase(html: string, siteRoot: string): string {
+  if (/<base\s/i.test(html)) return html;
+  const baseTag = `<base href="${siteRoot}/" />`;
+  const headOpen = /<head(\s[^>]*)?>/i.exec(html);
+  if (headOpen) {
+    const insertAt = headOpen.index + headOpen[0].length;
+    return `${html.slice(0, insertAt)}${baseTag}${html.slice(insertAt)}`;
+  }
+  // Headless fragment — prepend so relative URLs still anchor correctly.
+  return `${baseTag}${html}`;
+}
+
 /** Renders a minimal, self-contained 404 page for unpublished/missing files. */
 function notFound(message: string): Response {
   const html = `<!DOCTYPE html>
@@ -103,15 +123,20 @@ export async function GET(
   }
 
   const files = await getSiteVersionFiles(id, publication.publishedVersionId);
-  const body = files?.[requestedPath];
-  if (typeof body !== "string") {
+  const rawBody = files?.[requestedPath];
+  if (typeof rawBody !== "string") {
     return notFound("That page could not be found on this site.");
   }
+
+  const contentType = contentTypeFor(requestedPath);
+  const body = contentType.startsWith("text/html")
+    ? withSiteBase(rawBody, `/groups/${id}/site`)
+    : rawBody;
 
   return new Response(body, {
     status: STATUS_OK,
     headers: {
-      "Content-Type": contentTypeFor(requestedPath),
+      "Content-Type": contentType,
       "Cache-Control": CACHE_CONTROL,
       "X-Content-Type-Options": "nosniff",
     },
