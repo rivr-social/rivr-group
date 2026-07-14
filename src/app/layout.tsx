@@ -16,6 +16,7 @@ import { auth } from "@/auth";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
 import { isGroupAdmin } from "@/app/actions/group-admin";
 import { GroupAssistantBubble } from "@/components/group-assistant-bubble";
+import { AppChrome } from "@/components/app-chrome";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -133,6 +134,9 @@ export default async function RootLayout({
                   <AuthGuard>
                     <main className="pt-16 pb-16 md:pb-0">{children}</main>
                   </AuthGuard>
+                  {/* Persistent mobile nav chrome (bottom nav + command palette),
+                      on every page (C18). Hides itself on /login and /auth. */}
+                  <AppChrome />
                   <Toaster />
                   {showAssistantBubble && primaryAgentId ? (
                     <GroupAssistantBubble groupId={primaryAgentId} />
