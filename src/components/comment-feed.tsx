@@ -26,6 +26,8 @@ interface CommentWithReplies extends CommentData {
 interface CommentFeedProps {
   postId?: string
   eventId?: string
+  /** Generic discussion target (job/project/any resource id). Takes precedence. */
+  targetId?: string
   embedded?: boolean
 }
 
@@ -74,10 +76,10 @@ function buildCommentTree(comments: CommentData[]): CommentWithReplies[] {
  * Comment thread feed for event/post discussion pages.
  * Persists comments to the ledger via server actions and fetches on mount.
  */
-export function CommentFeed({ postId, eventId, embedded = false }: CommentFeedProps) {
+export function CommentFeed({ postId, eventId, targetId, embedded = false }: CommentFeedProps) {
   const { toast } = useToast()
   const { currentUser } = useUser()
-  const resourceId = eventId ?? postId ?? ""
+  const resourceId = targetId ?? eventId ?? postId ?? ""
 
   const [comments, setComments] = useState<CommentWithReplies[]>([])
   const [newComment, setNewComment] = useState("")

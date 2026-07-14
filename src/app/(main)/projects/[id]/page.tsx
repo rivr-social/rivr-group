@@ -38,6 +38,7 @@ import {
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { getCurrentUserId } from "@/app/actions/interactions/helpers"
+import { getAuthenticatedActorId } from "@/lib/server-auth"
 import { fetchAgent, fetchAgentChildren, fetchAgentFeed, fetchGroupDetail, fetchGroupRelationships, fetchProjectEvents, fetchResourcesByOwner } from "@/app/actions/graph"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
 import { agentToProject } from "@/lib/graph-adapters"
@@ -48,7 +49,11 @@ import { ProjectJobsTab } from "@/components/project-jobs-tab"
 import { ProjectRolesCard } from "@/components/project-roles-card"
 import { getProjectRolesData } from "@/app/actions/project-roles"
 import { StockTab } from "@/components/stock-tab"
-import { getResourcesByProjectId } from "@/lib/queries/resources"
+import { GroupCalendar } from "@/components/group-calendar"
+import { CommentFeed } from "@/components/comment-feed"
+import { getResourcesByProjectId, getEventsByProjectId, getJobsByProjectId } from "@/lib/queries/resources"
+import { serializeResource, type SerializedResource } from "@/lib/graph-serializers"
+import { resolveEventWindow } from "@/lib/calendar/event-window"
 import { extractStockNeeds, toStockInventory } from "@/lib/stock"
 import { ProjectDistributionTab } from "@/components/project-distribution-tab"
 import { ProjectExpensePanel } from "@/components/project-expense-panel"
@@ -397,21 +402,44 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   })
 
   // Resolve current user ID (unified: local or federated remote-viewer,
-  // normalized to a local agent id) and admin status for the jobs tab.
-  const currentUserId = await getCurrentUserId()
+  // normalized to a local agent id). getCurrentUserId covers local + federated
+  // *sessions* only; an SSO-landed admin holds just the remote-viewer COOKIE,
+  // which only getAuthenticatedActorId reads — without the fallback they render
+  // anonymous and lose every manage/attest affordance (this hid the Jobs-tab
+  // Attest/Reject controls from parent-group admins browsing via SSO).
+  const currentUserId = (await getCurrentUserId()) ?? (await getAuthenticatedActorId())
   // Lead/QA roles + eligible option lists (server-computed authority).
   const projectRoles = await getProjectRolesData(project.id).catch(() => null)
   const projectMeta2 = (agent.metadata ?? {}) as Record<string, unknown>
   const projectGroupId = typeof projectMeta2.groupId === "string" ? projectMeta2.groupId : null
-  const isAdmin = currentUserId
-    ? (currentUserId === ownerId ||
-       (projectGroupId ? await hasGroupWriteAccess(currentUserId, projectGroupId) : false))
-    : false
+  // Authority id = the project resource's OWNING AGENT (the node the server
+  // actions enforce), NOT metadata.groupId — which is often "" or a different
+  // group, so cascading on it alone silently hid admin UI from the real
+  // (often parent-group) admins the server would authorize. hasGroupWriteAccess
+  // cascades via isGroupAdmin's pathIds, so a parent-group admin passes for a
+  // subgroup-owned project. Candidates are tried in authority-strength order.
+  const projectOwnerAgentId = typeof projectMeta2.ownerId === "string" ? projectMeta2.ownerId : ownerId
+  const projectAuthorityIds = Array.from(
+    new Set(
+      [projectOwnerAgentId, projectGroupId, ownerId].filter(
+        (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+      ),
+    ),
+  )
+  let isAdmin = currentUserId ? currentUserId === ownerId : false
+  if (!isAdmin && currentUserId) {
+    for (const candidate of projectAuthorityIds) {
+      if (await hasGroupWriteAccess(currentUserId, candidate)) {
+        isAdmin = true
+        break
+      }
+    }
+  }
 
   // ── Revenue-distribution config ──────────────────────────────────────────
   // The project's owning agent (resources.ownerId) holds the treasury keep; its
   // affiliated/allied groups are the natural downstream cascade candidates.
-  const projectOwnerAgentId = typeof projectMeta2.ownerId === "string" ? projectMeta2.ownerId : ownerId
+  // (`projectOwnerAgentId` is resolved above with the admin-authority set.)
   const distributionConfig = parseProjectDistribution(agent.metadata as Record<string, unknown>)
   const relationshipGroupId = projectOwnerAgentId ?? projectGroupId
   const relationships = relationshipGroupId
@@ -478,6 +506,44 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const stockInventory = toStockInventory(await getResourcesByProjectId(project.id).catch(() => []))
   const projectStockNeeds = extractStockNeeds(agent.metadata as Record<string, unknown>)
 
+  // ── Calendar tab data ── this project's jobs + events, serialized for the
+  // shared GroupCalendar. Jobs persist no date of their own, so the calendar
+  // places them on the project's own schedule (passed as the single project
+  // resource). Event windows are resolved server-side so placement matches the
+  // event-detail page (the helper is runtime-local / UTC-correct on the server).
+  const [calendarEventRows, calendarJobRows] = await Promise.all([
+    getEventsByProjectId(project.id).catch(() => []),
+    getJobsByProjectId(project.id).catch(() => []),
+  ])
+  const calendarEventResources = calendarEventRows.map((r) => serializeResource(r))
+  const calendarJobResources = calendarJobRows.map((r) => serializeResource(r))
+  const calendarProjectResources: SerializedResource[] = [{
+    id: project.id,
+    name: project.name,
+    type: "project",
+    description: project.description ?? null,
+    content: null,
+    url: null,
+    ownerId: projectOwnerAgentId ?? ownerId ?? project.id,
+    isPublic: (agent.visibility ?? "public") === "public",
+    visibility: agent.visibility ?? null,
+    metadata: (agent.metadata ?? {}) as Record<string, unknown>,
+    tags: [],
+    embeds: [],
+    createdAt: typeof project.createdAt === "string" ? project.createdAt : new Date(project.createdAt).toISOString(),
+    updatedAt: typeof project.createdAt === "string" ? project.createdAt : new Date(project.createdAt).toISOString(),
+  }]
+  const calendarEventWindows: Record<string, { start: string; end: string }> = {}
+  for (const r of calendarEventResources) {
+    const win = resolveEventWindow((r.metadata ?? {}) as Record<string, unknown>)
+    if (win.start) {
+      calendarEventWindows[r.id] = {
+        start: win.start.toISOString(),
+        end: (win.end ?? win.start).toISOString(),
+      }
+    }
+  }
+
   const previewSplits = projectOwnerAgentId
     ? await resolveSettlementSplits({
         sellerId: projectOwnerAgentId,
@@ -518,6 +584,10 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         <CardHeader>
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
+              <Badge variant="outline" className="bg-indigo-100 text-indigo-800 border-indigo-200">
+                <Briefcase className="mr-1 h-3 w-3" />
+                Project
+              </Badge>
               <CardTitle className="text-2xl">{project.name}</CardTitle>
               {project.description ? (
                 <p className="text-muted-foreground">{project.description}</p>
@@ -600,9 +670,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
       {/* Tabbed content */}
       <Tabs defaultValue="about">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="about">About</TabsTrigger>
           <TabsTrigger value="jobs">Jobs ({linkedJobCount})</TabsTrigger>
+          <TabsTrigger value="calendar">Calendar</TabsTrigger>
+          <TabsTrigger value="discussion">Discussion</TabsTrigger>
           <TabsTrigger value="team">Team ({members.length})</TabsTrigger>
           <TabsTrigger value="treasury">Treasury</TabsTrigger>
           <TabsTrigger value="stock">Stock</TabsTrigger>
@@ -737,6 +809,29 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             currentUserId={currentUserId}
             isAdmin={isAdmin}
           />
+        </TabsContent>
+
+        {/* ── Calendar Tab ──────────────────────────────────────────────── */}
+        <TabsContent value="calendar" className="mt-4">
+          <GroupCalendar
+            eventResources={calendarEventResources}
+            projectResources={calendarProjectResources}
+            jobResources={calendarJobResources}
+            groupName={project.name}
+            eventWindows={calendarEventWindows}
+          />
+        </TabsContent>
+
+        {/* ── Discussion Tab ────────────────────────────────────────────── */}
+        <TabsContent value="discussion" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Discussion</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CommentFeed targetId={project.id} embedded />
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* ── Team Tab ──────────────────────────────────────────────────── */}

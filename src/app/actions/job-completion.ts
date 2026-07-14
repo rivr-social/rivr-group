@@ -125,6 +125,40 @@ export interface MarkJobDoneResult {
   };
 }
 
+/** A skillfulness/difficulty rating (1–100 slider values) driving Thanks valuation. */
+export interface VolunteerRatingOverride {
+  skillfulness: number;
+  difficulty: number;
+}
+
+/** Optional inputs to {@link markJobDoneAction}. */
+export interface MarkJobDoneOptions {
+  /**
+   * Volunteer-pay override authored at the Complete action (the voucher-creator
+   * dialog's skillfulness/difficulty sliders). When set on a `volunteer` job,
+   * these ratings value EVERY volunteer's Thanks voucher — each still scaled by
+   * that volunteer's own hours worked — overriding their claim-complete
+   * self-ratings so the completer's dialog choice is authoritative. Ignored for
+   * non-volunteer pay kinds.
+   */
+  volunteerRating?: VolunteerRatingOverride | null;
+}
+
+/**
+ * Normalizes a raw volunteer-rating override into finite skillfulness/difficulty
+ * numbers, or `null` when absent/malformed. `computeVoucherThanksValue` clamps
+ * to the slider range, so out-of-range values are safe here.
+ */
+function normalizeVolunteerRating(
+  override: VolunteerRatingOverride | null | undefined,
+): { skillfulness: number; difficulty: number } | null {
+  if (!override) return null;
+  const { skillfulness, difficulty } = override;
+  if (typeof skillfulness !== "number" || !Number.isFinite(skillfulness)) return null;
+  if (typeof difficulty !== "number" || !Number.isFinite(difficulty)) return null;
+  return { skillfulness, difficulty };
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** DISTINCT agent ids holding an active `job-claim` edge on the job. */
@@ -632,9 +666,15 @@ async function settleVolunteerVoucher(input: {
  *
  * @param jobId UUID of the job (or legacy shift) resource.
  */
-export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResult> {
+export async function markJobDoneAction(
+  jobId: string,
+  options?: MarkJobDoneOptions,
+): Promise<MarkJobDoneResult> {
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, message: "You must be logged in to mark a job done." };
+
+  // Voucher-creator override authored at the Complete action (volunteer jobs).
+  const volunteerRatingOverride = normalizeVolunteerRating(options?.volunteerRating);
 
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
     return { success: false, message: "Invalid job id." };
@@ -725,7 +765,11 @@ export async function markJobDoneAction(jobId: string): Promise<MarkJobDoneResul
             entries.push({ assigneeId, amountCents: 0, status: "already_paid" });
             continue;
           }
-          const { skillfulness, difficulty } = await getAssigneeClaimRatings(jobId, assigneeId);
+          // The completer's voucher-creator dialog ratings, when provided, value
+          // EVERY volunteer's voucher (still scaled by their own hours); else
+          // fall back to each volunteer's own claim-complete self-ratings.
+          const { skillfulness, difficulty } =
+            volunteerRatingOverride ?? (await getAssigneeClaimRatings(jobId, assigneeId));
           const hours = await resolveVolunteerHours(jobId, assigneeId, maxHours);
           const thanksCount = computeVoucherThanksValue({ skillfulness, difficulty, hours });
           const settlement = await settleVolunteerVoucher({

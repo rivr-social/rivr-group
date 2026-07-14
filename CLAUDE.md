@@ -446,6 +446,50 @@ project's board on mount so cards show real numbers without expanding. Tests:
   payKind-gated (they fire for all pay kinds, feeding the voucher valuation).
   Test: `actions/__tests__/job-completion-paykind-edit.test.ts` (`pnpm test:db`).
 
+## Jobs/PM live-testing fixes (2026-07-14, round 4)
+
+- **Volunteer Complete → voucher-creator dialog** — a `volunteer`-payKind job's
+  Complete action now opens `components/volunteer-complete-dialog.tsx`
+  (skillfulness + difficulty sliders + live Thanks-per-hour preview) instead of a
+  plain confirm. Confirming calls `markJobDoneAction(jobId, { volunteerRating })`
+  — a NEW optional 2nd arg that values EVERY volunteer's voucher from the
+  completer's dialog ratings (each still scaled by their own hours), overriding
+  the claim-complete self-ratings. Wired on both admin Complete surfaces:
+  `job-admin-panel.tsx` ("Complete" button) and `job-points-tab.tsx` ("Attest &
+  pay Thanks"; takes new `payKind`/`estimatedHours` props). The Thanks rail is
+  unchanged (transfer group-held Thanks, never mint). MCP `rivr.jobs.mark_done`
+  passes only `jobId` (falls back to claim ratings). Test:
+  `actions/__tests__/job-completion-volunteer.test.ts` (override case, `pnpm test:db`).
+- **Attest visibility on the PROJECT page** — `app/(main)/projects/[id]/page.tsx`
+  was the one surface with BOTH the remote-viewer and wrong-authority defects:
+  it resolved the viewer via bare `getCurrentUserId()` (no
+  `getAuthenticatedActorId()` cookie fallback → SSO admins anonymous) and
+  cascaded `isAdmin` against `metadata.groupId` (often "") instead of the project
+  resource's OWNER. Now uses the fallback and cascades against the owning-agent
+  authority set (`projectOwnerAgentId`/`groupId`/`ownerId`), so parent-group
+  admins get the Jobs-tab Attest/Reject controls + every `canManage` panel. The
+  job-detail page + its tabs were already correct (why attest showed on some
+  views but not others).
+- **Pay badge on the badge-detail job list** — `app/badges/[id]/badge-detail.tsx`
+  "Available Jobs" cards now render the `describeJobPay` badge (the only card
+  surface that was missing it; project-jobs-tab + job-board-tab already had it).
+- **Header type chips** — a "Job" chip (`job-detail.tsx`) and "Project" chip
+  (project page header) mark page type.
+- **Discussion on jobs & projects** — a Discussion tab on both pages reuses the
+  generic `components/comment-feed.tsx` (new `targetId` prop) bound to the
+  job/project resource id — the same thread primitive events use, via
+  `postCommentAction`/`fetchCommentsAction` (no schema/federation change).
+- **Calendar on projects** — a Calendar tab reuses `components/group-calendar.tsx`
+  fed by `getEventsByProjectId` + `getJobsByProjectId` (serialized), placing jobs
+  on the project's own schedule.
+- **Work periods out of Inventory** — `lib/stock.ts` `toStockInventory` now
+  filters via `isStockInventoryResource`, which excludes non-tangible
+  `resourceKind`s (`NON_STOCK_RESOURCE_KINDS` = `workperiod`, `fund`). Fixes all
+  three inventory surfaces (job/project/group) at the shared adapter. Test:
+  `lib/__tests__/stock.test.ts` (`pnpm test:unit`).
+- **Zero-task Complete** — already satisfied: `JobAdminPanel`'s Complete/Mark-done
+  renders on `canManage` with no task-count gate (the volunteer branch likewise).
+
 ## Sovereign payout → global Connect bridge (design only, 2026-07-14)
 
 `docs/active/sovereign-payout-connect-bridge-design-2026-07-14.md` — SCOPE ONLY,

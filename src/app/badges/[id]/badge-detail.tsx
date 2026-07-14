@@ -29,6 +29,7 @@ import {
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 import type { UserBadge, TrainingModule, JobShift } from "@/types/domain"
+import { describeJobPay, JOB_PAY_TONE_CLASS } from "@/lib/job-pay"
 
 interface BadgeDetailClientProps {
   badgeId: string
@@ -419,6 +420,7 @@ export function BadgeDetailClient({ badgeId, allBadges, isEarned, jobShifts }: B
                 <CardContent>
                   <div className="space-y-3">
                     {relevantJobs.map((job) => {
+                      const pay = describeJobPay(job)
                       return (
                         <Link key={job.id} href={`/groups/${job.groupId}?tab=jobs&job=${job.id}`}>
                           <Card className="p-4 hover:shadow-md transition-shadow cursor-pointer border border-gray-200">
@@ -426,6 +428,9 @@ export function BadgeDetailClient({ badgeId, allBadges, isEarned, jobShifts }: B
                               <div className="flex-1">
                                 <div className="flex items-center gap-2 mb-2">
                                   <h4 className="font-medium">{job.title}</h4>
+                                  <Badge variant="outline" className={`text-xs ${JOB_PAY_TONE_CLASS[pay.tone]}`}>
+                                    {pay.label}
+                                  </Badge>
                                   <span className={`text-xs px-2 py-1 rounded-full ${
                                     job.priority === 'high' ? 'bg-red-100 text-red-800' :
                                     job.priority === 'medium' ? 'bg-yellow-100 text-yellow-800' :
@@ -433,9 +438,11 @@ export function BadgeDetailClient({ badgeId, allBadges, isEarned, jobShifts }: B
                                   }`}>
                                     {job.priority}
                                   </span>
-                                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                    {job.totalPoints} pts
-                                  </span>
+                                  {job.totalPoints > 0 && pay.tone !== "points" && (
+                                    <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                      {job.totalPoints} pts
+                                    </span>
+                                  )}
                                 </div>
                                 <p className="text-sm text-gray-600 mb-2 line-clamp-2">{job.description}</p>
                                 <div className="flex items-center gap-4 text-xs text-gray-500">

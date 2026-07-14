@@ -52,6 +52,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { BadgeCheck, ListPlus, Pencil } from "lucide-react"
+import { VolunteerCompleteDialog } from "@/components/volunteer-complete-dialog"
 import type { JobShift } from "@/types/domain"
 
 interface JobAdminPanelProps {
@@ -84,6 +85,8 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
   const [isSaving, setIsSaving] = useState(false)
   const [isAddingTask, setIsAddingTask] = useState(false)
   const [isCompleting, setIsCompleting] = useState(false)
+  // Volunteer jobs settle Thanks via a voucher-creator dialog on Complete.
+  const [isVolunteerCompleteOpen, setIsVolunteerCompleteOpen] = useState(false)
 
   // Edit drafts
   const [draftName, setDraftName] = useState(job.title)
@@ -498,32 +501,50 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
             </DialogContent>
           </Dialog>
 
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button size="sm" disabled={isCompleted || isCompleting}>
+          {job.payKind === "volunteer" ? (
+            <>
+              <Button
+                size="sm"
+                disabled={isCompleted || isCompleting}
+                onClick={() => setIsVolunteerCompleteOpen(true)}
+              >
                 <BadgeCheck className="mr-1.5 h-3.5 w-3.5" />
-                {isCompleted ? "Completed" : isCompleting ? "Completing..." : "Mark done"}
+                {isCompleted ? "Completed" : "Complete"}
               </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Mark this job done?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {job.payKind === "volunteer"
-                    ? "This completes the job and records a contribution for every assignee. No cash moves — each volunteer receives a Thanks voucher the group claims from them, valued from their claim-complete ratings."
-                    : job.payKind
+              <VolunteerCompleteDialog
+                jobId={job.id}
+                open={isVolunteerCompleteOpen}
+                onOpenChange={setIsVolunteerCompleteOpen}
+                estimatedHours={job.maxHours ?? null}
+                onCompleted={() => router.refresh()}
+              />
+            </>
+          ) : (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button size="sm" disabled={isCompleted || isCompleting}>
+                  <BadgeCheck className="mr-1.5 h-3.5 w-3.5" />
+                  {isCompleted ? "Completed" : isCompleting ? "Completing..." : "Mark done"}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Mark this job done?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {job.payKind
                       ? "This completes the job, records a contribution for every assignee, and pays cash compensation — from the project's wallet when the job belongs to a project (its approved budget), otherwise from the group treasury wallet. Underfunded payouts are parked and retried the next time you mark it done."
                       : "This completes the job and records a contribution for every assignee. This is a points-only job — no cash moves."}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel disabled={isCompleting}>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={() => void handleMarkDone()} disabled={isCompleting}>
-                  {isCompleting ? "Completing..." : "Mark done"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={isCompleting}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => void handleMarkDone()} disabled={isCompleting}>
+                    {isCompleting ? "Completing..." : "Mark done"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
       </CardContent>
     </Card>

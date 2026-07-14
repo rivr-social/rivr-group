@@ -276,6 +276,40 @@ describe("markJobDoneAction — volunteer pay", () => {
       expect(await voucherCount(db, volunteer.id)).toBe(1);
     }));
 
+  it("values the voucher from the Complete-action rating override, not the claim-complete ratings", () =>
+    withTestTransaction(async (db) => {
+      // Claim-complete recorded a LOW self-rating (skill 1 × diff 1), but the
+      // admin's voucher-creator dialog on Complete sets skill 100 × diff 100.
+      // The override must win: sqrt(100 × 100) = 100, × 2h budget = 200 Thanks.
+      const { group, volunteer, admin, job } = await seedVolunteerJob(db, {
+        skillfulness: 1,
+        difficulty: 1,
+        maxHours: 2,
+      });
+      await seedThanksTokens(db, group.id, 250);
+
+      currentUserId.mockResolvedValue(admin.id);
+      const result = await markJobDoneAction(job.id, {
+        volunteerRating: { skillfulness: 100, difficulty: 100 },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.payout?.entries[0].status).toBe("volunteer_voucher");
+      expect(result.payout?.entries[0].thanksTransferred).toBe(200);
+      expect(await thanksTokenCount(db, volunteer.id)).toBe(200);
+      expect(await thanksTokenCount(db, group.id)).toBe(50);
+
+      const voucherRows = (await db.execute(sql`
+        SELECT (metadata->'voucherValues'->>'thanksValue')::int AS thanks,
+               (metadata->>'skillfulness')::int AS skill,
+               (metadata->>'difficulty')::int AS difficulty
+        FROM resources WHERE owner_id = ${volunteer.id}::uuid AND type = 'voucher'
+      `)) as Array<Record<string, unknown>>;
+      expect(Number(voucherRows[0].thanks)).toBe(200);
+      expect(Number(voucherRows[0].skill)).toBe(100);
+      expect(Number(voucherRows[0].difficulty)).toBe(100);
+    }));
+
   it("parks as pending when the group holds too few Thanks, then settles on retry (1-hour/min-rating floor)", () =>
     withTestTransaction(async (db) => {
       const group = await createTestGroup(db, { name: "Vol Floor Group" });
