@@ -23,7 +23,8 @@ import { Progress } from "@/components/ui/progress"
 import { MapPin, Users, Star, Calendar, Plus, Search, ChevronDown, ChevronUp, Briefcase, Shield, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { fetchAgentChildren, fetchResourcesByOwner, fetchGroupDetail } from "@/app/actions/graph"
+import { fetchAgentChildren, fetchResourcesByOwner, fetchGroupDetail, fetchProjectJobBoard } from "@/app/actions/graph"
+import type { ProjectJobBoardData, ProjectJobBoardJob } from "@/app/actions/graph"
 import type { SerializedAgent, SerializedResource } from "@/lib/graph-serializers"
 import { applyToJob, fetchMyJobApplicationIds } from "@/app/actions/interactions"
 import { useToast } from "@/components/ui/use-toast"
@@ -47,33 +48,15 @@ interface ProjectDisplay {
   subgroupName?: string
 }
 
-interface JobTask {
-  id: string
-  name: string
-  description: string
-  points: number
-  completed: boolean
-}
-
-interface JobDisplay {
-  id: string
-  title: string
-  status: string
-  location: string
-  assignees: string[]
-  maxAssignees: number
-  totalPoints: number
-  tasks: JobTask[]
-  requiredBadges: string[]
-}
+// Job/points/completion for a project card come from `fetchProjectJobBoard`
+// (ProjectJobBoardData) — aggregated server-side by projectId across every
+// owning subtree agent, so subgroup-owned jobs are no longer dropped.
 
 // ---------- Helpers for mapping server data to display shapes ----------
 
 const DEFAULT_STATUS = "active"
 const DEFAULT_CATEGORY = "General"
 const DEFAULT_PRIORITY = "medium"
-const DEFAULT_MAX_ASSIGNEES = 5
-const ZERO_POINTS = 0
 
 function mapAgentToProject(agent: SerializedAgent, groupId: string): ProjectDisplay {
   const meta = agent.metadata ?? {}
@@ -103,49 +86,6 @@ function mapResourceToProject(resource: SerializedResource, groupId: string): Pr
   }
 }
 
-function mapResourceToJob(resource: SerializedResource): JobDisplay {
-  const meta = resource.metadata ?? {}
-  const rawTasks = Array.isArray(meta.tasks) ? (meta.tasks as Record<string, unknown>[]) : []
-  const tasks: JobTask[] = rawTasks.map((t, idx) => ({
-    id: String(t.id ?? `task-${idx}`),
-    name: String(t.name ?? t.title ?? "Task"),
-    description: String(t.description ?? ""),
-    points: Number(t.points ?? ZERO_POINTS),
-    completed: Boolean(t.completed),
-  }))
-
-  const rawAssignees = Array.isArray(meta.assignees) ? (meta.assignees as string[]) : []
-  const rawBadges = Array.isArray(meta.requiredBadges) ? (meta.requiredBadges as string[]) : []
-  const pointsFromTasks = tasks.reduce((sum, t) => sum + t.points, ZERO_POINTS)
-  const metaPoints = Number(meta.totalPoints ?? meta.points ?? ZERO_POINTS)
-
-  return {
-    id: resource.id,
-    title: resource.name,
-    status: String(meta.status ?? DEFAULT_STATUS),
-    location: String(meta.location ?? ""),
-    assignees: rawAssignees,
-    maxAssignees: Number(meta.maxAssignees ?? DEFAULT_MAX_ASSIGNEES),
-    totalPoints: metaPoints > ZERO_POINTS ? metaPoints : pointsFromTasks,
-    tasks,
-    requiredBadges: rawBadges,
-  }
-}
-
-function calculateCompletion(jobs: JobDisplay[]): number {
-  let totalTasks = 0
-  let completedTasks = 0
-  for (const job of jobs) {
-    totalTasks += job.tasks.length
-    completedTasks += job.tasks.filter((t) => t.completed).length
-  }
-  return totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
-}
-
-function calculateTotalPoints(jobs: JobDisplay[]): number {
-  return jobs.reduce((sum, job) => sum + job.totalPoints, ZERO_POINTS)
-}
-
 // ---------- Component ----------
 
 interface JobBoardTabProps {
@@ -158,7 +98,9 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
 
   // Data state
   const [projects, setProjects] = useState<ProjectDisplay[]>([])
-  const [jobsByProject, setJobsByProject] = useState<Record<string, JobDisplay[]>>({})
+  // Per-project jobs/points/completion aggregated by projectId across ALL
+  // owning subtree agents (server-computed) — keyed by project id.
+  const [boardByProject, setBoardByProject] = useState<Record<string, ProjectJobBoardData>>({})
   const [appliedJobIds, setAppliedJobIds] = useState<Set<string>>(new Set())
 
   // Loading / error state
@@ -238,6 +180,18 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
         if (cancelled) return
         setProjects(allProjects)
         setAppliedJobIds(new Set(appliedIds))
+
+        // Eager-load each project's jobs/points/completion by projectId
+        // linkage (owner-agnostic) so cards show REAL data without expanding —
+        // the previous group-owned-only scope showed 0 for subgroup projects.
+        void Promise.all(
+          allProjects.map(async (p) => {
+            const board = await fetchProjectJobBoard(p.id).catch(() => null)
+            if (board && !cancelled) {
+              setBoardByProject((prev) => ({ ...prev, [p.id]: board }))
+            }
+          }),
+        )
       } catch (err) {
         console.error("[JobBoardTab] failed to load projects:", err)
         if (!cancelled) {
@@ -258,32 +212,18 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
 
   // ---------- Fetch jobs when a project is expanded ----------
 
-  const loadJobsForProject = useCallback(async (projectId: string) => {
-    if (jobsByProject[projectId]) return // already loaded
+  const loadBoardForProject = useCallback(async (projectId: string) => {
+    if (boardByProject[projectId]) return // already loaded (eagerly or before)
 
     setLoadingJobs((prev) => ({ ...prev, [projectId]: true }))
     try {
-      // Jobs are RESOURCES owned by the group (resources.owner_id FKs to
-      // agents, and a project is a resource, so a job cannot own to the project
-      // id directly) and linked to the project via metadata.projectId — exactly
-      // how the project detail page filters. fetchResourcesByOwner(projectId)
-      // returned nothing (jobs aren't owned by the project), so the dropdown
-      // always showed "No jobs". Fetch the group's resources and keep the jobs
-      // linked to THIS project.
-      const resources = await fetchResourcesByOwner(groupId)
-      const jobResources = resources.filter((r) => {
-        const meta = r.metadata ?? {}
-        const isJob =
-          r.type === "listing" ||
-          r.type === "job" ||
-          String(meta.resourceKind ?? "").toLowerCase() === "job" ||
-          String(meta.entityType ?? "").toLowerCase() === "job"
-        return isJob && String(meta.projectId ?? "") === projectId
-      })
-      setJobsByProject((prev) => ({
-        ...prev,
-        [projectId]: jobResources.map(mapResourceToJob),
-      }))
+      // Jobs link to a project purely by `metadata.projectId`, and the job/task
+      // rows can be owned by ANY subtree agent (the parent group, an owning
+      // circle/subgroup, or the project owner). fetchProjectJobBoard aggregates
+      // them by projectId regardless of owner (visibility-respecting) — the old
+      // fetchResourcesByOwner(groupId) scan dropped every subgroup-owned job.
+      const board = await fetchProjectJobBoard(projectId)
+      setBoardByProject((prev) => ({ ...prev, [projectId]: board }))
     } catch (err) {
       console.error(`[JobBoardTab] failed to load jobs for project ${projectId}:`, err)
       toast({
@@ -294,7 +234,7 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
     } finally {
       setLoadingJobs((prev) => ({ ...prev, [projectId]: false }))
     }
-  }, [jobsByProject, toast, groupId])
+  }, [boardByProject, toast])
 
   // ---------- Toggle project expansion ----------
 
@@ -302,11 +242,11 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
     setExpandedProjects((prev) => {
       const next = { ...prev, [projectId]: !prev[projectId] }
       if (next[projectId]) {
-        loadJobsForProject(projectId)
+        loadBoardForProject(projectId)
       }
       return next
     })
-  }, [loadJobsForProject])
+  }, [loadBoardForProject])
 
   // ---------- Apply to job ----------
 
@@ -501,11 +441,12 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
             </Card>
           ) : (
             filteredProjects.map((project) => {
-              const projectJobs = jobsByProject[project.id] ?? []
-              const completion = calculateCompletion(projectJobs)
-              const totalPoints = calculateTotalPoints(projectJobs)
+              const board = boardByProject[project.id]
+              const projectJobs: ProjectJobBoardJob[] = board?.jobs ?? []
+              const completion = board?.completion ?? 0
+              const totalPoints = board?.totalPoints ?? 0
               const isExpanded = expandedProjects[project.id] || false
-              const isLoadingProjectJobs = loadingJobs[project.id] || false
+              const isLoadingProjectJobs = (loadingJobs[project.id] || false) && !board
 
               return (
                 <Collapsible

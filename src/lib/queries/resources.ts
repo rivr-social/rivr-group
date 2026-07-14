@@ -373,6 +373,70 @@ export async function getResourcesByProjectId(
 }
 
 /**
+ * Returns JOB/shift resources linked to a project via `metadata.projectId`,
+ * regardless of which subtree agent OWNS them (the parent group, an owning
+ * circle/subgroup, or the project resource's owner). The group Jobs board and
+ * the project detail page both link jobs to projects purely by this metadata
+ * key — scoping the fetch to a single owner (e.g. `getResourcesByOwner(groupId)`)
+ * silently drops every job owned by a subgroup, which is why a subgroup-owned
+ * project rendered "No jobs" / 0 points. Visibility is enforced by the caller
+ * (server action) via `filterViewableResources`.
+ *
+ * @param projectId Project resource/agent UUID (string).
+ * @param limit Max rows to return. Defaults to `200`.
+ */
+export async function getJobsByProjectId(
+  projectId: string,
+  limit = 200,
+): Promise<Resource[]> {
+  const result = await db.execute(sql`
+    SELECT r.*
+    FROM resources r
+    WHERE r.deleted_at IS NULL
+      AND (
+        r.type IN ('job', 'shift')
+        OR r.metadata->>'resourceKind' = 'job'
+        OR r.metadata->>'entityType' = 'job'
+      )
+      AND (
+        r.metadata->>'projectId' = ${projectId}
+        OR r.metadata->>'managingProjectId' = ${projectId}
+        OR r.metadata->>'project_id' = ${projectId}
+        OR r.metadata->>'managing_project_id' = ${projectId}
+      )
+    ORDER BY r.created_at DESC
+    LIMIT ${limit}
+  `);
+
+  return (result as Record<string, unknown>[]).map(rowToResource);
+}
+
+/**
+ * Returns the non-deleted child `task` resources for a set of jobs (linked via
+ * `metadata.jobId`), oldest first. Owner-agnostic — used to compute a job's
+ * real points/completion from its child tasks (the current task model), which
+ * the legacy embedded `metadata.tasks` array does not reflect.
+ *
+ * @param jobIds Job resource UUIDs.
+ */
+export async function getTasksByJobIds(jobIds: string[]): Promise<Resource[]> {
+  if (jobIds.length === 0) return [];
+  const jobIdList = sql.join(
+    jobIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const rows = await db.query.resources.findMany({
+    where: and(
+      eq(resources.type, "task"),
+      isNull(resources.deletedAt),
+      sql`${resources.metadata}->>'jobId' IN (${jobIdList})`,
+    ),
+    orderBy: [asc(resources.createdAt)],
+  });
+  return rows as Resource[];
+}
+
+/**
  * Returns tangible-stock resources (material/asset REA types) linked to a job
  * via `metadata.jobId`, for the job's Stock → Inventory subtab.
  *
