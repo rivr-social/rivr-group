@@ -103,6 +103,14 @@ export {
 export type { ShareClassRow, ShareHolder } from './share-classes-types';
 
 export {
+  getGroupTreasuryLedgerAction,
+} from './treasury-ledger';
+export type {
+  TreasuryLedgerEntry,
+  GroupTreasuryLedger,
+} from './treasury-ledger';
+
+export {
   backfillConnectAccountsAction,
 } from './connect-backfill';
 export type {
