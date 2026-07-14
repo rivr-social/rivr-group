@@ -53,10 +53,22 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   // viewer may manage it (job owner OR content-write on the owning group).
   const stockInventory = toStockInventory(stockResources)
   const stockNeeds = extractStockNeeds((jobResource?.metadata ?? {}) as Record<string, unknown>)
-  const stockCanManage = currentUserId
-    ? job?.createdBy === currentUserId ||
-      (!!job?.groupId && (await hasGroupWriteAccess(currentUserId, job.groupId)))
-    : false
+  // Authoritative owning agent = the job RESOURCE's owner_id — the exact node
+  // the server actions (markJobDoneAction / updateTaskStatus / job-management)
+  // enforce against. The domain `job.groupId` reads `metadata.groupId`, which
+  // is often "" or points at a DIFFERENT group than the owner, so gating the
+  // admin UI on it silently hid the panel from admins the server would happily
+  // authorize (and `hasGroupWriteAccess` was skipped entirely on an empty
+  // groupId). `hasGroupWriteAccess` cascades via `isGroupAdmin`, so a
+  // parent-group admin passes here for a subgroup-owned job.
+  const owningAgentId = jobResource?.ownerId ?? (job?.groupId || null)
+  const stockCanManage = Boolean(
+    currentUserId &&
+      owningAgentId &&
+      (owningAgentId === currentUserId ||
+        job?.createdBy === currentUserId ||
+        (await hasGroupWriteAccess(currentUserId, owningAgentId))),
+  )
   // Same authority set gates the admin panel (edit / add task / mark done).
   const canManage = stockCanManage
 
@@ -64,7 +76,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   // project lead / QA resolved from the job's project. Server-computed — the
   // client user-context cannot see federated remote-viewer sessions.
   let canAttest = canManage
-  if (!canAttest && currentUserId && job?.groupId) {
+  if (!canAttest && currentUserId && owningAgentId) {
     const { resolveProjectAuthority, canAttestWork } = await import("@/lib/work-completion")
     const jobMeta = (jobResource?.metadata ?? {}) as Record<string, unknown>
     const authority = await resolveProjectAuthority({
@@ -72,8 +84,14 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       jobId,
       projectId: typeof jobMeta.projectId === "string" ? jobMeta.projectId : null,
     })
-    canAttest = await canAttestWork(currentUserId, job.groupId, authority)
+    canAttest = await canAttestWork(currentUserId, owningAgentId, authority)
   }
+
+  // Admin QA review data (recorded work periods + claims + attested points +
+  // discrepancies). Server-computed authority; null for non-admins. Only
+  // fetched when the viewer can manage or attest — the action re-checks anyway.
+  const { getJobQaReviewData } = await import("@/app/actions/job-qa")
+  const reviewData = canManage || canAttest ? await getJobQaReviewData(jobId).catch(() => null) : null
 
   return (
     <JobDetailClient
@@ -90,6 +108,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       canManage={canManage}
       canAttest={canAttest}
       share={share}
+      reviewData={reviewData}
     />
   )
 }
