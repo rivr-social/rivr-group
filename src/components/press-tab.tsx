@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { AlertCircle, Calendar, ExternalLink, FileText, Instagram, Loader2, Plus, Video } from "lucide-react"
+import { AlertCircle, Calendar, ExternalLink, FileText, Instagram, LayoutGrid, Loader2, Plus, Rows3, Video } from "lucide-react"
 import { fetchGroupPressFeedAction, type GroupPressSources, type PressFeedItem, updateGroupPressSourcesAction } from "@/app/actions/press"
 import type { SerializedResource } from "@/lib/graph-serializers"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -14,7 +14,8 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
 import { NewsletterTab } from "@/components/newsletter-tab"
-import { MediaGallery } from "@/components/media-gallery"
+import { MediaGallery, type MediaGalleryLayout } from "@/components/media-gallery"
+import { cn } from "@/lib/utils"
 import { DesignEditorLazy } from "@/components/design/design-editor-lazy"
 import type { GalleryItem } from "@/lib/gallery"
 
@@ -29,6 +30,9 @@ type PressTabProps = {
 export function PressTab({ groupId, isGroupAdmin, pressResources, galleryItems = [] }: PressTabProps) {
   const { toast } = useToast()
   const [activeTab, setActiveTab] = useState("featured")
+  // Gallery presentation toggle: Instagram-style dense grid (default) vs the
+  // captioned card list (D22).
+  const [galleryLayout, setGalleryLayout] = useState<MediaGalleryLayout>("grid")
   const [isPending, startTransition] = useTransition()
   const [sources, setSources] = useState<GroupPressSources>({})
   const [articles, setArticles] = useState<Array<{
@@ -252,8 +256,40 @@ export function PressTab({ groupId, isGroupAdmin, pressResources, galleryItems =
         <TabsContent value="media" className="space-y-6">
           {/* Group media gallery (posts + image/video + listing resources). */}
           <div className="space-y-3">
-            <h3 className="text-sm font-medium text-muted-foreground">Gallery</h3>
-            <MediaGallery items={galleryItems} emptyMessage="No media yet." />
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-muted-foreground">Gallery</h3>
+              {galleryItems.length > 0 ? (
+                <div className="inline-flex items-center gap-1 rounded-md border p-0.5" role="group" aria-label="Gallery layout">
+                  <button
+                    type="button"
+                    onClick={() => setGalleryLayout("grid")}
+                    aria-pressed={galleryLayout === "grid"}
+                    aria-label="Grid view"
+                    title="Grid view"
+                    className={cn(
+                      "inline-flex h-7 w-7 items-center justify-center rounded-sm transition-colors",
+                      galleryLayout === "grid" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGalleryLayout("cards")}
+                    aria-pressed={galleryLayout === "cards"}
+                    aria-label="List view"
+                    title="List view"
+                    className={cn(
+                      "inline-flex h-7 w-7 items-center justify-center rounded-sm transition-colors",
+                      galleryLayout === "cards" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Rows3 className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <MediaGallery items={galleryItems} emptyMessage="No media yet." layout={galleryLayout} />
           </div>
 
           {/* External media sources (YouTube / Instagram). */}

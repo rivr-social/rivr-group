@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { MapPin, Users, Star, Calendar, Plus, Search, ChevronDown, ChevronUp, Briefcase, Shield, Loader2 } from "lucide-react"
+import { MapPin, Users, Star, Calendar, Plus, Search, ChevronDown, ChevronUp, Briefcase, Shield, Loader2, FolderTree } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { fetchAgentChildren, fetchResourcesByOwner, fetchGroupDetail, fetchProjectJobBoard } from "@/app/actions/graph"
@@ -483,7 +483,12 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
                                 {project.status.charAt(0).toUpperCase() + project.status.slice(1)}
                               </Badge>
                               {project.subgroupName && (
-                                <Badge variant="outline" className="text-xs">
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs font-normal text-muted-foreground gap-1"
+                                  title={`In subgroup ${project.subgroupName}`}
+                                >
+                                  <FolderTree className="h-3 w-3" />
                                   {project.subgroupName}
                                 </Badge>
                               )}

@@ -26,7 +26,7 @@ import { GroupProfileHeader } from "@/components/group-profile-header"
 import { buildGroupStructuredData, serializeJsonLd } from "@/lib/structured-data"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
 import { isGroupAdmin as isGroupAdminCascade } from "@/app/actions/group-admin"
-import { calculateTotalStakes, getMemberStakesForGroup } from "@/lib/queries/stakes"
+import { calculateTotalStakes, getMemberStakesForGroup, getMemberSubgroupPointsBreakdown, type MemberSubgroupPoints } from "@/lib/queries/stakes"
 import { getRecordedContributions } from "@/app/actions/interactions"
 import { getGroupMembersByClass } from "@/app/actions/wallet/net-allocation"
 import { parseNetAllocationTree } from "@/lib/net-allocation"
@@ -326,6 +326,16 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   })
   const serverTotalStakes = serverMemberStakes.length > 0 ? calculateTotalStakes(serverMemberStakes) : 0
 
+  // Per-subgroup points breakdown (D21): each member's task points attributed to
+  // the owning subgroup. Serialized to a plain object for the client Stake tab
+  // (Map does not cross the RSC boundary). Never fails the page.
+  const subgroupPointsMap = await getMemberSubgroupPointsBreakdown(id).catch((error) => {
+    console.error("[group-page] getMemberSubgroupPointsBreakdown failed:", error)
+    return new Map<string, MemberSubgroupPoints[]>()
+  })
+  const memberSubgroupPoints: Record<string, MemberSubgroupPoints[]> =
+    Object.fromEntries(subgroupPointsMap)
+
   // Admin-only calendar work sessions (getGroupWorkPeriods gates internally —
   // non-admin viewers get [] and the calendar kind simply never renders).
   const { getGroupWorkPeriods } = await import("@/app/actions/calendar-work")
@@ -454,6 +464,7 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         stakeActivity={stakeActivity}
         serverMemberStakes={serverMemberStakes}
         serverTotalStakes={serverTotalStakes}
+        memberSubgroupPoints={memberSubgroupPoints}
         recordedContributions={recordedContributions}
         netAllocationRules={netAllocationRules}
         netAllocationClasses={netAllocationClasses}

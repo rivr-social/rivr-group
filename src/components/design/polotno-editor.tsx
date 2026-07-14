@@ -42,10 +42,19 @@ const EXPORT_PIXEL_RATIO = 1;
 const DEFAULT_CANVAS_WIDTH = 1080;
 const DEFAULT_CANVAS_HEIGHT = 1080;
 /**
- * Polotno renders fully without a license key for in-app use (no paywall per the
- * product decision); an empty key disables only the hosted convenience services.
+ * Polotno license key.
+ *
+ * The editor renders and exports fully without a key (no paywall per the product
+ * decision), but an unlicensed store logs a "license key missing" warning and
+ * may show a small credit. Supply a key to silence it: set
+ * `NEXT_PUBLIC_POLOTNO_KEY` (a public build-time env var — the value is baked
+ * into the client bundle, which is fine for Polotno's client-side key). When the
+ * var is absent we fall back to an empty key and the editor still works, just
+ * with the SDK's default unlicensed behavior. Cameron must supply the key (see
+ * CLAUDE.md "Design editor / Polotno"). We do NOT suppress the watermark beyond
+ * Polotno's own `showCredit: false` option below.
  */
-const POLOTNO_KEY = "";
+const POLOTNO_KEY = process.env.NEXT_PUBLIC_POLOTNO_KEY ?? "";
 
 /** Fallback canvas placement size when an image's natural size can't be read. */
 const FALLBACK_IMAGE_SIZE = 200;

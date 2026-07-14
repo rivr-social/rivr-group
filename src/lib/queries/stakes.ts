@@ -102,6 +102,84 @@ export async function getSubtreeTaskPointsByMember(
   return byMember;
 }
 
+/** One member's task points attributed to a single owning agent (subgroup/org). */
+export interface MemberSubgroupPoints {
+  /** Owning agent id — a subgroup/org in the subtree, or the root group. */
+  readonly agentId: string;
+  /** Owning agent display name. */
+  readonly name: string;
+  /** True when this is the root group itself (its directly-owned work). */
+  readonly isRoot: boolean;
+  /** Points this member earned from tasks OWNED by this agent. */
+  readonly points: number;
+}
+
+/**
+ * Breaks a member's task points down BY the owning subgroup, so the Stake view
+ * can show "my points in each subgroup" instead of one opaque total (D21,
+ * 2026-07-14).
+ *
+ * Attribution is by the task resource's DIRECT `owner_id` — the exact agent that
+ * owns the work. This partitions cleanly (each point counted once, under one
+ * owner) and sums back to the member's subtree total from
+ * {@link getSubtreeTaskPointsByMember}. The root group's own directly-owned
+ * tasks appear as a row flagged `isRoot`.
+ *
+ * Reads the SAME `earn` / `task-points-earned` rail as every other stake query —
+ * it never writes points.
+ *
+ * @param groupId Root group/org agent UUID.
+ * @returns Map of member agent id → per-owning-agent point rows (points desc).
+ */
+export async function getMemberSubgroupPointsBreakdown(
+  groupId: string,
+): Promise<Map<string, MemberSubgroupPoints[]>> {
+  const rows = (await db.execute(sql`
+    WITH RECURSIVE grp_tree AS (
+      SELECT id FROM agents WHERE id = ${groupId}::uuid AND deleted_at IS NULL
+      UNION ALL
+      SELECT a.id FROM agents a
+      JOIN grp_tree t ON a.parent_id = t.id
+      WHERE a.deleted_at IS NULL
+    )
+    SELECT
+      l.subject_id AS member_id,
+      task.owner_id AS owner_id,
+      owner.name AS owner_name,
+      COALESCE(SUM((l.metadata->>'points')::numeric), 0) AS points
+    FROM ledger l
+    JOIN resources task ON task.id = l.object_id AND task.deleted_at IS NULL
+    JOIN agents owner ON owner.id = task.owner_id AND owner.deleted_at IS NULL
+    WHERE l.verb = 'earn'
+      AND l.is_active = true
+      AND l.metadata->>'interactionType' = ${TASK_POINTS_INTERACTION}
+      AND (l.metadata->>'points') ~ '^[0-9]+(\\.[0-9]+)?$'
+      AND task.owner_id IN (SELECT id FROM grp_tree)
+    GROUP BY l.subject_id, task.owner_id, owner.name
+  `)) as Array<Record<string, unknown>>;
+
+  const byMember = new Map<string, MemberSubgroupPoints[]>();
+  for (const row of rows) {
+    const memberId = String(row.member_id ?? "");
+    const agentId = String(row.owner_id ?? "");
+    const points = Number(row.points ?? 0);
+    if (!memberId || !agentId || !Number.isFinite(points) || points <= 0) continue;
+    const list = byMember.get(memberId) ?? [];
+    list.push({
+      agentId,
+      name: String(row.owner_name ?? agentId),
+      isRoot: agentId === groupId,
+      points,
+    });
+    byMember.set(memberId, list);
+  }
+  // Largest contribution first, then stable by name.
+  for (const list of byMember.values()) {
+    list.sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
+  }
+  return byMember;
+}
+
 /**
  * Returns member stake data for a group by aggregating ledger entries.
  *

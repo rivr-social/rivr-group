@@ -8,12 +8,13 @@
 
 import { useState, useRef, useCallback } from "react"
 import Image from "next/image"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Camera, ChevronRight, MapPin, Users } from "lucide-react"
+import { Camera, MapPin, Users } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { updateGroupImageAction } from "@/app/actions/settings"
+import { NavBreadcrumbs } from "@/components/nav-breadcrumbs"
+import { buildContainmentChain } from "@/lib/breadcrumbs"
 
 /** UUID pattern used to keep opaque place-agent ids out of the rendered chips. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -197,18 +198,16 @@ export function GroupProfileHeader({
         <div className="mt-3 space-y-2">
           <h1 className="text-2xl font-bold leading-tight">{name}</h1>
           {lineage && lineage.length > 0 && (
-            <nav aria-label="Group lineage" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
-              {lineage.map((ancestor, i) => (
-                <span key={ancestor.id} className="inline-flex items-center gap-1">
-                  {i > 0 && <ChevronRight className="h-3.5 w-3.5 opacity-60" />}
-                  <Link href={`/groups/${ancestor.id}`} className="hover:text-foreground hover:underline">
-                    {ancestor.name}
-                  </Link>
-                </span>
-              ))}
-              <ChevronRight className="h-3.5 w-3.5 opacity-60" />
-              <span className="text-foreground/80">{name}</span>
-            </nav>
+            <NavBreadcrumbs
+              items={buildContainmentChain(
+                lineage.map((ancestor) => ({
+                  id: ancestor.id,
+                  label: ancestor.name,
+                  href: `/groups/${ancestor.id}`,
+                })),
+                { id: groupId, label: name },
+              )}
+            />
           )}
           {description && <p className="text-muted-foreground">{description}</p>}
 
