@@ -20,7 +20,7 @@
  * with `getGroupWalletAction`, which lets members read the group balance).
  */
 
-import { and, eq, gte, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { agents, ledger, resources, wallets, walletTransactions } from '@/db/schema';
 import { getGroupSubtreeIds } from '@/lib/queries/stakes';
@@ -56,6 +56,13 @@ export interface TreasuryLedgerEntry {
   counterpartyLabel: string | null;
 }
 
+/** Inflow/outflow split for one transaction type (for the P&L report). */
+export interface TreasuryTypeTotal {
+  type: string;
+  inflowCents: number;
+  outflowCents: number;
+}
+
 export interface GroupTreasuryLedger {
   /** True when the viewer manages the group (full tree) vs. a member (group-only). */
   canManageTree: boolean;
@@ -63,6 +70,8 @@ export interface GroupTreasuryLedger {
   total: number;
   /** Aggregate over the whole matching window (not just this page). */
   totals: { inflowCents: number; outflowCents: number; netCents: number };
+  /** Inflow/outflow broken down by transaction type over the whole window. */
+  byType: TreasuryTypeTotal[];
 }
 
 interface ScopeWalletRow {
@@ -172,7 +181,7 @@ async function resolveTreasuryWalletScopes(
  */
 export async function getGroupTreasuryLedgerAction(
   groupId: string,
-  options?: { limit?: number; offset?: number; sinceIso?: string },
+  options?: { limit?: number; offset?: number; sinceIso?: string; untilIso?: string },
 ): Promise<{ success: boolean; ledger?: GroupTreasuryLedger; error?: string }> {
   const userId = await getCurrentUserId();
   if (!userId) {
@@ -204,7 +213,13 @@ export async function getGroupTreasuryLedgerAction(
     if (scopes.length === 0) {
       return {
         success: true,
-        ledger: { canManageTree, entries: [], total: 0, totals: { inflowCents: 0, outflowCents: 0, netCents: 0 } },
+        ledger: {
+          canManageTree,
+          entries: [],
+          total: 0,
+          totals: { inflowCents: 0, outflowCents: 0, netCents: 0 },
+          byType: [],
+        },
       };
     }
 
@@ -217,14 +232,18 @@ export async function getGroupTreasuryLedgerAction(
     const offset = Math.max(0, options?.offset ?? 0);
     const since = options?.sinceIso ? new Date(options.sinceIso) : null;
     const sinceValid = since && !Number.isNaN(since.getTime()) ? since : null;
+    const until = options?.untilIso ? new Date(options.untilIso) : null;
+    const untilValid = until && !Number.isNaN(until.getTime()) ? until : null;
 
     const touchesSet = or(
       inArray(walletTransactions.fromWalletId, walletIds),
       inArray(walletTransactions.toWalletId, walletIds),
     );
-    const baseFilter = sinceValid
-      ? and(touchesSet, gte(walletTransactions.createdAt, sinceValid))
-      : touchesSet;
+    const dateFilters = [
+      sinceValid ? gte(walletTransactions.createdAt, sinceValid) : undefined,
+      untilValid ? lte(walletTransactions.createdAt, untilValid) : undefined,
+    ].filter(Boolean);
+    const baseFilter = dateFilters.length > 0 ? and(touchesSet, ...dateFilters) : touchesSet;
 
     // Owner-name joins for external counterparties (the non-treasury side).
     const fromWallets = db
@@ -258,6 +277,21 @@ export async function getGroupTreasuryLedgerAction(
       .where(and(baseFilter, eq(walletTransactions.status, 'completed')));
     const inflowCents = Number(totalsRow?.inflow ?? 0);
     const outflowCents = Number(totalsRow?.outflow ?? 0);
+
+    // Inflow/outflow split per transaction type — the P&L report's line items.
+    const byTypeRows = await db
+      .select({
+        type: walletTransactions.type,
+        inflow: sql<number>`COALESCE(SUM(CASE WHEN (${inSetTo}) AND (${walletTransactions.fromWalletId} IS NULL OR NOT (${inSetFrom})) THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
+        outflow: sql<number>`COALESCE(SUM(CASE WHEN (${inSetFrom}) AND (${walletTransactions.toWalletId} IS NULL OR NOT (${inSetTo})) THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
+      })
+      .from(walletTransactions)
+      .where(and(baseFilter, eq(walletTransactions.status, 'completed')))
+      .groupBy(walletTransactions.type);
+    const byType: TreasuryTypeTotal[] = byTypeRows
+      .map((r) => ({ type: r.type, inflowCents: Number(r.inflow ?? 0), outflowCents: Number(r.outflow ?? 0) }))
+      .filter((r) => r.inflowCents > 0 || r.outflowCents > 0)
+      .sort((a, b) => b.inflowCents + b.outflowCents - (a.inflowCents + a.outflowCents));
 
     const rows = await db
       .select({
@@ -324,6 +358,7 @@ export async function getGroupTreasuryLedgerAction(
         entries,
         total,
         totals: { inflowCents, outflowCents, netCents: inflowCents - outflowCents },
+        byType,
       },
     };
   } catch (error) {
