@@ -19,7 +19,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Bot, Camera, Loader2, Pencil, Plus, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug, Eye } from "lucide-react";
+import { ArrowLeft, Bot, Camera, Drama, ExternalLink, Loader2, Pencil, Plus, Rocket, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -59,6 +59,7 @@ import { fetchGroupGoogleConnectionAction } from "./connections/actions";
 import { ConnectorsSettingsPanel } from "@/components/connectors-settings-panel";
 import { GroupAssistantConfigCard } from "@/components/group-assistant-config-card";
 import { GroupAssistantChat } from "@/components/group-assistant-chat";
+import { GroupPersonaManager } from "@/components/group-persona-manager";
 
 /** Stable tab identifiers used in the `?tab=` query param. */
 const TAB_VALUES = {
@@ -69,6 +70,8 @@ const TAB_VALUES = {
   TAB_VISIBILITY: "tab-visibility",
   CHAT: "chat",
   ASSISTANT: "assistant",
+  PERSONAS: "personas",
+  SITE: "site",
   ANNOUNCEMENTS: "announcements",
   CONNECTIONS: "connections",
   MAP_MARKER: "map-marker",
@@ -784,6 +787,14 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
             <Bot className="h-4 w-4" />
             Assistant
           </TabsTrigger>
+          <TabsTrigger value={TAB_VALUES.PERSONAS} className="inline-flex items-center gap-2">
+            <Drama className="h-4 w-4" />
+            Personas
+          </TabsTrigger>
+          <TabsTrigger value={TAB_VALUES.SITE} className="inline-flex items-center gap-2">
+            <Rocket className="h-4 w-4" />
+            Site
+          </TabsTrigger>
           <TabsTrigger value={TAB_VALUES.ANNOUNCEMENTS} className="inline-flex items-center gap-2">
             <Mail className="h-4 w-4" />
             Announcements
@@ -1315,6 +1326,47 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
         <TabsContent value={TAB_VALUES.ASSISTANT} className="space-y-4">
           <GroupAssistantConfigCard groupId={groupId} />
           <GroupAssistantChat groupId={groupId} />
+        </TabsContent>
+
+        {/* Personas tab: manage the group's alternate public identities and pick
+            which one (if any) carries the group's AI assistant. Backed by the
+            admin-gated `group-personas` server actions. */}
+        <TabsContent value={TAB_VALUES.PERSONAS} className="space-y-4">
+          <GroupPersonaManager groupId={groupId} />
+        </TabsContent>
+
+        {/* Site tab: entry point to the sovereign site builder. The builder is a
+            full-page surface (`/builder?group=`) that generates + publishes a
+            static site from the group's RIVR content; the published site is
+            served publicly at `/groups/{id}/site`. */}
+        <TabsContent value={TAB_VALUES.SITE} className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Rocket className="h-5 w-5" />
+                Group Site
+              </CardTitle>
+              <CardDescription>
+                Generate and publish a simple public website for this group from its
+                RIVR content (profile, posts, events, offerings). No coding required —
+                pick sections and a theme, then publish.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button asChild>
+                <a href={`/builder?group=${groupId}`}>
+                  <Rocket className="h-4 w-4 mr-2" />
+                  Open Site Builder
+                </a>
+              </Button>
+              <Button variant="outline" asChild>
+                <a href={`/groups/${groupId}/site`} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  View Published Site
+                </a>
+              </Button>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="announcements" className="space-y-4">
