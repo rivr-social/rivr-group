@@ -3,11 +3,11 @@
 import { useState, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { ArrowLeft, MapPin, Clock, Users, Star, Calendar } from "lucide-react"
+import { ArrowLeft, MapPin, Clock, Users, Star, Calendar, Briefcase } from "lucide-react"
 import type { JobShift, ProjectRecord } from "@/types/domain"
 import { JobAboutTab } from "@/components/job-about-tab"
 import { JobAdminPanel } from "@/components/job-admin-panel"
@@ -16,6 +16,7 @@ import { JobTimerTab } from "@/components/job-timer-tab"
 import { JobClaimPanel } from "@/components/job-claim-panel"
 import { JobPointsTab } from "@/components/job-points-tab"
 import { JobQaReviewTab } from "@/components/job-qa-review-tab"
+import { CommentFeed } from "@/components/comment-feed"
 import { StockTab } from "@/components/stock-tab"
 import type { StockInventoryItem, StockNeed } from "@/lib/stock"
 import type { JobClaimPanelData } from "@/app/actions/interactions/project-team"
@@ -143,6 +144,10 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
         )}
         <div className="flex justify-between items-start mb-4">
           <div>
+            <Badge variant="outline" className="mb-2 bg-blue-100 text-blue-800 border-blue-200">
+              <Briefcase className="mr-1 h-3 w-3" />
+              Job
+            </Badge>
             <h1 className="text-3xl font-bold mb-2">{job.title}</h1>
             <p className="text-gray-600 text-lg">{job.description}</p>
           </div>
@@ -227,11 +232,12 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList
           className={`grid w-full ${
-            4 + (share ? 1 : 0) + (reviewData ? 1 : 0) === 6
-              ? "grid-cols-6"
-              : 4 + (share ? 1 : 0) + (reviewData ? 1 : 0) === 5
-                ? "grid-cols-5"
-                : "grid-cols-4"
+            (() => {
+              // Base tabs: About, Tasks, Timer, Discussion, Stock (5) + optional
+              // Points (share) + optional Review (reviewData).
+              const count = 5 + (share ? 1 : 0) + (reviewData ? 1 : 0)
+              return count === 7 ? "grid-cols-7" : count === 6 ? "grid-cols-6" : "grid-cols-5"
+            })()
           }`}
         >
           <TabsTrigger value="about">About</TabsTrigger>
@@ -239,6 +245,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
           <TabsTrigger value="timer">Timer</TabsTrigger>
           {share && <TabsTrigger value="points">Points</TabsTrigger>}
           {reviewData && <TabsTrigger value="review">Review</TabsTrigger>}
+          <TabsTrigger value="discussion">Discussion</TabsTrigger>
           <TabsTrigger value="stock">Stock</TabsTrigger>
         </TabsList>
 
@@ -256,7 +263,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
         {share && (
           <TabsContent value="points" className="mt-6">
-            <JobPointsTab share={share} canManage={canManage} canAttest={canAttest} />
+            <JobPointsTab share={share} canManage={canManage} canAttest={canAttest} payKind={job.payKind} estimatedHours={job.maxHours ?? null} />
           </TabsContent>
         )}
 
@@ -265,6 +272,17 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
             <JobQaReviewTab data={reviewData} />
           </TabsContent>
         )}
+
+        <TabsContent value="discussion" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Discussion</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CommentFeed targetId={jobId} embedded />
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="stock" className="mt-6">
           <StockTab
