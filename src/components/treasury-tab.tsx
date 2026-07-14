@@ -28,17 +28,26 @@ import {
 } from "lucide-react"
 import {
   getGroupTreasuryFundsOverviewAction,
+  getGroupTreasuryLedgerAction,
   getGroupWalletAction,
-  getTransactionHistoryAction,
 } from "@/app/actions/wallet"
+import type { TreasuryLedgerEntry } from "@/app/actions/wallet"
 import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
 import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
 import { TreasuryFundsCard } from "@/components/treasury-funds-card"
 import { CryptoTreasuryCard } from "@/components/crypto-treasury-card"
 import { ShareClassesCard } from "@/components/share-classes-card"
 import { TreasuryFlowChart } from "@/components/treasury-flow-chart"
+import { BudgetRollupCard } from "@/components/budget-rollup-card"
+import { FinancialReportsCard } from "@/components/financial-reports-card"
 import { computeTreasuryTopline } from "@/lib/treasury-topline"
-import type { WalletBalance, WalletTransactionView } from "@/types"
+import type { WalletBalance } from "@/types"
+
+/** First millisecond of the current calendar month, as an ISO string. */
+function currentMonthStartIso(): string {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+}
 
 interface TreasuryTabProps {
   groupId: string
@@ -48,7 +57,16 @@ interface TreasuryTabProps {
 export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabProps) {
   const [activeTab, setActiveTab] = useState("overview")
   const [walletBalance, setWalletBalance] = useState<WalletBalance | null>(null)
-  const [walletTransactions, setWalletTransactions] = useState<WalletTransactionView[]>([])
+  // Recent consolidated treasury movements (group + funds + projects +
+  // subgroups) shown in the Recent Activity + Transactions lists.
+  const [recentEntries, setRecentEntries] = useState<TreasuryLedgerEntry[]>([])
+  // This-month movements + inflow/outflow totals for the summary cards.
+  const [monthEntries, setMonthEntries] = useState<TreasuryLedgerEntry[]>([])
+  const [monthTotals, setMonthTotals] = useState<{ inflowCents: number; outflowCents: number; netCents: number }>({
+    inflowCents: 0,
+    outflowCents: 0,
+    netCents: 0,
+  })
   const [walletError, setWalletError] = useState<string | null>(null)
   const [isLoadingWallet, setIsLoadingWallet] = useState(true)
   // Sum of every treasury fund's own wallet balance (admin-only read; funds
@@ -61,9 +79,14 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
     setWalletError(null)
 
     try {
-      const [walletResult, txResult, fundsResult] = await Promise.all([
+      const [walletResult, recentResult, monthResult, fundsResult] = await Promise.all([
         getGroupWalletAction(groupId),
-        getTransactionHistoryAction({ limit: 20 }),
+        // Recent consolidated ledger across the whole treasury tree (B10: job
+        // payouts debit the PROJECT wallet, so a group-wallet-only view missed
+        // them).
+        getGroupTreasuryLedgerAction(groupId, { limit: 20 }),
+        // Month-to-date window drives the revenue/expense/net cards.
+        getGroupTreasuryLedgerAction(groupId, { sinceIso: currentMonthStartIso(), limit: 100 }),
         canManageStripe ? getGroupTreasuryFundsOverviewAction(groupId) : Promise.resolve(null),
       ])
 
@@ -73,8 +96,13 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         setWalletError(walletResult.error ?? "Failed to load group wallet.")
       }
 
-      if (txResult.success && txResult.transactions) {
-        setWalletTransactions(txResult.transactions)
+      if (recentResult.success && recentResult.ledger) {
+        setRecentEntries(recentResult.ledger.entries)
+      }
+
+      if (monthResult.success && monthResult.ledger) {
+        setMonthEntries(monthResult.ledger.entries)
+        setMonthTotals(monthResult.ledger.totals)
       }
 
       if (fundsResult?.success && fundsResult.overview) {
@@ -95,28 +123,22 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
     fetchWalletData()
   }, [fetchWalletData])
 
-  // Compute financial summaries from real transaction data
-  const monthlyRevenueCents = walletTransactions
-    .filter((tx) => tx.amountCents > 0)
-    .reduce((sum, tx) => sum + tx.amountCents, 0)
-  const monthlyRevenue = monthlyRevenueCents / 100
+  // Month-to-date summaries come from the treasury-signed totals (internal
+  // fund/project moves are excluded, so funding a project never reads as an
+  // expense).
+  const monthlyRevenue = monthTotals.inflowCents / 100
+  const monthlyExpenses = monthTotals.outflowCents / 100
+  const netIncome = monthTotals.netCents / 100
 
-  const monthlyExpensesCents = walletTransactions
-    .filter((tx) => tx.amountCents < 0)
-    .reduce((sum, tx) => sum + Math.abs(tx.amountCents), 0)
-  const monthlyExpenses = monthlyExpensesCents / 100
-
-  const netIncome = monthlyRevenue - monthlyExpenses
-
-  // Build revenue stream breakdown by grouping positive transactions by type
+  // Build revenue stream breakdown by grouping this month's inflows by type.
   const revenueStreams = (() => {
-    const creditTxs = walletTransactions.filter((tx) => tx.amountCents > 0)
-    if (creditTxs.length === 0) return []
+    const creditEntries = monthEntries.filter((tx) => tx.direction === "in")
+    if (creditEntries.length === 0) return []
 
     const byType = new Map<string, number>()
-    for (const tx of creditTxs) {
+    for (const tx of creditEntries) {
       const label = tx.type || "Other"
-      byType.set(label, (byType.get(label) ?? 0) + tx.amountDollars)
+      byType.set(label, (byType.get(label) ?? 0) + tx.grossAmountCents / 100)
     }
 
     const totalRevenue = monthlyRevenue
@@ -155,16 +177,16 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
   // (there is no manual-entry model), so this simply serializes what's shown.
   const handleExportCsv = () => {
     const rows = [
-      ["Date", "Type", "Description", "Amount (USD)", "Fee (USD)", "Status", "From", "To"],
-      ...walletTransactions.map((tx) => [
+      ["Date", "Type", "Description", "Direction", "Treasury account", "Counterparty", "Signed amount (USD)", "Status"],
+      ...recentEntries.map((tx) => [
         new Date(tx.createdAt).toISOString(),
         tx.type,
         tx.description ?? "",
-        (tx.amountCents / 100).toFixed(2),
-        (tx.feeCents / 100).toFixed(2),
+        tx.direction,
+        tx.scopeLabel,
+        tx.counterpartyLabel ?? "",
+        (tx.signedAmountCents / 100).toFixed(2),
         tx.status,
-        tx.fromWalletOwnerName ?? "",
-        tx.toWalletOwnerName ?? "",
       ]),
     ]
     const csv = rows
@@ -190,7 +212,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
             variant="outline"
             size="sm"
             onClick={handleExportCsv}
-            disabled={walletTransactions.length === 0}
+            disabled={recentEntries.length === 0}
           >
             <Download className="mr-2 h-4 w-4" />
             Export
@@ -206,7 +228,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         onBalancesChanged={fetchWalletData}
       />
 
-      {canManageStripe && <SubgroupBankingCard groupId={groupId} />}
+      {canManageStripe && <SubgroupBankingCard groupId={groupId} onBalancesChanged={fetchWalletData} />}
 
       {canManageStripe && <TreasuryFundsCard groupId={groupId} onBalancesChanged={fetchWalletData} />}
 
@@ -275,7 +297,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
           <CardContent>
             <div className="text-2xl font-bold text-green-600">{formatCurrency(monthlyRevenue)}</div>
             <p className="text-xs text-muted-foreground">
-              Based on {walletTransactions.filter((tx) => tx.amountCents > 0).length} transactions
+              Based on {monthEntries.filter((tx) => tx.direction === "in").length} transactions
             </p>
           </CardContent>
         </Card>
@@ -288,7 +310,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
           <CardContent>
             <div className="text-2xl font-bold text-red-600">{formatCurrency(monthlyExpenses)}</div>
             <p className="text-xs text-muted-foreground">
-              Based on {walletTransactions.filter((tx) => tx.amountCents < 0).length} transactions
+              Based on {monthEntries.filter((tx) => tx.direction === "out").length} transactions
             </p>
           </CardContent>
         </Card>
@@ -365,36 +387,38 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
                 <CardDescription>Latest financial transactions</CardDescription>
               </CardHeader>
               <CardContent>
-                {walletTransactions.length > 0 ? (
+                {recentEntries.length > 0 ? (
                   <div className="space-y-4">
-                    {walletTransactions.slice(0, 5).map((tx) => {
-                      const isCredit = tx.amountCents > 0
+                    {recentEntries.slice(0, 5).map((tx) => {
+                      const isCredit = tx.direction === "in"
+                      const isInternal = tx.direction === "internal"
                       return (
                         <div key={tx.id} className="flex items-center justify-between">
                           <div className="flex items-center space-x-3">
                             <div
-                              className={`p-2 rounded-full ${isCredit ? "bg-green-100" : "bg-red-100"}`}
+                              className={`p-2 rounded-full ${isInternal ? "bg-muted" : isCredit ? "bg-green-100" : "bg-red-100"}`}
                             >
                               {isCredit ? (
                                 <ArrowUpRight className="h-4 w-4 text-green-600" />
                               ) : (
-                                <ArrowDownRight className="h-4 w-4 text-red-600" />
+                                <ArrowDownRight className={`h-4 w-4 ${isInternal ? "text-muted-foreground" : "text-red-600"}`} />
                               )}
                             </div>
                             <div>
                               <p className="text-sm font-medium">{tx.description ?? tx.type}</p>
                               <p className="text-xs text-muted-foreground">
-                                {tx.type} • {formatDate(tx.createdAt)}
-                                {tx.fromWalletOwnerName && ` • From: ${tx.fromWalletOwnerName}`}
-                                {tx.toWalletOwnerName && ` • To: ${tx.toWalletOwnerName}`}
+                                {tx.scopeLabel}
+                                {tx.counterpartyLabel && ` ${isCredit ? "←" : "→"} ${tx.counterpartyLabel}`}
+                                {" • "}
+                                {formatDate(tx.createdAt)}
                               </p>
                             </div>
                           </div>
                           <div
-                            className={`text-sm font-medium ${isCredit ? "text-green-600" : "text-red-600"}`}
+                            className={`text-sm font-medium ${isInternal ? "text-muted-foreground" : isCredit ? "text-green-600" : "text-red-600"}`}
                           >
-                            {isCredit ? "+" : ""}
-                            {formatCurrency(tx.amountDollars)}
+                            {isInternal ? "" : isCredit ? "+" : "−"}
+                            {formatCurrency(tx.grossAmountCents / 100)}
                           </div>
                         </div>
                       )
@@ -428,42 +452,41 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
           <Card>
             <CardContent className="p-0">
               <div className="divide-y">
-                {walletTransactions.length > 0 ? (
-                  walletTransactions.map((tx) => {
-                    const isCredit = tx.amountCents > 0
+                {recentEntries.length > 0 ? (
+                  recentEntries.map((tx) => {
+                    const isCredit = tx.direction === "in"
+                    const isInternal = tx.direction === "internal"
                     return (
                       <div key={tx.id} className="p-4 hover:bg-muted/50">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-4">
                             <div
-                              className={`p-2 rounded-full ${isCredit ? "bg-green-100" : "bg-red-100"}`}
+                              className={`p-2 rounded-full ${isInternal ? "bg-muted" : isCredit ? "bg-green-100" : "bg-red-100"}`}
                             >
                               {isCredit ? (
                                 <ArrowUpRight className="h-4 w-4 text-green-600" />
                               ) : (
-                                <ArrowDownRight className="h-4 w-4 text-red-600" />
+                                <ArrowDownRight className={`h-4 w-4 ${isInternal ? "text-muted-foreground" : "text-red-600"}`} />
                               )}
                             </div>
                             <div>
                               <p className="font-medium">{tx.description ?? tx.type}</p>
-                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
                                 <Badge variant="outline" className="text-xs">
                                   {tx.type}
                                 </Badge>
+                                {isInternal && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    internal
+                                  </Badge>
+                                )}
                                 <span>•</span>
                                 <span>{formatDate(tx.createdAt)}</span>
-                                {tx.fromWalletOwnerName && (
-                                  <>
-                                    <span>•</span>
-                                    <span>From: {tx.fromWalletOwnerName}</span>
-                                  </>
-                                )}
-                                {tx.toWalletOwnerName && (
-                                  <>
-                                    <span>•</span>
-                                    <span>To: {tx.toWalletOwnerName}</span>
-                                  </>
-                                )}
+                                <span>•</span>
+                                <span>
+                                  {tx.scopeLabel}
+                                  {tx.counterpartyLabel && ` ${isCredit ? "←" : "→"} ${tx.counterpartyLabel}`}
+                                </span>
                                 {tx.status !== "completed" && (
                                   <Badge variant="secondary" className="text-xs">
                                     {tx.status}
@@ -473,10 +496,10 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
                             </div>
                           </div>
                           <div
-                            className={`text-lg font-semibold ${isCredit ? "text-green-600" : "text-red-600"}`}
+                            className={`text-lg font-semibold ${isInternal ? "text-muted-foreground" : isCredit ? "text-green-600" : "text-red-600"}`}
                           >
-                            {isCredit ? "+" : ""}
-                            {formatCurrency(tx.amountDollars)}
+                            {isInternal ? "" : isCredit ? "+" : "−"}
+                            {formatCurrency(tx.grossAmountCents / 100)}
                           </div>
                         </div>
                       </div>
@@ -496,38 +519,36 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
 
         <TabsContent value="budget" className="space-y-6 mt-6">
           <div className="flex justify-between items-center">
-            <h3 className="text-lg font-semibold">Monthly Budget</h3>
-            <Button variant="outline" size="sm">
-              <Target className="mr-2 h-4 w-4" />
-              Configure Budget
-            </Button>
+            <h3 className="text-lg font-semibold">Budget</h3>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Budget Overview</CardTitle>
-              <CardDescription>Set up budget categories to track spending</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <Target className="h-10 w-10 mb-3" />
-                <p className="text-sm font-medium">No budget configured</p>
-                <p className="text-xs mt-1">Create budget categories to track and manage group spending</p>
-              </div>
-            </CardContent>
-          </Card>
+          {canManageStripe ? (
+            <BudgetRollupCard groupId={groupId} />
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle>Budget</CardTitle>
+                <CardDescription>Project budgets roll up here for group admins.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <Target className="h-10 w-10 mb-3" />
+                  <p className="text-sm font-medium">Admins only</p>
+                  <p className="text-xs mt-1">Group budget rollups are visible to treasury managers.</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="reports" className="space-y-6 mt-6">
           <div className="flex justify-between items-center">
             <h3 className="text-lg font-semibold">Financial Reports</h3>
-            <Button variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Generate Report
-            </Button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {canManageStripe ? (
+            <FinancialReportsCard groupId={groupId} />
+          ) : (
             <Card>
               <CardHeader>
                 <CardTitle>Monthly Summary</CardTitle>
@@ -552,55 +573,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
                 </div>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Year to Date</CardTitle>
-                <CardDescription>{new Date().getFullYear()} Performance</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
-                  <p className="text-sm">Year-to-date reporting requires historical data</p>
-                  <p className="text-xs mt-1">This will populate as more monthly data is collected</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Available Reports</CardTitle>
-              <CardDescription>Download detailed financial reports</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Profit & Loss Statement</div>
-                    <div className="text-sm text-muted-foreground">Monthly P&L report</div>
-                  </div>
-                </Button>
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Cash Flow Statement</div>
-                    <div className="text-sm text-muted-foreground">Track money in and out</div>
-                  </div>
-                </Button>
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Budget vs Actual</div>
-                    <div className="text-sm text-muted-foreground">Compare planned vs actual spending</div>
-                  </div>
-                </Button>
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Transaction History</div>
-                    <div className="text-sm text-muted-foreground">Complete transaction log</div>
-                  </div>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          )}
         </TabsContent>
       </Tabs>
     </div>

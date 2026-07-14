@@ -59,6 +59,7 @@ import { ProjectDistributionTab } from "@/components/project-distribution-tab"
 import { NavBreadcrumbs } from "@/components/nav-breadcrumbs"
 import { buildContainmentChain, type BreadcrumbNode } from "@/lib/breadcrumbs"
 import { ProjectExpensePanel } from "@/components/project-expense-panel"
+import { ProjectBudgetPanel } from "@/components/project-budget-panel"
 import { parseProjectDistribution, resolveSettlementSplits, allocateByBps, type SettlementRole } from "@/lib/settlement-splits"
 import {
   parseLineageConfig,
@@ -1020,6 +1021,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               )}
             </CardContent>
           </Card>
+
+          <ProjectBudgetPanel
+            projectId={project.id}
+            ownerAgentId={projectOwnerAgentId ?? ownerId ?? null}
+            canManage={isAdmin}
+          />
 
           <ProjectExpensePanel
             projectId={project.id}

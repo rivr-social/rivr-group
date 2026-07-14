@@ -593,6 +593,65 @@ readiness" projection). Do NOT implement money movement without Cameron.
   person + global (projection consumer + a profile-calendar projection keyed on
   the locally-homed `claimantId`).
 
+## Treasury cascade: consolidated ledger + funding + per-project FAs + budgets + reports (2026-07-14)
+
+The money wave (backlog B10/B13–B15). All amounts integer cents; internal
+treasury-to-treasury moves are net-zero so funding never double-counts.
+
+- **Consolidated treasury ledger (B10).** `getGroupTreasuryLedgerAction`
+  (`actions/wallet/treasury-ledger.ts`) resolves the group's WHOLE treasury tree
+  (main settlement + funds + project wallets + subgroup wallets, recursive
+  `parent_id` via `getGroupSubtreeIds`) and classifies each `wallet_transaction`
+  as external inflow / external outflow / internal move, attributing every leg
+  to the wallet that moved it. The old treasury tab read the VIEWER's PERSONAL
+  wallet (`getTransactionHistoryAction`) and never showed job payouts (which
+  debit the PROJECT wallet). Pure classifier + summarizer in
+  `lib/treasury-ledger.ts` (`classifyTreasuryLeg`/`summarizeTreasuryLegs`,
+  unit-tested). Managers see the full tree; members see only the group
+  settlement wallet's legs. `treasury-tab.tsx` consumes it (Recent Activity /
+  All Transactions / month-to-date cards).
+- **Funding cascade (B13).** group→subgroup: `fundSubgroupBalanceAction`
+  (`actions/wallet/subgroup-funding.ts`, NEW — internal `transferP2P`, gated on
+  PARENT manage authority, child-of-parent check); subgroup/group→project:
+  existing `transferProjectBalanceAction`; project→worker: `markJobDoneAction`.
+  UI: `subgroup-banking-card.tsx` now always shows subgroups with a **Fund**
+  control (works WITHOUT Stripe), FA/card controls nested behind Treasury flag.
+- **Per-project FinancialAccounts (B13).** `actions/wallet/project-banking.ts`
+  (`provisionProjectFinancialAccountAction`/`issueProjectCardAction`/
+  `getProjectBankingOverviewAction`) mirrors the subgroup/fund FA lanes for
+  projects, hosted on the owning group's Connect account, ids on the project
+  wallet metadata — DORMANT behind `STRIPE_TREASURY_ENABLED`/
+  `STRIPE_ISSUING_ENABLED` (the internal funding cascade needs no flag).
+- **Budget rollup (B14).** Pure `lib/budget-rollup.ts`
+  (`computeProjectBudget`/`rollUpBudgets`, unit-tested): committed (planned job
+  cash + hourly ceilings + purchases + card + expenses) vs. spent (paid job cash
+  + …) vs. authored `metadata.budget`, rolled project→subgroup→group→parent.
+  Aggregation `actions/wallet/project-budget.ts`
+  (`getProjectBudgetSummaryAction`/`getGroupBudgetRollupAction`): job cash from
+  `getJobsByProjectId` + the `job-cash-payout` ledger sum; expenses from
+  `project_expense` txns; purchases from `wallet_transactions.metadata.projectId`
+  (buyer-side attribution — the stamp is a follow-up, so this reads 0 until
+  purchase flows set it); card spend from `sumIssuingSpendForCardholder`
+  (`lib/stripe-treasury.ts`, best-effort, 0 while dormant). UI:
+  `project-budget-panel.tsx` (project page) + `budget-rollup-card.tsx` (group
+  Treasury → Budget tab). Authority via `hasGroupWriteAccess` (cascades to
+  parent admins).
+- **Financial reports (B15).** `getGroupFinancialReportAction`
+  (`actions/wallet/financial-report.ts`) composes the ledger P&L (by-type,
+  date-ranged via new `untilIso` + `byType` on the ledger action) + the budget
+  rollup. UI `financial-reports-card.tsx` (group Treasury → Reports tab): This
+  month / Last month / YTD / All-time presets + CSV/JSON export.
+- **Sales into a group's Connect account (B11–B12 prereq, AUDIT).** Offerings
+  (`createProvidePaymentAction`, `/api/stripe/payment-intent`) + group
+  subscriptions use real destination charges that correctly resolve the GROUP's
+  settlement-wallet `stripeConnectAccountId` (group-aware
+  `getSettlementWalletForAgent`). Marketplace products
+  (`/api/stripe/marketplace-checkout`) + event tickets
+  (`createEventTicketCheckoutAction`) settle via the platform
+  capital-accounts model (internal ledger credit to the group + separate Connect
+  payout rail) — BY DESIGN, not a destination charge. Do NOT convert these to
+  destination charges without Cameron (changes the settlement model; live money).
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or

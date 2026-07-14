@@ -425,6 +425,42 @@ export async function listIssuingCardsForCardholder(
   });
 }
 
+/**
+ * Total settled Issuing card SPEND for a cardholder, in cents (used by the
+ * project budget rollup's FA-card component). Stripe records a purchase capture
+ * as a NEGATIVE `amount` and a refund as positive, so net spend is
+ * `-sum(amount)` clamped at zero. Degrades to `0` when Issuing is disabled or
+ * the account has no transactions — the budget treats a missing/dormant card
+ * lane as zero card spend, never an error.
+ *
+ * @param connectedAccountId The connected account hosting the cardholder.
+ * @param cardholderId The Issuing cardholder whose card spend to total.
+ * @param options.createdGteEpoch Optional lower bound (Unix seconds) for a date-ranged report.
+ * @returns Non-negative integer cents of net card spend.
+ */
+export async function sumIssuingSpendForCardholder(
+  connectedAccountId: string,
+  cardholderId: string,
+  options?: { createdGteEpoch?: number },
+): Promise<number> {
+  if (!isIssuingEnabled()) return 0;
+  const stripe = getStripe();
+  const params: Stripe.Issuing.TransactionListParams = {
+    cardholder: cardholderId,
+    limit: 100,
+    ...(options?.createdGteEpoch ? { created: { gte: options.createdGteEpoch } } : {}),
+  };
+
+  let totalCents = 0;
+  for await (const txn of stripe.issuing.transactions.list(params, {
+    stripeAccount: connectedAccountId,
+  })) {
+    // Purchases are negative, refunds positive; net outflow is -sum(amount).
+    totalCents += -txn.amount;
+  }
+  return Math.max(0, totalCents);
+}
+
 /** True when the platform Stripe key is present (so callers can no-op cleanly). */
 export function isPaymentsConfigured(): boolean {
   return isStripeConfigured();

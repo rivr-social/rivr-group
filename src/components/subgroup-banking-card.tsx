@@ -1,25 +1,28 @@
 "use client"
 
 /**
- * Subgroup banking card — renders inside the group Treasury tab for admins.
+ * Subgroup banking + funding card — renders inside the group Treasury tab for
+ * admins.
  *
- * Shows the banking lane per architecture doc §3.3–3.5: each subgroup's
- * Treasury FinancialAccount balance and issued cards, with admin actions to
- * provision an FA and issue a spending-limited virtual card. The group-level
- * balances (Connect, group FA, linked external bank) render in
- * TreasuryPaymentsCard above this card; this card owns the SUBGROUP rows.
- *
- * Dormant-flag aware: when Treasury/Issuing are not enabled on the platform
- * the card explains that instead of surfacing dead buttons.
+ * Two lanes:
+ * - FUNDING CASCADE (always available): move treasury money DOWN from the
+ *   group into a subgroup's treasury as an internal ledger transfer
+ *   (`fundSubgroupBalanceAction`) — the first hop of group → subgroup →
+ *   project → job payout. Needs no Stripe.
+ * - BANKING (dormant behind Treasury/Issuing): each subgroup's own
+ *   FinancialAccount balance + spending-limited virtual card. When Treasury is
+ *   not enabled the card explains that instead of surfacing dead buttons.
  */
 
 import { useCallback, useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Banknote, CreditCard, Landmark, Loader2 } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { ArrowDownToLine, Banknote, CreditCard, Landmark, Loader2 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import {
+  fundSubgroupBalanceAction,
   getGroupTreasuryBankingOverviewAction,
   issueSubgroupCardAction,
   provisionSubgroupFinancialAccountAction,
@@ -28,6 +31,8 @@ import type { GroupTreasuryBankingOverview } from "@/app/actions/wallet"
 
 interface SubgroupBankingCardProps {
   groupId: string
+  /** Called after a successful funding move so the treasury topline refreshes. */
+  onBalancesChanged?: () => void
 }
 
 function formatUsd(cents: number | null): string {
@@ -35,10 +40,19 @@ function formatUsd(cents: number | null): string {
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" })
 }
 
-export function SubgroupBankingCard({ groupId }: SubgroupBankingCardProps) {
+/** Parses a dollar string to whole cents, or null when invalid/non-positive. */
+function dollarsToCents(raw: string): number | null {
+  const value = Number.parseFloat(raw)
+  if (!Number.isFinite(value) || value <= 0) return null
+  return Math.round(value * 100)
+}
+
+export function SubgroupBankingCard({ groupId, onBalancesChanged }: SubgroupBankingCardProps) {
   const [overview, setOverview] = useState<GroupTreasuryBankingOverview | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [pendingSubgroupId, setPendingSubgroupId] = useState<string | null>(null)
+  const [fundingSubgroupId, setFundingSubgroupId] = useState<string | null>(null)
+  const [fundAmount, setFundAmount] = useState("")
   const { toast } = useToast()
 
   const loadOverview = useCallback(async () => {
@@ -90,6 +104,29 @@ export function SubgroupBankingCard({ groupId }: SubgroupBankingCardProps) {
     }
   }
 
+  const handleFund = async (subgroupId: string) => {
+    const amountCents = dollarsToCents(fundAmount)
+    if (amountCents === null) {
+      toast({ title: "Enter an amount", description: "Enter a positive dollar amount to move.", variant: "destructive" })
+      return
+    }
+    setPendingSubgroupId(subgroupId)
+    try {
+      const result = await fundSubgroupBalanceAction(groupId, subgroupId, amountCents, "to_subgroup")
+      if (result.success) {
+        toast({ title: "Subgroup funded", description: `Moved ${formatUsd(amountCents)} into the subgroup treasury.` })
+        setFundingSubgroupId(null)
+        setFundAmount("")
+        await loadOverview()
+        onBalancesChanged?.()
+      } else {
+        toast({ title: "Could not move funds", description: result.error, variant: "destructive" })
+      }
+    } finally {
+      setPendingSubgroupId(null)
+    }
+  }
+
   if (isLoading) {
     return (
       <Card>
@@ -103,92 +140,118 @@ export function SubgroupBankingCard({ groupId }: SubgroupBankingCardProps) {
   if (!overview) return null
 
   const hasSubgroups = overview.subgroups.length > 0
+  const bankingActive = Boolean(overview.groupConnectAccountId) && overview.treasuryEnabled
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Landmark className="h-4 w-4" /> Subgroup banking
+          <Landmark className="h-4 w-4" /> Subgroups &amp; banking
         </CardTitle>
         <CardDescription>
-          Give a subgroup its own balance and a spending-limited virtual card.
-        </CardDescription>
-        <CardDescription>
-          Each subgroup treasury can hold its own sub-treasury account and spending-limited virtual card,
-          funded from and isolated to that subgroup&apos;s balance.
+          Fund a subgroup&apos;s treasury from the group, and (when enabled) give it its own
+          sub-treasury account and a spending-limited virtual card.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {!overview.groupConnectAccountId && (
-          <p className="text-sm text-muted-foreground">
-            Set up the group&apos;s payment account first (above) — it hosts every subgroup account.
-          </p>
-        )}
-        {overview.groupConnectAccountId && !overview.treasuryEnabled && (
-          <p className="text-sm text-muted-foreground">
-            Subgroup bank accounts aren&apos;t available on this community yet.
-          </p>
-        )}
-        {overview.groupConnectAccountId && overview.treasuryEnabled && !hasSubgroups && (
+        {!hasSubgroups && (
           <p className="text-sm text-muted-foreground">This group has no subgroups yet.</p>
         )}
 
-        {overview.groupConnectAccountId && overview.treasuryEnabled &&
-          overview.subgroups.map((subgroup) => (
-            <div
-              key={subgroup.subgroupId}
-              className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="min-w-0">
-                <p className="truncate font-medium">{subgroup.subgroupName}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <Banknote className="h-3.5 w-3.5" />
-                    {subgroup.financialAccountId ? formatUsd(subgroup.faCashCents) : "No account yet"}
-                  </span>
-                  {subgroup.cards.map((card) => (
-                    <Badge key={card.id} variant="outline" className="flex items-center gap-1">
-                      <CreditCard className="h-3 w-3" /> •••• {card.last4}
-                      {card.spendingLimitCents !== null && (
-                        <span className="text-muted-foreground">
-                          ({formatUsd(card.spendingLimitCents)}/{card.spendingLimitInterval ?? "month"})
+        {overview.groupConnectAccountId && !overview.treasuryEnabled && (
+          <p className="text-sm text-muted-foreground">
+            Subgroup bank accounts and cards aren&apos;t available on this community yet — you can still
+            fund a subgroup treasury below.
+          </p>
+        )}
+
+        {hasSubgroups &&
+          overview.subgroups.map((subgroup) => {
+            const isPending = pendingSubgroupId === subgroup.subgroupId
+            const isFunding = fundingSubgroupId === subgroup.subgroupId
+            return (
+              <div key={subgroup.subgroupId} className="rounded-lg border p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{subgroup.subgroupName}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                      {bankingActive && (
+                        <span className="flex items-center gap-1">
+                          <Banknote className="h-3.5 w-3.5" />
+                          {subgroup.financialAccountId ? formatUsd(subgroup.faCashCents) : "No account yet"}
                         </span>
                       )}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {!subgroup.financialAccountId ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={pendingSubgroupId === subgroup.subgroupId}
-                    onClick={() => handleProvision(subgroup.subgroupId)}
-                  >
-                    {pendingSubgroupId === subgroup.subgroupId && (
-                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                    )}
-                    Create account
-                  </Button>
-                ) : (
-                  overview.issuingEnabled && (
+                      {subgroup.cards.map((card) => (
+                        <Badge key={card.id} variant="outline" className="flex items-center gap-1">
+                          <CreditCard className="h-3 w-3" /> •••• {card.last4}
+                          {card.spendingLimitCents !== null && (
+                            <span className="text-muted-foreground">
+                              ({formatUsd(card.spendingLimitCents)}/{card.spendingLimitInterval ?? "month"})
+                            </span>
+                          )}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={pendingSubgroupId === subgroup.subgroupId}
-                      onClick={() => handleIssueCard(subgroup.subgroupId)}
+                      disabled={isPending}
+                      onClick={() => {
+                        setFundingSubgroupId(isFunding ? null : subgroup.subgroupId)
+                        setFundAmount("")
+                      }}
                     >
-                      {pendingSubgroupId === subgroup.subgroupId && (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      )}
-                      Issue card
+                      <ArrowDownToLine className="mr-1 h-3 w-3" /> Fund
                     </Button>
-                  )
+                    {bankingActive && !subgroup.financialAccountId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isPending}
+                        onClick={() => handleProvision(subgroup.subgroupId)}
+                      >
+                        {isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                        Create account
+                      </Button>
+                    )}
+                    {bankingActive && subgroup.financialAccountId && overview.issuingEnabled && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isPending}
+                        onClick={() => handleIssueCard(subgroup.subgroupId)}
+                      >
+                        {isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                        Issue card
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {isFunding && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">$</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      placeholder="Amount to move from the group"
+                      value={fundAmount}
+                      onChange={(e) => setFundAmount(e.target.value)}
+                      className="h-8 max-w-[220px]"
+                    />
+                    <Button size="sm" disabled={isPending} onClick={() => handleFund(subgroup.subgroupId)}>
+                      {isPending && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                      Move funds
+                    </Button>
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            )
+          })}
       </CardContent>
     </Card>
   )
