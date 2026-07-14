@@ -417,6 +417,45 @@ project's board on mount so cards show real numbers without expanding. Tests:
 `actions/__tests__/project-job-board.test.ts`,
 `actions/__tests__/job-peer-allocation.test.ts` (`pnpm test:db`).
 
+## Job card UX + pay labels + stable ordering (2026-07-14, round 3)
+
+- **Pay-type badge on every job card** — `lib/job-pay.ts` `describeJobPay` is the
+  single formatter ("Fixed $X" / "Hourly $X/hr" / "N points" / "Volunteer
+  (Thanks)") + `JOB_PAY_TONE_CLASS`. Rendered on the project-page job cards
+  (`project-jobs-tab.tsx`) and the Jobs-board cards (`job-board-tab.tsx`);
+  `ProjectJobBoardJob`/`fetchProjectJobBoard` now carry
+  `payKind`/`payAmountCents`/`hourlyRateCents`/`points`. Unit test:
+  `lib/__tests__/job-pay.test.ts` (`pnpm test:unit`).
+- **Card-level Claim** — `components/job-claim-button.tsx` calls the shared
+  `claimJobAction` (full eligibility enforced server-side; approval-required →
+  pending). On the project-page cards, the Jobs-board cards, and the project-card
+  dropdown; stops propagation so it never toggles/navigates the card.
+- **Job title links to `/jobs/[id]`** — the project-page card title is now a
+  `Link` (stopPropagation so it navigates instead of toggling the collapsible).
+- **Stable job/task ordering** — `buildJobsWithTasks` (project page) sorts by
+  `createdAt` then `id` (both IMMUTABLE). Jobs/tasks previously JUMPED on every
+  task check-off because the server-action refresh re-fetched in a mutable
+  (updatedAt-derived) order. NEVER sort these lists by completion/updatedAt. The
+  Jobs board orders by `created_at DESC` (stable) and has no task-toggle.
+- **payKind edits take effect immediately** — `JobDetailClient` clears the
+  optimistic `jobOverride` on every fresh `serverJob` (a `useEffect`), so a
+  post-creation edit (e.g. fixed → volunteer) is no longer shadowed by the
+  pre-edit snapshot. The complete path (`markJobDoneAction`) already reads
+  `payKind` FRESH (no snapshot) — the volunteer branch engages on the edited
+  value; the claim-complete skill/difficulty sliders (`JobPointsTab`) are NOT
+  payKind-gated (they fire for all pay kinds, feeding the voucher valuation).
+  Test: `actions/__tests__/job-completion-paykind-edit.test.ts` (`pnpm test:db`).
+
+## Sovereign payout → global Connect bridge (design only, 2026-07-14)
+
+`docs/active/sovereign-payout-connect-bridge-design-2026-07-14.md` — SCOPE ONLY,
+no code. How a sovereign job payout (`markJobDoneAction`'s internal
+`transferP2P`) would trigger a real Stripe `Transfer` on GLOBAL's one-platform
+Connect account via a federated payout-intent, what substrate already exists
+(connect-account provisioning on subscribe, settlement-wallet
+`stripeConnectAccountId`), and the safest first increment (a no-money "payout
+readiness" projection). Do NOT implement money movement without Cameron.
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or
