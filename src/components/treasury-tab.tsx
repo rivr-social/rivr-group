@@ -38,6 +38,8 @@ import { TreasuryFundsCard } from "@/components/treasury-funds-card"
 import { CryptoTreasuryCard } from "@/components/crypto-treasury-card"
 import { ShareClassesCard } from "@/components/share-classes-card"
 import { TreasuryFlowChart } from "@/components/treasury-flow-chart"
+import { BudgetRollupCard } from "@/components/budget-rollup-card"
+import { FinancialReportsCard } from "@/components/financial-reports-card"
 import { computeTreasuryTopline } from "@/lib/treasury-topline"
 import type { WalletBalance } from "@/types"
 
@@ -226,7 +228,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         onBalancesChanged={fetchWalletData}
       />
 
-      {canManageStripe && <SubgroupBankingCard groupId={groupId} />}
+      {canManageStripe && <SubgroupBankingCard groupId={groupId} onBalancesChanged={fetchWalletData} />}
 
       {canManageStripe && <TreasuryFundsCard groupId={groupId} onBalancesChanged={fetchWalletData} />}
 
@@ -517,38 +519,36 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
 
         <TabsContent value="budget" className="space-y-6 mt-6">
           <div className="flex justify-between items-center">
-            <h3 className="text-lg font-semibold">Monthly Budget</h3>
-            <Button variant="outline" size="sm">
-              <Target className="mr-2 h-4 w-4" />
-              Configure Budget
-            </Button>
+            <h3 className="text-lg font-semibold">Budget</h3>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Budget Overview</CardTitle>
-              <CardDescription>Set up budget categories to track spending</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <Target className="h-10 w-10 mb-3" />
-                <p className="text-sm font-medium">No budget configured</p>
-                <p className="text-xs mt-1">Create budget categories to track and manage group spending</p>
-              </div>
-            </CardContent>
-          </Card>
+          {canManageStripe ? (
+            <BudgetRollupCard groupId={groupId} />
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle>Budget</CardTitle>
+                <CardDescription>Project budgets roll up here for group admins.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <Target className="h-10 w-10 mb-3" />
+                  <p className="text-sm font-medium">Admins only</p>
+                  <p className="text-xs mt-1">Group budget rollups are visible to treasury managers.</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="reports" className="space-y-6 mt-6">
           <div className="flex justify-between items-center">
             <h3 className="text-lg font-semibold">Financial Reports</h3>
-            <Button variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Generate Report
-            </Button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {canManageStripe ? (
+            <FinancialReportsCard groupId={groupId} />
+          ) : (
             <Card>
               <CardHeader>
                 <CardTitle>Monthly Summary</CardTitle>
@@ -573,55 +573,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
                 </div>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Year to Date</CardTitle>
-                <CardDescription>{new Date().getFullYear()} Performance</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
-                  <p className="text-sm">Year-to-date reporting requires historical data</p>
-                  <p className="text-xs mt-1">This will populate as more monthly data is collected</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Available Reports</CardTitle>
-              <CardDescription>Download detailed financial reports</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Profit & Loss Statement</div>
-                    <div className="text-sm text-muted-foreground">Monthly P&L report</div>
-                  </div>
-                </Button>
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Cash Flow Statement</div>
-                    <div className="text-sm text-muted-foreground">Track money in and out</div>
-                  </div>
-                </Button>
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Budget vs Actual</div>
-                    <div className="text-sm text-muted-foreground">Compare planned vs actual spending</div>
-                  </div>
-                </Button>
-                <Button variant="outline" className="justify-start h-auto p-4">
-                  <div className="text-left">
-                    <div className="font-medium">Transaction History</div>
-                    <div className="text-sm text-muted-foreground">Complete transaction log</div>
-                  </div>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          )}
         </TabsContent>
       </Tabs>
     </div>
