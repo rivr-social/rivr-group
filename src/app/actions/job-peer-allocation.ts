@@ -30,7 +30,7 @@ import {
   computePeerShareFractions,
   type PointShareInputs,
 } from "@/lib/peer-allocation";
-import { claimWorkFinished, getLatestWorkClaim } from "@/lib/work-completion";
+import { claimWorkFinished } from "@/lib/work-completion";
 
 /** Slider bounds for the claim-complete self-ratings (voucher-style). */
 const RATING_MIN = 1;
@@ -39,6 +39,14 @@ const RATING_MAX = 100;
 export interface JobShareAssignee {
   id: string;
   name: string;
+}
+
+/** An assignee who has claimed the WHOLE job finished (job-level claim). */
+export interface JobCompletionClaimant {
+  id: string;
+  name: string;
+  skillfulness: number | null;
+  difficulty: number | null;
 }
 
 export interface JobShareData {
@@ -58,6 +66,11 @@ export interface JobShareData {
   shareFractions: Record<string, number>;
   /** Whether the viewer already claimed the job finished. */
   viewerClaimedComplete: boolean;
+  /** Whether the job itself is already marked completed. */
+  jobCompleted: boolean;
+  /** Everyone who has an ACTIVE job-level claim-complete awaiting review — the
+   *  set an attester approves via mark-done. */
+  jobClaimants: JobCompletionClaimant[];
 }
 
 /** Loads a live job row. */
@@ -126,11 +139,41 @@ export async function getJobShareData(jobId: string): Promise<JobShareData | nul
     }
   }
 
-  let viewerClaimedComplete = false;
-  if (userId && viewerIsAssignee) {
-    const claim = await getLatestWorkClaim(jobId);
-    viewerClaimedComplete = Boolean(claim && claim.workerId === userId && claim.isActive && claim.reviewStatus === "claimed");
+  // Everyone with an ACTIVE job-level claim-complete awaiting review — the set
+  // an attester approves by marking the job done. Carries each claimant's
+  // self-ratings so the attester sees them before approving.
+  const claimantRows = (await db.execute(sql`
+    SELECT subject_id::text AS id, metadata FROM ledger
+    WHERE verb = 'complete' AND object_id = ${jobId}::uuid AND is_active = true
+      AND metadata->>'interactionType' = 'work-completion-claim'
+      AND metadata->>'reviewStatus' = 'claimed'
+    ORDER BY timestamp DESC
+  `)) as Array<{ id: string; metadata: Record<string, unknown> }>;
+  const claimantNameById = new Map<string, string>();
+  const claimantIds = Array.from(new Set(claimantRows.map((r) => r.id).filter(Boolean)));
+  if (claimantIds.length > 0) {
+    const rows = await db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(and(inArray(agents.id, claimantIds), isNull(agents.deletedAt)));
+    for (const r of rows) claimantNameById.set(r.id, r.name);
   }
+  const seenClaimant = new Set<string>();
+  const jobClaimants: JobCompletionClaimant[] = [];
+  for (const row of claimantRows) {
+    if (seenClaimant.has(row.id)) continue;
+    seenClaimant.add(row.id);
+    const meta = row.metadata ?? {};
+    jobClaimants.push({
+      id: row.id,
+      name: claimantNameById.get(row.id) ?? row.id.slice(0, 8),
+      skillfulness: typeof meta.skillfulness === "number" ? meta.skillfulness : null,
+      difficulty: typeof meta.difficulty === "number" ? meta.difficulty : null,
+    });
+  }
+
+  const viewerClaimedComplete = Boolean(userId && jobClaimants.some((c) => c.id === userId));
+  const jobCompleted = meta.status === "completed";
 
   return {
     jobId,
@@ -142,6 +185,8 @@ export async function getJobShareData(jobId: string): Promise<JobShareData | nul
     preview: Object.fromEntries(preview),
     shareFractions: Object.fromEntries(fractions),
     viewerClaimedComplete,
+    jobCompleted,
+    jobClaimants,
   };
 }
 

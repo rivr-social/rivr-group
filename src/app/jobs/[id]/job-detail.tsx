@@ -249,7 +249,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
         {share && (
           <TabsContent value="points" className="mt-6">
-            <JobPointsTab share={share} />
+            <JobPointsTab share={share} canManage={canManage} canAttest={canAttest} />
           </TabsContent>
         )}
 
