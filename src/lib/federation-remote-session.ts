@@ -15,6 +15,9 @@ export type RemoteViewerSessionPayload = {
   expiresAt: string;
   nonce: string;
   persona?: FederatedAssertionPersonaContext;
+  /** Verified display identity carried in the modern cookie (sso/land mint). */
+  displayName?: string;
+  image?: string;
 };
 
 export type FederatedAssertionPersonaContext = {
@@ -198,5 +201,10 @@ export function validateRemoteViewerToken(
     issuedAt: new Date(modernPayload.iat * 1000).toISOString(),
     expiresAt: new Date(modernPayload.exp * 1000).toISOString(),
     nonce: "",
+    // The modern cookie carries the assertion's VERIFIED display identity —
+    // don't drop it: it is the only name source for a visitor with no local
+    // agent projection (otherwise they render as "Federated user").
+    displayName: modernPayload.name ?? undefined,
+    image: modernPayload.avatarUrl ?? undefined,
   };
 }
