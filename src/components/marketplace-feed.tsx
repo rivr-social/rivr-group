@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Bookmark, Heart, MessageCircle, Share2 } from "lucide-react"
 import Image from "next/image"
-import Link from "next/link"
+import { CanonicalLink } from "@/components/canonical-link"
 import { useRouter } from "next/navigation"
 import { getPrimaryListingImage } from "@/lib/listing-images"
 import { formatMarketplaceListingTypeLabel } from "@/lib/listing-types"
@@ -148,7 +148,7 @@ export function MarketplaceFeed({
                   <p className="text-muted-foreground text-sm mt-2 line-clamp-2">{listing.description}</p>
 
                   <div className="flex items-center mt-3 text-sm text-muted-foreground gap-2 flex-wrap">
-                    <Link
+                    <CanonicalLink
                       href={listing.ownerPath || `/profile/${seller.username || seller.id}`}
                       className="flex items-center"
                       onClick={(e) => e.stopPropagation()}
@@ -158,7 +158,7 @@ export function MarketplaceFeed({
                         <AvatarFallback className="text-xs">{seller.name.charAt(0)}</AvatarFallback>
                       </Avatar>
                       <span>{seller.name}</span>
-                    </Link>
+                    </CanonicalLink>
                     <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
                       {listing.ownerLabel || "Member offer"}
                     </Badge>

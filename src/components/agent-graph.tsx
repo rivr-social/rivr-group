@@ -19,6 +19,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
+import { navigateToHref } from "@/components/canonical-link"
 import * as d3 from "d3"
 import {
   fetchGroupDetail,
@@ -167,7 +168,9 @@ export function AgentGraph({ agentId, agentName, agentType }: AgentGraphProps) {
               id: group.id,
               label: group.name || "Subgroup",
               type: NODE_TYPE.GROUP,
-              href: `/groups/${group.id}`,
+              // Canonical target: local /groups/<id> when homed here, sovereign
+              // HOME URL for a federated projection.
+              href: group.homeHref ?? `/groups/${group.id}`,
             })
             newLinks.push({
               id: makeLinkId(agentId, group.id),
@@ -449,7 +452,9 @@ export function AgentGraph({ agentId, agentName, agentType }: AgentGraphProps) {
     nodeGroup.on("click", (event, d) => {
       event.stopPropagation()
       if (d.isCenter) return // don't navigate away from current page
-      router.push(d.href)
+      // Node hrefs may be cross-origin sovereign-home URLs (federated
+      // projections) — Next's router can't route to another origin.
+      navigateToHref(router, d.href)
     })
 
     // Draw shapes

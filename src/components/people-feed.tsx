@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { ThankModule } from "@/components/thank-module"
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
+import { CanonicalLink } from "@/components/canonical-link"
 import type { User } from "@/lib/types"
 import { toggleFollowAgent } from "@/app/actions/interactions/social"
 
@@ -83,7 +84,7 @@ export function PeopleFeed({
 
             return (
               <Card key={person.id} className="border shadow-sm overflow-hidden">
-                <Link href={profileHref} className="block focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-t-lg">
+                <CanonicalLink href={profileHref} className="block focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-t-lg">
                   <CardContent className="p-3 flex flex-col items-center text-center">
                     <Avatar className="h-16 w-16 border-2 border-border mb-2">
                       <AvatarImage src={person.avatar || "/placeholder.svg"} alt={person.name} />
@@ -95,7 +96,7 @@ export function PeopleFeed({
                       <p className="text-xs text-muted-foreground mt-1 line-clamp-2 w-full">{person.bio}</p>
                     ) : null}
                   </CardContent>
-                </Link>
+                </CanonicalLink>
                 <div className="px-3 pb-3 flex justify-center gap-1.5">
                   <Link href={`/messages?user=${person.id}`}>
                     <Button variant="outline" size="sm" className="h-7 px-2 text-xs">

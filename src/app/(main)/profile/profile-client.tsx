@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { CanonicalLink } from "@/components/canonical-link";
+import { resolveEntityHref } from "@/lib/federation/entity-link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -432,23 +434,31 @@ function getActivityObjectHref(
 ): string | null {
   if (!object) return null;
 
+  // Resolve an entity's local path through `resolveEntityHref` so a federated
+  // projection routes to its sovereign HOME. `selfBaseUrl` is omitted
+  // (deterministic SSR/client output, no hydration mismatch). Every entity
+  // class is locally renderable here, so no globalFallback.
+  const canonical = (localPath: string): string =>
+    resolveEntityHref(object.metadata, localPath).href;
+
   if (object.kind === "agent") {
-    if (object.type === "organization") return `/groups/${object.id}`;
-    if (object.type === "ring") return `/rings/${object.id}`;
-    if (object.type === "family") return `/families/${object.id}`;
+    // Ring/family agents render under /groups here — this app has NO /rings
+    // or /families routes (bare ring/family paths were a live 404 class).
+    if (object.type === "organization" || object.type === "ring" || object.type === "family")
+      return canonical(`/groups/${object.id}`);
     if (object.type === "person") {
       const username = asString(object.metadata?.username);
-      return `/profile/${username || object.id}`;
+      return canonical(`/profile/${username || object.id}`);
     }
     return null;
   }
 
   const resourceKind = asString(object.metadata?.resourceKind)?.toLowerCase();
 
-  if (object.type === "post" || resourceKind === "post") return `/posts/${object.id}`;
-  if (object.type === "event" || resourceKind === "event") return `/events/${object.id}`;
-  if (object.type === "project" || resourceKind === "project") return `/projects/${object.id}`;
-  if (object.type === "group" || resourceKind === "group") return `/groups/${object.id}`;
+  if (object.type === "post" || resourceKind === "post") return canonical(`/posts/${object.id}`);
+  if (object.type === "event" || resourceKind === "event") return canonical(`/events/${object.id}`);
+  if (object.type === "project" || resourceKind === "project") return canonical(`/projects/${object.id}`);
+  if (object.type === "group" || resourceKind === "group") return canonical(`/groups/${object.id}`);
   if (
     object.type === "listing" ||
     object.type === "resource" ||
@@ -456,7 +466,7 @@ function getActivityObjectHref(
     resourceKind === "listing" ||
     resourceKind === "voucher"
   ) {
-    return `/marketplace/${object.id}`;
+    return canonical(`/marketplace/${object.id}`);
   }
 
   return null;
@@ -549,12 +559,12 @@ function ActivityObjectCard({
   }
 
   return (
-    <Link
+    <CanonicalLink
       href={href}
       className="block rounded-lg border bg-muted/20 p-3 transition-colors hover:bg-muted/40"
     >
       {content}
-    </Link>
+    </CanonicalLink>
   );
 }
 

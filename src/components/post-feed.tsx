@@ -8,6 +8,7 @@ import { ThankModule } from "@/components/thank-module"
 import { Button } from "@/components/ui/button"
 import Image from "next/image"
 import Link from "next/link"
+import { CanonicalLink, navigateToHref } from "@/components/canonical-link"
 import { getGlobalUrl } from "@/lib/federation/global-url"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
@@ -540,20 +541,20 @@ function PostCard({
           <div className="p-4">
             <div className="flex items-center justify-between mb-3">
             <div className="flex items-center space-x-3">
-              <Link href={`/profile/${user?.username || user?.id || post.author.id}`} onClick={(e) => e.stopPropagation()}>
+              <CanonicalLink href={user?.profileHref ?? `/profile/${user?.username || user?.id || post.author.id}`} onClick={(e) => e.stopPropagation()}>
                 <Avatar className="hover:ring-2 hover:ring-primary transition-all">
                   <AvatarImage src={user?.avatar || "/placeholder.svg"} alt={user?.name} />
                   <AvatarFallback>{user?.name?.substring(0, 2) || "UN"}</AvatarFallback>
                 </Avatar>
-              </Link>
+              </CanonicalLink>
               <div>
-                <Link
-                  href={`/profile/${user?.username || user?.id || post.author.id}`}
+                <CanonicalLink
+                  href={user?.profileHref ?? `/profile/${user?.username || user?.id || post.author.id}`}
                   className="font-medium hover:underline"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {user?.name}
-                </Link>
+                </CanonicalLink>
                 <p className="text-xs text-muted-foreground">
                   <RelativeTime date={post.createdAt} />
                   {resolvedLocales.length > 0 ? ` · ${resolvedLocales.join(", ")}` : ""}
@@ -882,28 +883,28 @@ function EventPostCard({ event, getGroup, getEventCreator, rsvpStatus, onRsvp, g
         <div className="p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center space-x-3">
-              <Link href={`/profile/${creator?.username || creator?.id || event.creatorId || event.id}`} onClick={(e) => e.stopPropagation()}>
+              <CanonicalLink href={creator?.profileHref ?? `/profile/${creator?.username || creator?.id || event.creatorId || event.id}`} onClick={(e) => e.stopPropagation()}>
                 <Avatar className="hover:ring-2 hover:ring-primary transition-all">
                   <AvatarImage src={creator?.avatar || "/placeholder.svg"} alt={creator?.name} />
                   <AvatarFallback>{creator?.name?.substring(0, 2) || "UN"}</AvatarFallback>
                 </Avatar>
-              </Link>
+              </CanonicalLink>
               <div>
                 <div className="font-medium">
-                  <Link
-                    href={`/groups/${organizer?.id}`}
+                  <CanonicalLink
+                    href={organizer?.homeHref ?? `/groups/${organizer?.id}`}
                     className="text-sm hover:underline block"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {organizer?.name || "Unknown Group"}
-                  </Link>
-                  <Link
-                    href={`/profile/${creator?.username || creator?.id || event.creatorId || event.id}`}
+                  </CanonicalLink>
+                  <CanonicalLink
+                    href={creator?.profileHref ?? `/profile/${creator?.username || creator?.id || event.creatorId || event.id}`}
                     className="hover:underline"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {creator?.name}
-                  </Link>
+                  </CanonicalLink>
                 </div>
                 <RelativeTime date={event.timestamp || event.eventData?.startDate || STABLE_FALLBACK_TIMESTAMP} className="text-xs text-muted-foreground" />
               </div>
@@ -994,11 +995,13 @@ function GroupPostCard({ group, onJoin, getChapterName }: GroupPostCardProps) {
     typeof group.groupData?.id === "string" && group.groupData.id.length > 0
       ? group.groupData.id
       : group.id
-  const groupHref = `/groups/${routeGroupId}`
+  // Canonical target: the group's stamped sovereign-home URL (federated
+  // projection) or the local /groups route.
+  const groupHref = group.groupData?.homeHref ?? `/groups/${routeGroupId}`
 
   const handleCardClick = () => {
-    // Navigates to group detail on card click.
-    router.push(groupHref)
+    // Navigates to group detail on card click (full navigation for cross-origin).
+    navigateToHref(router, groupHref)
   }
 
   return (
@@ -1014,13 +1017,13 @@ function GroupPostCard({ group, onJoin, getChapterName }: GroupPostCardProps) {
               <AvatarFallback>{group.name.substring(0, 2)}</AvatarFallback>
             </Avatar>
             <div>
-              <Link
+              <CanonicalLink
                 href={groupHref}
                 className="text-lg font-bold hover:underline"
                 onClick={(e) => e.stopPropagation()}
               >
                 {group.name}
-              </Link>
+              </CanonicalLink>
               <p className="text-xs text-muted-foreground">Group</p>
             </div>
           </div>
@@ -1051,7 +1054,7 @@ function GroupPostCard({ group, onJoin, getChapterName }: GroupPostCardProps) {
       <CardFooter className="p-0 border-t">
         {requiresJoinFlowPage(group) ? (
           <Button asChild className="w-full rounded-none h-12 bg-primary hover:bg-primary/90">
-            <Link href={`/groups/${group.id}`}>View Group</Link>
+            <CanonicalLink href={groupHref}>View Group</CanonicalLink>
           </Button>
         ) : (
           <Button

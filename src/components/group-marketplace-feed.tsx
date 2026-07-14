@@ -11,7 +11,7 @@
 "use client"
 
 import { useState, type MouseEvent } from "react"
-import Link from "next/link"
+import { CanonicalLink } from "@/components/canonical-link"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -228,13 +228,13 @@ export function GroupMarketplaceFeed({
                         ) : null}
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
-                        <Link href={ownerHref} className="flex items-center" onClick={(e: MouseEvent<HTMLAnchorElement>) => e.stopPropagation()}>
+                        <CanonicalLink href={ownerHref} className="flex items-center" onClick={(e: MouseEvent<HTMLAnchorElement>) => e.stopPropagation()}>
                           <Avatar className="h-6 w-6 mr-2">
                             <AvatarImage src={seller.avatar || "/placeholder.svg"} alt={seller.name} />
                             <AvatarFallback>{seller.name.substring(0, 2).toUpperCase()}</AvatarFallback>
                           </Avatar>
                           <span>{seller.name}</span>
-                        </Link>
+                        </CanonicalLink>
                         <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
                           {listing.ownerLabel || "Member offer"}
                         </Badge>

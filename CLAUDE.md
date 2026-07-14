@@ -88,6 +88,54 @@ own structure, NOT copied from the person app):
   gracefully on a missing endpoint. Route was already in the `route-access.ts`
   public allowlist.
 
+### Canonical entity links (federated-projection routing, 2026-07-14)
+
+Port of the person app's canonical entity-link routing (person branch
+`fix/2026-07-14-canonical-links`). Fixes the class where a link to a
+REMOTE-HOMED entity (a federated projection) routed to a bare LOCAL path (empty
+shell or 404), and the sibling live-404 class where ring/family owners were
+linked to `/rings/<id>` / `/families/<id>` — routes this app does NOT have
+(rings/families render under `/groups/<id>`).
+
+- **`src/lib/federation/entity-link.ts`** — the pure, client-safe resolver
+  (copied verbatim from person). `resolveRemoteHomeBaseUrl(metadata)` reads the
+  home stamp (`homeBaseUrl` → `federatedHomeBaseUrl` → origin of
+  `canonicalUrl`); `resolveEntityHref(metadata, localPath, {selfBaseUrl,
+  globalFallback})` returns `{href, isRemote}`. A self-host stamp is treated as
+  local (loop guard — own rows can carry a self-pointing canonicalUrl). Tests:
+  `src/lib/federation/__tests__/entity-link.test.ts` (`pnpm test:unit`).
+- **`src/components/canonical-link.tsx`** — `CanonicalLink` renders an absolute
+  href as a plain `<a target="_blank" rel="noopener noreferrer">` (NEVER a Next
+  `<Link>` — cross-origin RSC prefetch is the CSP-flash class) and a local path
+  as `<Link>`. `navigateToHref(router, href)` is the imperative analog.
+- **Group-app semantics: `globalFallback` is NOT used.** Unlike person, this
+  app renders every entity class locally (`/groups`, `/projects`, `/profile`),
+  so an unstamped row resolves to its local path. `agentLocalPath` maps
+  ring/family/org → `/groups/<id>` (the 404 fix), project → `/projects/<id>`,
+  person → `/profile/<username|id>`.
+- **Stamps (in `graph-adapters.ts`):** `agentToGroup`/`agentToRing`/
+  `agentToFamily`/`agentToProject` stamp `homeHref`; `agentToUser` stamps
+  `profileHref`; `resourceToMarketplaceListing.ownerPath` routes through
+  `agentCanonicalHref` (replacing the broken `/rings|/families` branch).
+  `homeHref?` added to `Group`/`Ring`/`Family` in `src/lib/types.ts`.
+- **Swept surfaces:** `ring-feed`, `family-feed`, `project-feed`, `group-feed`
+  (incl. its own local `/rings|/families` ternary — same 404 class),
+  `group-subgroups`, `group-affiliates`, `group-relationships`,
+  `group-relationship-manager`, `people-feed`, `profile-group-feed`,
+  `user-connections`, `marketplace-feed`, `group-marketplace-feed`,
+  `post-feed` (author/creator/organizer/group card + card-click via
+  `navigateToHref`), `post-detail-client` (author byline), `agent-graph`
+  (member/subgroup node hrefs + click nav via `navigateToHref`), `search-bar`
+  + `search-header` (result nav via `navigateToHref`),
+  `app/(main)/profile/profile-client.tsx` (`getActivityObjectHref` routes all
+  entity classes through `resolveEntityHref`).
+- **Follow-up gaps (bare IDs, no home metadata in scope — need data-layer
+  stamps before they can reach a sovereign home; they render local routes
+  today, which exist here):** `comment-feed` (bare `authorId`), `receipt-card`
+  (inline `seller`), `event-detail-tabs` attendee list, `event-card` /
+  `calendar-event` (bare `groupId`/`projectId` props), `agent-graph` activity
+  objects, `notifications` page (bare `targetId`).
+
 ### Other Known Issues
 
 - [#6](https://github.com/rivr-social/rivr-group/issues/6): RESOLVED

@@ -13,7 +13,7 @@ import { MapPin, Users, Network } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { TypeBadge } from "@/components/type-badge"
 import { TypeIcon } from "@/components/type-icon"
-import Link from "next/link"
+import { CanonicalLink } from "@/components/canonical-link"
 import type { Ring, Family, User } from "@/lib/types"
 
 interface RingFeedProps {
@@ -113,9 +113,9 @@ export function RingFeed({
                   </Avatar>
                   <div>
                     {/* Rings are group-type agents; this instance renders them at /groups/[id]. */}
-                    <Link href={`/groups/${ring.id}`} className="text-xl font-bold hover:underline">
+                    <CanonicalLink href={ring.homeHref ?? `/groups/${ring.id}`} className="text-xl font-bold hover:underline">
                       {ring.name}
-                    </Link>
+                    </CanonicalLink>
                   </div>
                 </div>
                 <div className="flex items-center">
@@ -147,14 +147,14 @@ export function RingFeed({
                   <h4 className="text-sm font-medium mb-2">Families in this Ring:</h4>
                   <div className="flex flex-wrap gap-2">
                     {ringFamilies.slice(0, 3).map((family) => (
-                      // Families are group-type agents; rendered locally at /groups/[id].
-                      <Link
+                      // Families are group-type agents; local ones render at /groups/[id], federated projections at their sovereign home.
+                      <CanonicalLink
                         key={family.id}
-                        href={`/groups/${family.id}`}
+                        href={family.homeHref ?? `/groups/${family.id}`}
                         className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-800 hover:bg-purple-200"
                       >
                         {family.name} ({family.members?.length || 0})
-                      </Link>
+                      </CanonicalLink>
                     ))}
                     {ringFamilies.length > 3 && (
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-600">
