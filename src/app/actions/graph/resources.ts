@@ -391,6 +391,11 @@ export interface ProjectJobBoardJob {
   maxAssignees: number;
   totalPoints: number;
   requiredBadges: string[];
+  /** Pay model fields (for the card's "Fixed $X / Hourly $X/hr / Volunteer / N points" badge). */
+  payKind: string | null;
+  payAmountCents: number | null;
+  hourlyRateCents: number | null;
+  points: number | null;
   tasks: Array<{ id: string; name: string; description: string; points: number; completed: boolean }>;
 }
 
@@ -476,6 +481,10 @@ export async function fetchProjectJobBoard(projectId: string): Promise<ProjectJo
       requiredBadges: Array.isArray(meta.requiredBadges)
         ? meta.requiredBadges.filter((b): b is string => typeof b === "string")
         : [],
+      payKind: typeof meta.payKind === "string" ? meta.payKind : null,
+      payAmountCents: typeof meta.payAmountCents === "number" ? meta.payAmountCents : null,
+      hourlyRateCents: typeof meta.hourlyRateCents === "number" ? meta.hourlyRateCents : null,
+      points: typeof meta.points === "number" ? meta.points : null,
       tasks,
     };
   });

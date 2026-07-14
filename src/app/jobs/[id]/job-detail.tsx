@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -57,8 +57,15 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
     if (!initialJob) return null
     return projects.find(p => p.jobs && p.jobs.includes(jobId)) || null
   }, [initialJob, jobId, projects])
-  // Allow local task updates to override the derived job
+  // Allow local task updates to override the derived job (optimistic task chips).
   const [jobOverride, setJobOverride] = useState<JobShift | null>(null)
+  // Any server refresh (a payKind/detail edit, an attest, a claim) delivers a
+  // fresh `serverJob`; drop the stale optimistic override so the authoritative
+  // job — INCLUDING a just-changed payKind (fixed → volunteer) — takes effect
+  // immediately instead of being shadowed by the pre-edit snapshot.
+  useEffect(() => {
+    setJobOverride(null)
+  }, [serverJob])
   const job = jobOverride?.id === jobId ? jobOverride : initialJob
   const [activeTab, setActiveTab] = useState("about")
 

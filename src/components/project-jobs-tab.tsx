@@ -16,6 +16,9 @@ import { updateTaskStatus } from "@/app/actions/interactions";
 import { startJobTimer, stopJobTimer } from "@/app/actions/job-timer";
 import { addTaskNote, type TaskNote } from "@/app/actions/task-notes";
 import { updateTaskDescription } from "@/app/actions/edit-task";
+import Link from "next/link";
+import { describeJobPay, JOB_PAY_TONE_CLASS } from "@/lib/job-pay";
+import { JobClaimButton } from "@/components/job-claim-button";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -453,6 +456,13 @@ function JobCard({
   const jobPoints = getJobPoints(job);
   const status = typeof job.metadata.status === "string" ? job.metadata.status : "active";
   const priority = typeof job.metadata.priority === "string" ? job.metadata.priority : "medium";
+  const pay = describeJobPay({
+    payKind: typeof job.metadata.payKind === "string" ? job.metadata.payKind : null,
+    payAmountCents: typeof job.metadata.payAmountCents === "number" ? job.metadata.payAmountCents : null,
+    hourlyRateCents: typeof job.metadata.hourlyRateCents === "number" ? job.metadata.hourlyRateCents : null,
+    points: typeof job.metadata.points === "number" ? job.metadata.points : null,
+    totalPoints: jobPoints,
+  });
 
   return (
     <Collapsible
@@ -466,9 +476,19 @@ function JobCard({
             <div className="flex justify-between items-start">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <CardTitle className="text-lg">{job.name}</CardTitle>
+                  {/* Title links to the job detail (stops the collapsible toggle). */}
+                  <Link
+                    href={`/jobs/${job.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="hover:underline"
+                  >
+                    <CardTitle className="text-lg">{job.name}</CardTitle>
+                  </Link>
                   <Badge className={getStatusColor(status)}>
                     {status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                  </Badge>
+                  <Badge variant="outline" className={`text-xs ${JOB_PAY_TONE_CLASS[pay.tone]}`}>
+                    {pay.label}
                   </Badge>
                 </div>
                 {job.description ? (
@@ -478,8 +498,11 @@ function JobCard({
                 ) : null}
               </div>
 
-              {/* Timer button + chevron */}
+              {/* Claim + timer button + chevron */}
               <div className="shrink-0 ml-2 flex items-center gap-2">
+                <span onClick={(e) => e.stopPropagation()} role="presentation">
+                  <JobClaimButton jobId={job.id} status={status} />
+                </span>
                 <div
                   onClick={(e) => e.stopPropagation()}
                   onKeyDown={(e) => {

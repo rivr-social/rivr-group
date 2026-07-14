@@ -29,6 +29,8 @@ import type { SerializedAgent, SerializedResource } from "@/lib/graph-serializer
 import { applyToJob, fetchMyJobApplicationIds } from "@/app/actions/interactions"
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
+import { describeJobPay, JOB_PAY_TONE_CLASS } from "@/lib/job-pay"
+import { JobClaimButton } from "@/components/job-claim-button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
@@ -555,18 +557,24 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
                                   !isAssigned &&
                                   !hasApplied
                                 const isApplying = applyingJobId === job.id
+                                const pay = describeJobPay(job)
 
                                 return (
                                   <Link key={job.id} href={`/jobs/${job.id}`}>
                                     <Card className="border hover:shadow-sm transition-shadow cursor-pointer">
                                       <CardHeader className="py-3">
-                                        <div className="flex justify-between items-start">
-                                          <div className="flex-1">
-                                            <CardTitle className="text-md">{job.title}</CardTitle>
+                                        <div className="flex justify-between items-start gap-2">
+                                          <div className="flex-1 min-w-0">
+                                            <CardTitle className="text-md hover:underline">{job.title}</CardTitle>
                                           </div>
-                                          <Badge className={getStatusColor(job.status)}>
-                                            {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
-                                          </Badge>
+                                          <div className="flex flex-wrap items-center justify-end gap-1 shrink-0">
+                                            <Badge variant="outline" className={`text-xs ${JOB_PAY_TONE_CLASS[pay.tone]}`}>
+                                              {pay.label}
+                                            </Badge>
+                                            <Badge className={getStatusColor(job.status)}>
+                                              {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
+                                            </Badge>
+                                          </div>
                                         </div>
                                       </CardHeader>
                                       <CardContent className="py-2">
@@ -614,7 +622,10 @@ export function JobBoardTab({ groupId, currentUserId }: JobBoardTabProps) {
                                         </div>
                                       </CardContent>
                                       <CardFooter className="pt-0 pb-3">
-                                        <div className="flex justify-end w-full">
+                                        <div className="flex justify-end items-center gap-2 w-full">
+                                          {!isAssigned && (
+                                            <JobClaimButton jobId={job.id} status={job.status} />
+                                          )}
                                           {canApply && (
                                             <TooltipProvider>
                                               <Tooltip>
