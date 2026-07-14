@@ -456,6 +456,51 @@ Connect account via a federated payout-intent, what substrate already exists
 `stripeConnectAccountId`), and the safest first increment (a no-money "payout
 readiness" projection). Do NOT implement money movement without Cameron.
 
+## Group settings wave — personas, builder, assistant key, newsletter (2026-07-14)
+
+- **Group personas in settings (D23a):** `components/group-persona-manager.tsx`
+  surfaces the already-existing `actions/group-personas.ts` CRUD + the
+  autobot-enabled toggle in a **Personas** tab on `/groups/[id]/settings`. Admin
+  designates which child persona (or none) carries the group's AI assistant
+  (`setGroupPersonaAutobotEnabled` — mutually exclusive). Distinct from the
+  user-facing `persona-manager.tsx` (that manages the signed-in ACCOUNT's
+  personas on `/profile`; these are children of the GROUP agent).
+- **Site builder — group target + serve leg (D23b):** the builder already
+  generated + published (`lib/builder/site-*`, `site_versions`/
+  `site_publications`, migration 0046) but only built the signed-in user's OWN
+  site and had NO serve route. Now: `/builder?group=<id>` builds the GROUP's site
+  (admin-gated via `hasGroupWriteAccess`, `targetAgentId` threaded to
+  `/api/builder/publish`), and **the serve leg** is public GET
+  `groups/[id]/site/[[...path]]/route.ts` (streams the live version snapshot from
+  the DB; index.html default; content-type by ext; traversal-safe; nosniff). No
+  custom-domain/DNS lane — published sites are served under the instance's OWN
+  host at `/groups/{id}/site` (documented boundary; the generate→publish→serve
+  loop is fully functional). A **Site** tab in group settings links to both.
+- **Assistant admin key (D24):** a group admin can enter their own Anthropic API
+  key OR Claude Code OAuth token; stored ENCRYPTED (secret-box) as
+  `assistantApiKeyEnc` on the direct agent's `autobotSettings`, NEVER returned to
+  the client (config fetch exposes only `hasAssistantApiKey`). The chat route
+  decrypts server-side and threads `anthropicAuthToken` into `native-chat`, which
+  branches on token type: `sk-ant-oat*` → Bearer + oauth-beta +
+  CLAUDE_CODE_IDENTITY; real API keys → `x-api-key`, no beta/identity. Falls back
+  to the instance env credential when unset. Actions:
+  `setGroupAssistantApiKey`/`clearGroupAssistantApiKey` in
+  `actions/group-assistant-config.ts`.
+- **Newsletter opt-out gate (D25):** `isEmailEnabled` extracted to
+  `lib/email-preferences.ts` (shared by group broadcast + newsletter);
+  `resolveGroupMemberEmails` now excludes members who disabled email
+  notifications, and `sendNewsletterAction` appends a non-tracking
+  unsubscribe/preferences footer (→ `/settings?tab=notifications`) to the
+  outbound HTML/text only (stored body untouched).
+- **Cross-instance `job.claimed` emit (A8, emit side):** `lib/federation/
+  job-claim-event.ts` (`JOB_CLAIMED_EVENT_TYPE='job.claimed'` +
+  `buildJobClaimCalendarPayload`). `claimJobAction` + `reviewJobClaimRequest`
+  (on approval) emit a self-describing calendar payload (claimant, job window,
+  owning group, canonical job URL) so a claimant's HOME instance can materialize
+  the job on their profile calendar. The MATERIALIZE half is required parity in
+  person + global (projection consumer + a profile-calendar projection keyed on
+  the locally-homed `claimantId`).
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or
