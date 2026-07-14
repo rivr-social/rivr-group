@@ -214,7 +214,7 @@ export function GroupAdminPassword({ groupId, hasPassword: initialHasPassword }:
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+                className="absolute z-10 right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
                 onClick={() => setShowNewPassword(!showNewPassword)}
                 tabIndex={-1}
               >
@@ -246,7 +246,7 @@ export function GroupAdminPassword({ groupId, hasPassword: initialHasPassword }:
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+                className="absolute z-10 right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                 tabIndex={-1}
               >

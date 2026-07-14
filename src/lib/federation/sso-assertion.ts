@@ -493,11 +493,23 @@ export async function verifySsoAssertion(
     return { ok: false, reason: "audience-mismatch" };
   }
 
-  // Optional issuer allow-listing.
+  // Issuer allow-listing. Two issuers are acceptable (Cameron, 2026-07-13 —
+  // login must never break on this):
+  //  1. the configured GLOBAL identity authority, and
+  //  2. the asserted actor's OWN HOME instance (issuer == claims.homeBaseUrl)
+  //     — a home may vouch for its own actors, the same principle as the
+  //     owner-routed buyer rail's homeNodeId == peerNodeId rule. The
+  //     signature check below still verifies against the REGISTERED key for
+  //     that issuer, so an unregistered issuer dies as `issuer-unknown` and a
+  //     key mismatch as `signature-invalid`; a registered peer can never
+  //     vouch for a FOREIGN-homed actor (issuer != home != global rejects).
   if (input.expectedGlobalIssuerBaseUrl) {
     const expectedIssuer = normalizeBaseUrl(input.expectedGlobalIssuerBaseUrl);
     const claimsIssuer = normalizeBaseUrl(claims.globalIssuerBaseUrl);
-    if (!expectedIssuer || expectedIssuer !== claimsIssuer) {
+    const claimsHome = normalizeBaseUrl(claims.homeBaseUrl);
+    const issuerIsGlobal = Boolean(expectedIssuer && claimsIssuer === expectedIssuer);
+    const issuerIsActorHome = Boolean(claimsIssuer && claimsHome === claimsIssuer);
+    if (!issuerIsGlobal && !issuerIsActorHome) {
       return { ok: false, reason: "issuer-mismatch" };
     }
   }
