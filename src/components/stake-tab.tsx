@@ -22,6 +22,8 @@ import {
 } from "@/components/net-allocation-editor"
 import type { NetAllocationRule } from "@/lib/net-allocation"
 import type { MemberStake } from "@/lib/types"
+import type { MemberSubgroupPoints } from "@/lib/queries/stakes"
+import { FolderTree } from "lucide-react"
 
 /**
  * A contributor surfaced because they completed one or more jobs. Recorded via
@@ -42,6 +44,14 @@ interface StakeTabProps {
   /** Pre-computed total stake percentage for the group. */
   totalStakes: number
   /**
+   * Per-member task-point breakdown by owning subgroup (D21), keyed by member
+   * agent id. Lets each member see their points split across subgroups instead
+   * of one opaque total. Defaults to empty (totals only).
+   */
+  memberSubgroupPoints?: Record<string, MemberSubgroupPoints[]>
+  /** Viewer's agent id — highlights their own row + "your points" card. */
+  currentUserId?: string | null
+  /**
    * Recorded job-contribution stakeholders. Defaults to an empty list so the
    * Contributions section is hidden when there are no recorded contributions.
    */
@@ -59,10 +69,58 @@ interface StakeTabProps {
   netAllocationMembers?: NetAllocationMemberOption[]
 }
 
+/** Formats a point value, dropping a trailing `.0` from whole numbers. */
+function formatPoints(points: number): string {
+  return Number.isInteger(points) ? String(points) : points.toFixed(1)
+}
+
+/**
+ * Renders a member's task points split across the subgroups that own the work,
+ * each with a share bar. Root-group direct work is tagged so it reads apart from
+ * the named subgroups.
+ */
+function SubgroupPointsList({
+  rows,
+  total,
+  compact = false,
+}: {
+  rows: MemberSubgroupPoints[]
+  total: number
+  compact?: boolean
+}) {
+  return (
+    <div className={compact ? "space-y-1.5" : "space-y-2"}>
+      {rows.map((row) => {
+        const pct = total > 0 ? (row.points / total) * 100 : 0
+        return (
+          <div key={row.agentId} className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm">
+                  {row.name}
+                  {row.isRoot && (
+                    <span className="ml-1.5 text-xs text-muted-foreground">· group</span>
+                  )}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {formatPoints(row.points)} pts
+                </span>
+              </div>
+              {!compact && <Progress value={pct} className="mt-1 h-1.5" />}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function StakeTab({
   groupId,
   memberStakes,
   totalStakes,
+  memberSubgroupPoints = {},
+  currentUserId = null,
   recordedContributions = [],
   isGroupAdmin = false,
   netAllocationRules = [],
@@ -71,8 +129,30 @@ export function StakeTab({
 }: StakeTabProps) {
   const [activeTab, setActiveTab] = useState("overview")
 
+  // The viewer's own points split across subgroups — the "show MY points in
+  // subgroups" ask (D21). Only shown when they've earned in >= 1 subgroup.
+  const myBreakdown = currentUserId ? memberSubgroupPoints[currentUserId] ?? [] : []
+  const myTotalPoints = myBreakdown.reduce((sum, row) => sum + row.points, 0)
+
   return (
     <div className="space-y-6">
+      {myBreakdown.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <FolderTree className="h-4 w-4 text-muted-foreground" />
+              Your points by subgroup
+            </CardTitle>
+            <CardDescription>
+              {formatPoints(myTotalPoints)} total task points across {myBreakdown.length}{" "}
+              {myBreakdown.length === 1 ? "area" : "areas"} of this group.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <SubgroupPointsList rows={myBreakdown} total={myTotalPoints} />
+          </CardContent>
+        </Card>
+      )}
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold">Member Stakes</h2>
         <Button variant="outline">Propose Stake Changes</Button>
@@ -104,32 +184,48 @@ export function StakeTab({
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {memberStakes.map((stake) => (
-                  <div
-                    key={`${stake.user.id}-${stake.groupId}`}
-                    className="flex items-center justify-between p-4 border rounded-lg"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Avatar>
-                        <AvatarImage src={stake.user.avatar || "/placeholder.svg"} alt={stake.user.name} />
-                        <AvatarFallback>{stake.user.name.charAt(0)}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="font-medium">{stake.user.name}</p>
-                        <p className="text-sm text-muted-foreground">
-                          Member since {new Date(stake.joinedAt).toLocaleDateString()}
-                        </p>
+                {memberStakes.map((stake) => {
+                  const breakdown = memberSubgroupPoints[stake.user.id] ?? []
+                  const isSelf = Boolean(currentUserId && stake.user.id === currentUserId)
+                  return (
+                    <div
+                      key={`${stake.user.id}-${stake.groupId}`}
+                      className={`p-4 border rounded-lg ${isSelf ? "border-primary/40 bg-primary/5" : ""}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Avatar>
+                            <AvatarImage src={stake.user.avatar || "/placeholder.svg"} alt={stake.user.name} />
+                            <AvatarFallback>{stake.user.name.charAt(0)}</AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <p className="font-medium">
+                              {stake.user.name}
+                              {isSelf && <span className="ml-2 text-xs text-primary">You</span>}
+                            </p>
+                            <p className="text-sm text-muted-foreground">
+                              Member since {new Date(stake.joinedAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-lg font-semibold">{stake.profitShare.toFixed(1)}%</div>
+                          <div className="text-xs text-muted-foreground">{formatPoints(stake.pointsEarned)} pts</div>
+                          <div className="w-32">
+                            <Progress value={totalStakes > 0 ? (stake.profitShare / totalStakes) * 100 : 0} className="h-2" />
+                          </div>
+                        </div>
                       </div>
+                      {/* Per-subgroup point breakdown (D21) — only when the member's
+                          points span more than one owning subgroup. */}
+                      {breakdown.length > 1 && (
+                        <div className="mt-3 border-t pt-3">
+                          <SubgroupPointsList rows={breakdown} total={stake.pointsEarned} compact />
+                        </div>
+                      )}
                     </div>
-                    <div className="text-right">
-                      <div className="text-lg font-semibold">{stake.profitShare.toFixed(1)}%</div>
-                      <div className="text-xs text-muted-foreground">{stake.pointsEarned} pts</div>
-                      <div className="w-32">
-                        <Progress value={(stake.profitShare / totalStakes) * 100} className="h-2" />
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </CardContent>
           </Card>

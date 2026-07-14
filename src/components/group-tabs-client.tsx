@@ -34,6 +34,7 @@ import type {
 import type { NetAllocationRule } from "@/lib/net-allocation"
 import type { Document } from "@/types/domain"
 import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel, GroupTabKey } from "@/lib/types"
+import type { MemberSubgroupPoints } from "@/lib/queries/stakes"
 import { ProposalStatus, GROUP_TAB_KEYS, DEFAULT_TAB_VISIBILITY } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
 import { toStockInventory, type StockNeed } from "@/lib/stock"
@@ -192,6 +193,12 @@ export interface GroupTabsClientProps {
   serverMemberStakes?: MemberStake[]
   serverTotalStakes?: number
   /**
+   * Per-member task-point breakdown by owning subgroup (D21). Keyed by member
+   * agent id; each value is the member's points partitioned by owning agent.
+   * Optional: when omitted the Stake tab shows totals only.
+   */
+  memberSubgroupPoints?: Record<string, MemberSubgroupPoints[]>
+  /**
    * Recorded job-contribution stakeholders (EPIC J / J2 contribution model).
    * Each entry is a contributor who completed one or more jobs, surfaced in the
    * Stake tab so contributors appear as recognized stakeholders. Optional: when
@@ -260,6 +267,7 @@ export function GroupTabsClient({
   stakeActivity,
   serverMemberStakes,
   serverTotalStakes,
+  memberSubgroupPoints = {},
   recordedContributions = [],
   netAllocationRules = [],
   netAllocationClasses = [],
@@ -899,6 +907,8 @@ export function GroupTabsClient({
           groupId={groupId}
           memberStakes={memberStakes}
           totalStakes={serverTotalStakes && serverTotalStakes > 0 ? serverTotalStakes : 100}
+          memberSubgroupPoints={memberSubgroupPoints}
+          currentUserId={currentUserId ?? null}
           recordedContributions={recordedContributions}
           isGroupAdmin={isGroupAdmin}
           netAllocationRules={netAllocationRules}
