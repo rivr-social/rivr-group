@@ -274,6 +274,7 @@ function buildJobsWithTasks(
     type: string;
     description: string | null;
     metadata: Record<string, unknown>;
+    createdAt?: string | null;
   }>,
 ) {
   const jobs = allResources.filter(
@@ -282,6 +283,17 @@ function buildJobsWithTasks(
   const tasks = allResources.filter(
     (r) => r.type === "task" || (r.metadata as Record<string, unknown>).resourceKind === "task",
   )
+
+  // Stable ordering key: creation time, then id — both IMMUTABLE. Ordering by
+  // anything mutable (updatedAt / completion) made jobs (and tasks) JUMP every
+  // time a task was checked off, because the server-action refresh re-fetched
+  // in the new order. createdAt never changes, so the list stays put.
+  const byStableKey = <T extends { id: string; createdAt?: string | null }>(a: T, b: T) => {
+    const at = a.createdAt ? new Date(a.createdAt).getTime() : 0
+    const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0
+    if (at !== bt) return at - bt
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  }
 
   // Index tasks by jobId for efficient lookups.
   const tasksByJobId = new Map<string, typeof tasks>()
@@ -294,12 +306,12 @@ function buildJobsWithTasks(
     }
   }
 
-  return jobs.map((job) => ({
+  return [...jobs].sort(byStableKey).map((job) => ({
     id: job.id,
     name: job.name,
     description: job.description,
     metadata: job.metadata,
-    tasks: (tasksByJobId.get(job.id) ?? []).map((t) => ({
+    tasks: (tasksByJobId.get(job.id) ?? []).slice().sort(byStableKey).map((t) => ({
       id: t.id,
       name: t.name,
       description: t.description,
