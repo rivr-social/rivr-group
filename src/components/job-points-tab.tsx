@@ -32,8 +32,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Award, CheckCircle2, Star, Users, Zap } from "lucide-react"
-import { setJobPointShareInputAction, claimJobFinishedAction, type JobShareData } from "@/app/actions/job-peer-allocation"
+import { Award, BadgeCheck, CheckCircle2, ClipboardCheck, Star, Users, Zap } from "lucide-react"
+import { setJobPointShareInputAction, claimJobFinishedAction, type JobShareData, type JobCompletionClaimant } from "@/app/actions/job-peer-allocation"
+import { markJobDoneAction } from "@/app/actions/job-completion"
 import { useToast } from "@/components/ui/use-toast"
 
 /** Default slider weight for an unrated teammate. */
@@ -41,12 +42,20 @@ const DEFAULT_WEIGHT = 50
 
 interface JobPointsTabProps {
   share: JobShareData
+  /** Server-computed: viewer may settle the job (owner/group admin). */
+  canManage: boolean
+  /** Server-computed: viewer may attest completion (admin OR project QA/lead). */
+  canAttest: boolean
 }
 
-export function JobPointsTab({ share }: JobPointsTabProps) {
+export function JobPointsTab({ share, canManage, canAttest }: JobPointsTabProps) {
   const router = useRouter()
   const { toast } = useToast()
   const [isPending, startTransition] = useTransition()
+  const [isSettling, setIsSettling] = useState(false)
+  // Optimistic self-QA: when an attester claims the job complete themselves,
+  // surface the attest/settle affordance immediately (before the refetch).
+  const [selfClaim, setSelfClaim] = useState<JobCompletionClaimant | null>(null)
 
   const others = useMemo(
     () => share.assignees.filter((a) => a.id !== share.viewerId),
@@ -88,6 +97,11 @@ export function JobPointsTab({ share }: JobPointsTabProps) {
       })
       if (result.success) {
         setClaimOpen(false)
+        // Self-QA: if the completer is also an attester, morph their own action
+        // into the attest/settle affordance immediately (optimistic).
+        if (canAttest && share.viewerId) {
+          setSelfClaim({ id: share.viewerId, name: "You", skillfulness: skillfulness[0], difficulty: difficulty[0] })
+        }
         toast({ title: "Claimed finished", description: result.message })
         router.refresh()
       } else {
@@ -96,8 +110,77 @@ export function JobPointsTab({ share }: JobPointsTabProps) {
     })
   }
 
+  // Attester approves the job-level claim(s) by marking the job done (records
+  // contributions + settles pay/points). Authority is re-checked server-side.
+  const handleAttestMarkDone = () => {
+    setIsSettling(true)
+    void (async () => {
+      try {
+        const result = await markJobDoneAction(share.jobId)
+        if (result.success) {
+          toast({ title: "Job attested & marked done", description: result.message })
+          router.refresh()
+        } else {
+          toast({ title: "Failed to mark job done", description: result.message, variant: "destructive" })
+        }
+      } catch {
+        toast({ title: "Failed to mark job done", description: "An unexpected error occurred.", variant: "destructive" })
+      } finally {
+        setIsSettling(false)
+      }
+    })()
+  }
+
+  // Claimants awaiting attestation (server set + optimistic self-claim).
+  const claimants: JobCompletionClaimant[] = (() => {
+    const list = [...share.jobClaimants]
+    if (selfClaim && !list.some((c) => c.id === selfClaim.id)) list.unshift(selfClaim)
+    return list
+  })()
+  // Job-level claim → attest morph: an attester sees the approve/settle
+  // affordance the moment a completion claim exists (theirs, optimistically, or
+  // someone else's on load) — the whole-job analog of the task attest chips.
+  const showAttestPanel = canAttest && !share.jobCompleted && claimants.length > 0
+
   return (
     <div className="space-y-6">
+      {/* Job-level attest / approve — the whole-job analog of the task chips.
+          Appears for attesters as soon as a completion claim exists. */}
+      {showAttestPanel && (
+        <Card className="border-green-200">
+          <CardHeader>
+            <CardTitle className="text-md flex items-center gap-2">
+              <ClipboardCheck className="h-4 w-4 text-green-600" />
+              Completion claimed — review &amp; approve
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-1">
+              {claimants.map((c) => (
+                <div key={c.id} className="flex items-center justify-between text-sm">
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {c.skillfulness !== null ? `skill ${c.skillfulness}/100` : "no rating"}
+                    {c.skillfulness !== null && c.difficulty !== null ? " · " : ""}
+                    {c.difficulty !== null ? `difficulty ${c.difficulty}/100` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {canManage ? (
+              <Button size="sm" onClick={handleAttestMarkDone} disabled={isSettling}>
+                <BadgeCheck className="h-4 w-4 mr-1" />
+                {isSettling ? "Settling…" : "Attest & mark job done"}
+              </Button>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Claim recorded — awaiting a group admin to settle pay &amp; points.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Aggregate allocation */}
       <Card>
         <CardHeader>

@@ -18,6 +18,8 @@ import {
   getMarketplaceListings as queryMarketplaceListings,
   getResource,
   getEventsByProjectId,
+  getJobsByProjectId,
+  getTasksByJobIds,
 } from "@/lib/queries/resources";
 import {
   requireActorId,
@@ -377,4 +379,107 @@ export async function fetchProjectEvents(
     : await filterPubliclyCrawlableResources(rows as Resource[]);
 
   return visible.map((row) => serializeResource(row));
+}
+
+/** One job on the group Jobs board, with its child tasks + computed points. */
+export interface ProjectJobBoardJob {
+  id: string;
+  title: string;
+  status: string;
+  location: string;
+  assignees: string[];
+  maxAssignees: number;
+  totalPoints: number;
+  requiredBadges: string[];
+  tasks: Array<{ id: string; name: string; description: string; points: number; completed: boolean }>;
+}
+
+/** Aggregated jobs/points/completion for a single project's Jobs-board card. */
+export interface ProjectJobBoardData {
+  jobs: ProjectJobBoardJob[];
+  totalPoints: number;
+  totalTasks: number;
+  completedTasks: number;
+  completion: number;
+}
+
+/**
+ * Aggregates a project's jobs/points/completion by `metadata.projectId`
+ * linkage, REGARDLESS of which subtree agent owns the job/task rows (parent
+ * group, an owning circle/subgroup, or the project resource's owner) —
+ * respecting per-row visibility. This replaces the group Jobs board's previous
+ * `fetchResourcesByOwner(groupId)` scan, which silently dropped every
+ * subgroup-owned job (a subgroup-owned project rendered "No jobs" / 0 points /
+ * 0% even with dozens of linked jobs). Points/completion are computed from the
+ * jobs' CHILD `task` resources (the current task model), not the legacy
+ * embedded `metadata.tasks` array.
+ *
+ * @param projectId Project resource/agent UUID.
+ */
+export async function fetchProjectJobBoard(projectId: string): Promise<ProjectJobBoardData> {
+  const empty: ProjectJobBoardData = { jobs: [], totalPoints: 0, totalTasks: 0, completedTasks: 0, completion: 0 };
+  if (!isUuid(projectId)) return empty;
+
+  const actorId = await tryActorId();
+  const jobRows = await getJobsByProjectId(projectId);
+  const visibleJobs = (actorId
+    ? await filterViewableResources(actorId, jobRows as Resource[])
+    : await filterPubliclyCrawlableResources(jobRows as Resource[])) as Resource[];
+
+  const jobIds = visibleJobs.map((job) => job.id);
+  const taskRows = await getTasksByJobIds(jobIds);
+
+  // Child tasks grouped by parent job (owner-agnostic).
+  const tasksByJob = new Map<string, ProjectJobBoardJob["tasks"]>();
+  for (const task of taskRows) {
+    const meta = (task.metadata ?? {}) as Record<string, unknown>;
+    const jobId = typeof meta.jobId === "string" ? meta.jobId : null;
+    if (!jobId) continue;
+    const list = tasksByJob.get(jobId) ?? [];
+    list.push({
+      id: task.id,
+      name: task.name,
+      description: task.description ?? "",
+      points: typeof meta.points === "number" ? meta.points : 0,
+      completed: meta.completed === true || meta.status === "completed",
+    });
+    tasksByJob.set(jobId, list);
+  }
+
+  let totalTasks = 0;
+  let completedTasks = 0;
+  let totalPoints = 0;
+  const jobs: ProjectJobBoardJob[] = visibleJobs.map((job) => {
+    const meta = (job.metadata ?? {}) as Record<string, unknown>;
+    const tasks = tasksByJob.get(job.id) ?? [];
+    const taskPoints = tasks.reduce((sum, t) => sum + t.points, 0);
+    const metaPoints =
+      typeof meta.totalPoints === "number"
+        ? meta.totalPoints
+        : typeof meta.points === "number"
+          ? meta.points
+          : 0;
+    const jobPoints = taskPoints > 0 ? taskPoints : metaPoints;
+    totalTasks += tasks.length;
+    completedTasks += tasks.filter((t) => t.completed).length;
+    totalPoints += jobPoints;
+    return {
+      id: job.id,
+      title: job.name,
+      status: typeof meta.status === "string" ? meta.status : "open",
+      location: typeof meta.location === "string" ? meta.location : "",
+      assignees: Array.isArray(meta.assignees)
+        ? meta.assignees.filter((a): a is string => typeof a === "string")
+        : [],
+      maxAssignees: typeof meta.maxAssignees === "number" ? meta.maxAssignees : 5,
+      totalPoints: jobPoints,
+      requiredBadges: Array.isArray(meta.requiredBadges)
+        ? meta.requiredBadges.filter((b): b is string => typeof b === "string")
+        : [],
+      tasks,
+    };
+  });
+
+  const completion = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  return { jobs, totalPoints, totalTasks, completedTasks, completion };
 }

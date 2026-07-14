@@ -388,6 +388,35 @@ worker's `awaiting_approval` task (the checkbox there RETRACTED the claim via
 buttons are the control) — the attester now immediately sees approve/reject
 without a reload, matching the job-detail Tasks tab.
 
+**Job-level claim → attest morph (directive #6, round 2).** The WHOLE-JOB analog
+of the task chips. `getJobShareData` (`actions/job-peer-allocation.ts`) now
+returns `jobCompleted` + `jobClaimants` (everyone with an ACTIVE job-level
+claim-complete awaiting review, with their skillfulness/difficulty). `JobPointsTab`
+takes server-computed `canManage`/`canAttest` and, whenever a completion claim
+exists and the job isn't done, renders a "Completion claimed — review & approve"
+panel for attesters: `canManage` viewers get an **Attest & mark job done** button
+(`markJobDoneAction` — settles pay/points, authority re-checked server-side),
+others see "awaiting a group admin to settle". When the completer IS an attester,
+the panel appears OPTIMISTICALLY right after their own claim-complete (self-QA),
+before the refetch. (Job-level "approve" is mark-done — job points settle via peer
+allocation at mark-done, so there is no standalone per-claim job attest.)
+
+**Group Jobs board shows real data across subgroups (directive #7, round 2).**
+The group Jobs tab (`job-board-tab.tsx`) computed each project card's jobs/points/
+completion from `fetchResourcesByOwner(groupId)` — GROUP-owned rows only — so a
+subgroup-owned project (owner = a circle agent) rendered "No jobs" / 0 points /
+0% despite dozens of `metadata.projectId`-linked jobs, and card stats were 0
+until a project was expanded. New owner-agnostic queries
+`getJobsByProjectId` / `getTasksByJobIds` (`lib/queries/resources.ts`) + server
+action `fetchProjectJobBoard` (`actions/graph/resources.ts`) aggregate a
+project's jobs by `metadata.projectId` regardless of which subtree agent owns
+the rows (visibility-respecting via `filterViewableResources`), computing
+points/completion from CHILD `task` resources. The board eager-loads every
+project's board on mount so cards show real numbers without expanding. Tests:
+`lib/queries/__tests__/jobs-by-project.test.ts`,
+`actions/__tests__/project-job-board.test.ts`,
+`actions/__tests__/job-peer-allocation.test.ts` (`pnpm test:db`).
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or

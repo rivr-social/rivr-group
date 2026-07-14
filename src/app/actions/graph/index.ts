@@ -45,7 +45,9 @@ export {
   fetchPostDetail,
   fetchEventDetail,
   fetchProjectEvents,
+  fetchProjectJobBoard,
 } from "./resources";
+export type { ProjectJobBoardData, ProjectJobBoardJob } from "./resources";
 
 // places
 export {
