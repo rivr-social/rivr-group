@@ -311,7 +311,7 @@ export function GroupRelationshipManager({ groupId, isCreator, isAdmin }: GroupR
                   </div>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" asChild>
-                      <a href={`/groups/${group.id}`} target="_blank" rel="noopener noreferrer">
+                      <a href={group.homeHref ?? `/groups/${group.id}`} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="h-4 w-4 mr-1" />
                         View
                       </a>

@@ -20,7 +20,7 @@ import { Layers, ChevronRight, Users, Plus } from "lucide-react"
 import { fetchAgent, fetchAgentChildren } from "@/app/actions/graph"
 import { agentToGroup } from "@/lib/graph-adapters"
 import type { Group } from "@/lib/types"
-import Link from "next/link"
+import { CanonicalLink } from "@/components/canonical-link"
 
 interface GroupSubgroupsProps {
   parentGroupId: string
@@ -143,7 +143,7 @@ export function GroupSubgroups({ parentGroupId, isCreator, isAdmin }: GroupSubgr
         {childGroups.length > 0 ? (
           <div className="space-y-3">
             {childGroups.map((group) => (
-              <Link href={`/groups/${group.id}`} key={group.id} className="block">
+              <CanonicalLink href={group.homeHref ?? `/groups/${group.id}`} key={group.id} className="block">
                 <div className="flex items-center justify-between p-3 rounded-md border hover:bg-muted cursor-pointer">
                   <div className="flex items-center">
                     <Avatar className="h-10 w-10 mr-3">
@@ -160,7 +160,7 @@ export function GroupSubgroups({ parentGroupId, isCreator, isAdmin }: GroupSubgr
                   </div>
                   <ChevronRight className="h-5 w-5 text-muted-foreground" />
                 </div>
-              </Link>
+              </CanonicalLink>
             ))}
           </div>
         ) : (

@@ -306,7 +306,7 @@ function GroupCard({
             </Avatar>
             <div>
               <CardTitle className="text-base">
-                <a href={`/groups/${group.id}`} className="hover:underline">
+                <a href={group.homeHref ?? `/groups/${group.id}`} className="hover:underline">
                   {group.name}
                 </a>
               </CardTitle>
@@ -327,7 +327,7 @@ function GroupCard({
       </CardContent>
       <CardFooter className="pt-2 flex justify-between">
         <Button variant="outline" size="sm" asChild>
-          <a href={`/groups/${group.id}`}>View Group</a>
+          <a href={group.homeHref ?? `/groups/${group.id}`}>View Group</a>
         </Button>
 
         {isAdminOrCreator && (

@@ -10,10 +10,10 @@ import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Briefcase, MapPin, Users, Calendar } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
-import Link from "next/link"
+import { CanonicalLink } from "@/components/canonical-link"
 
 interface ProjectFeedProps {
-  projects: { id: string; name: string; description?: string; status?: string; location?: string; memberCount?: number; startDate?: string; createdAt?: string; tags?: string[]; chapterTags?: string[] }[]
+  projects: { id: string; name: string; homeHref?: string; description?: string; status?: string; location?: string; memberCount?: number; startDate?: string; createdAt?: string; tags?: string[]; chapterTags?: string[] }[]
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -44,12 +44,12 @@ export function ProjectFeed({ projects }: ProjectFeedProps) {
                   <Briefcase className="h-5 w-5" />
                 </div>
                 <div>
-                  <Link
-                    href={`/projects/${project.id}`}
+                  <CanonicalLink
+                    href={project.homeHref ?? `/projects/${project.id}`}
                     className="text-lg font-semibold hover:underline"
                   >
                     {project.name}
-                  </Link>
+                  </CanonicalLink>
                   <Badge
                     variant="outline"
                     className={`ml-2 text-xs ${STATUS_STYLES[project.status || "active"] || STATUS_STYLES.active}`}

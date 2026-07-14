@@ -5,7 +5,7 @@
  * with avatar list.
  */
 
-import Link from "next/link";
+import { CanonicalLink } from "@/components/canonical-link";
 import { Users } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,7 +47,7 @@ export function UserConnections({ connections }: UserConnectionsProps) {
           <div className="space-y-3">
             <div className="flex flex-wrap gap-2">
               {connections.slice(0, 12).map((user) => (
-                <Link
+                <CanonicalLink
                   key={user.id}
                   href={user.profileHref ?? `/profile/${user.username}`}
                   className="group"
@@ -57,7 +57,7 @@ export function UserConnections({ connections }: UserConnectionsProps) {
                     <AvatarImage src={user.avatar} alt={user.name} />
                     <AvatarFallback>{getInitialsFromName(user.name)}</AvatarFallback>
                   </Avatar>
-                </Link>
+                </CanonicalLink>
               ))}
             </div>
             {connections.length > 12 ? (

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import { CanonicalLink } from "@/components/canonical-link"
 import Image from "next/image"
 import Link from "next/link"
 import { ChevronDown, ChevronLeft, ChevronUp, Heart, MessageCircle, Pencil, Share2, Trash2, MoreHorizontal, EyeOff, UserMinus2 } from "lucide-react"
@@ -166,16 +167,16 @@ export function PostDetailClient({
           <div className="p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-3">
-                <Link href={`/profile/${post.author.username || post.author.id}`}>
+                <CanonicalLink href={post.author.profileHref ?? `/profile/${post.author.username || post.author.id}`}>
                   <Avatar className="h-12 w-12 hover:ring-2 hover:ring-primary transition-all">
                     <AvatarImage src={post.author.avatar || "/placeholder.svg"} alt={post.author.name} />
                     <AvatarFallback>{post.author.name.substring(0, 2)}</AvatarFallback>
                   </Avatar>
-                </Link>
+                </CanonicalLink>
                 <div>
-                  <Link href={`/profile/${post.author.username || post.author.id}`} className="font-medium hover:underline">
+                  <CanonicalLink href={post.author.profileHref ?? `/profile/${post.author.username || post.author.id}`} className="font-medium hover:underline">
                     {post.author.name}
-                  </Link>
+                  </CanonicalLink>
                   <RelativeTime date={post.createdAt} className="text-xs text-muted-foreground" />
                 </div>
               </div>

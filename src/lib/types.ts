@@ -699,6 +699,8 @@ export type VoucherClaim = {
 export type Group = {
   id: string
   name: string
+  /** Canonical link target: local path when homed here, absolute sovereign-home URL for a federated projection. */
+  homeHref?: string
   description: string
   image: string
   memberCount: number
@@ -743,6 +745,8 @@ export type Group = {
 export type Ring = {
   id: string
   name: string
+  /** Canonical link target: local path when homed here, absolute sovereign-home URL for a federated projection. */
+  homeHref?: string
   description: string
   image: string
   memberCount: number
@@ -778,6 +782,8 @@ export type Ring = {
 export type Family = {
   id: string
   name: string
+  /** Canonical link target: local path when homed here, absolute sovereign-home URL for a federated projection. */
+  homeHref?: string
   description: string
   image: string
   memberCount: number
