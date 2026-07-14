@@ -5,7 +5,11 @@
  *
  * Newsletters are GROUP-scoped: a group/org admin composes a newsletter
  * from their press feed or a free-form body, then sends it to all active
- * person members with a usable email address.
+ * person members with a usable email address who have NOT turned off email
+ * notifications in their settings (the same `isEmailEnabled` opt-out gate group
+ * broadcasts respect — see `@/lib/email-preferences`). Each outbound message
+ * carries an unsubscribe/preferences footer pointing at the member's own
+ * notification settings.
  *
  * Security model (verified-principal rule):
  * - All actions require an authenticated session.
@@ -47,6 +51,8 @@ import { isGroupAdmin } from "@/app/actions/group-admin";
 import { fetchGroupPressFeedAction, type PressFeedItem } from "@/app/actions/press";
 import { createResourceWithLedger } from "@/app/actions/resource-creation/helpers";
 import { getGroupMembers } from "@/lib/queries/agents";
+import { isEmailEnabled } from "@/lib/email-preferences";
+import { getInstanceConfig } from "@/lib/federation/instance-config";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -73,6 +79,13 @@ const NEWSLETTER_VISIBILITY = "members" as const;
 /** UUID validation pattern (RFC 4122). */
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Path (relative to the instance base URL) to the settings page where a member
+ * turns email notifications off. This app's settings live at `/settings`; the
+ * Notifications tab is selected via the `?tab=notifications` query param.
+ */
+const SETTINGS_NOTIFICATIONS_PATH = "/settings?tab=notifications" as const;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -221,8 +234,54 @@ function htmlToPlainText(html: string): string {
 }
 
 /**
+ * Resolves the settings-notifications URL for this instance from the instance
+ * config base URL. Non-tracking: a plain link to the member's own notification
+ * settings, no per-user token — the opt-out is the member's GLOBAL preference,
+ * which is the correct unsubscribe mechanism for member-scoped mail.
+ */
+function resolveNotificationSettingsUrl(): string {
+  const baseUrl = getInstanceConfig().baseUrl.replace(/\/+$/, "");
+  return `${baseUrl}${SETTINGS_NOTIFICATIONS_PATH}`;
+}
+
+/**
+ * Builds the HTML unsubscribe/preferences footer appended to the OUTBOUND email
+ * body only (the stored newsletter resource is never mutated). Values are
+ * HTML-escaped so the footer stays valid regardless of the settings URL.
+ */
+function buildUnsubscribeFooterHtml(settingsUrl: string): string {
+  const href = escapeHtml(settingsUrl);
+  return `
+<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0 16px;" />
+<p style="font-size: 12px; color: #9ca3af; margin: 0;">
+  You're receiving this because you're a member of this group. To stop receiving
+  email updates, turn off email notifications in your
+  <a href="${href}" style="color: #6b7280;">RIVR notification settings</a>.
+</p>`.trim();
+}
+
+/**
+ * Plain-text counterpart to {@link buildUnsubscribeFooterHtml} for the text part.
+ */
+function buildUnsubscribeFooterText(settingsUrl: string): string {
+  return [
+    "",
+    "—",
+    "You're receiving this because you're a member of this group.",
+    `To stop receiving email updates, turn off email notifications in your RIVR notification settings: ${settingsUrl}`,
+  ].join("\n");
+}
+
+/**
  * Resolves member emails for a group entirely on the server. Returns a list
- * of `{ email, agentId }` pairs where email is non-null and non-empty.
+ * of `{ email, agentId }` pairs where email is non-null and non-empty AND the
+ * member has NOT turned off email notifications in their settings.
+ *
+ * The opt-out gate reuses {@link isEmailEnabled} (the same predicate group
+ * broadcasts use), so a member's global email-notification preference set in
+ * `/settings` → Notifications governs newsletter delivery too. Members who
+ * disabled email notifications are excluded from the recipient set.
+ *
  * Emails are NEVER returned to client callers — only consumed within server actions.
  */
 async function resolveGroupMemberEmails(
@@ -235,7 +294,8 @@ async function resolveGroupMemberEmails(
       (member): member is typeof member & { email: string } =>
         member.type === "person" &&
         typeof member.email === "string" &&
-        member.email.trim().length > 0,
+        member.email.trim().length > 0 &&
+        isEmailEnabled(member.metadata),
     )
     .map((member) => ({ email: member.email.trim(), agentId: member.id }));
 }
@@ -578,7 +638,10 @@ export async function composeNewsletterFromPressAction(params: {
 }
 
 /**
- * Sends a newsletter to all active group members with a usable email address.
+ * Sends a newsletter to all active group members with a usable email address
+ * who have email notifications enabled (members who opted out in their settings
+ * are excluded). Each outbound email gets an unsubscribe/preferences footer;
+ * the stored newsletter body is NOT mutated.
  *
  * Permission gate: caller must be a group admin.
  * Idempotency: refuses to re-send a newsletter that has already been sent.
@@ -699,14 +762,18 @@ export async function sendNewsletterAction(params: {
   const agentIdFor = (email: string): string | undefined =>
     agentIdMap.get(email);
 
-  const plainText = htmlToPlainText(meta.bodyHtml);
+  // Append the unsubscribe/preferences footer to the OUTBOUND content only —
+  // the stored newsletter resource keeps its authored body untouched.
+  const settingsUrl = resolveNotificationSettingsUrl();
+  const outboundHtml = `${meta.bodyHtml}\n${buildUnsubscribeFooterHtml(settingsUrl)}`;
+  const outboundText = `${htmlToPlainText(meta.bodyHtml)}\n${buildUnsubscribeFooterText(settingsUrl)}`;
 
   // Bulk send — individual failures are swallowed by the mailer.
   await sendBulkTransactionalEmail(recipientEmails, {
     kind: NEWSLETTER_EMAIL_KIND,
     subject: meta.subject,
-    html: meta.bodyHtml,
-    text: plainText,
+    html: outboundHtml,
+    text: outboundText,
     agentIdFor,
     meta: {
       newsletterId,

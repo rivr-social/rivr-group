@@ -33,6 +33,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -46,8 +47,10 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import {
+  clearGroupAssistantApiKey,
   fetchGroupAssistantConfig,
   getAssistantScopeOptionsAction,
+  setGroupAssistantApiKey,
   updateGroupAssistantConfig,
   type AssistantConfigFetchResult,
   type AssistantScopeOption,
@@ -112,6 +115,14 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
   const [scopeIdsText, setScopeIdsText] = useState("");
   const [publicChatEnabled, setPublicChatEnabled] = useState(false);
 
+  // Anthropic key state. `hasAssistantApiKey` reflects the server's configured
+  // flag (never the key itself). `apiKeyInput` holds the pending paste;
+  // `editingApiKey` reveals the input when a key is already configured.
+  const [hasAssistantApiKey, setHasAssistantApiKey] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [editingApiKey, setEditingApiKey] = useState(false);
+  const [savingApiKey, setSavingApiKey] = useState(false);
+
   // Knowledge-source picker options (the group + its direct subgroups).
   // Non-fatal on failure — an empty list falls back to the advanced textarea.
   const [scopeOptions, setScopeOptions] = useState<AssistantScopeOption[]>([]);
@@ -123,6 +134,9 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
     setCustomSoulMd(config.customSoulMd);
     setScopeIdsText(config.includedKgScopeIds.join("\n"));
     setPublicChatEnabled(config.publicChatEnabled);
+    setHasAssistantApiKey(config.hasAssistantApiKey);
+    setApiKeyInput("");
+    setEditingApiKey(false);
   }, []);
 
   const load = useCallback(async () => {
@@ -210,6 +224,54 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
     publicChatEnabled,
     toast,
   ]);
+
+  const onSaveApiKey = useCallback(async () => {
+    const apiKey = apiKeyInput.trim();
+    if (!apiKey) {
+      toast({
+        title: "Enter a key",
+        description: "Paste an Anthropic API key or Claude Code OAuth token.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingApiKey(true);
+    const result = await setGroupAssistantApiKey({ groupId, apiKey });
+    setSavingApiKey(false);
+
+    if (!result.success) {
+      toast({
+        title: "Could not save key",
+        description: result.error,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Never keep the key in component state after a successful save.
+    setApiKeyInput("");
+    toast({ title: "Assistant key saved" });
+    await load();
+  }, [apiKeyInput, groupId, toast, load]);
+
+  const onRemoveApiKey = useCallback(async () => {
+    setSavingApiKey(true);
+    const result = await clearGroupAssistantApiKey({ groupId });
+    setSavingApiKey(false);
+
+    if (!result.success) {
+      toast({
+        title: "Could not remove key",
+        description: result.error,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({ title: "Assistant key removed" });
+    await load();
+  }, [groupId, toast, load]);
 
   // Current scope-id list, derived from the same text the textarea edits, so
   // the picker checkboxes and the advanced editor never disagree.
@@ -368,6 +430,109 @@ export function GroupAssistantConfigCard({ groupId }: { groupId: string }) {
               </div>
             </details>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Claude / Anthropic API key */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium">
+            Claude / Anthropic API key
+          </CardTitle>
+          <CardDescription>
+            When set, the group&apos;s own Anthropic key powers Claude replies.
+            Otherwise the assistant uses this instance&apos;s shared credential.
+            Accepts an API key (<code>sk-ant-api…</code>) or a Claude Code OAuth
+            token (<code>sk-ant-oat…</code>). Stored encrypted; never shown again.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {hasAssistantApiKey && !editingApiKey ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary" className="text-[10px]">
+                  Key configured
+                </Badge>
+                <span className="font-mono text-sm text-muted-foreground">
+                  ••••••••••••
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={savingApiKey}
+                  onClick={() => {
+                    setApiKeyInput("");
+                    setEditingApiKey(true);
+                  }}
+                >
+                  Replace
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={savingApiKey}
+                  onClick={() => void onRemoveApiKey()}
+                >
+                  {savingApiKey ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Removing...
+                    </>
+                  ) : (
+                    "Remove"
+                  )}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              <Label htmlFor="assistant-api-key">Anthropic key</Label>
+              <Input
+                id="assistant-api-key"
+                type="password"
+                autoComplete="off"
+                value={apiKeyInput}
+                onChange={(event) => setApiKeyInput(event.target.value)}
+                placeholder="sk-ant-…"
+                className="font-mono text-xs"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={savingApiKey || !apiKeyInput.trim()}
+                  onClick={() => void onSaveApiKey()}
+                >
+                  {savingApiKey ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save key"
+                  )}
+                </Button>
+                {hasAssistantApiKey && editingApiKey && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={savingApiKey}
+                    onClick={() => {
+                      setApiKeyInput("");
+                      setEditingApiKey(false);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

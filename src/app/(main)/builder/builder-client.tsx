@@ -12,7 +12,7 @@
  * no A7 DNS connector lane).
  */
 import { useCallback, useState } from "react";
-import { Loader2, Rocket } from "lucide-react";
+import { ExternalLink, Loader2, Rocket } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,15 @@ import type { PublicSitePublication, PublicSiteVersion } from "@/lib/builder/sit
 
 interface BuilderClientProps {
   ownerId: string;
+  /**
+   * When building a GROUP's site, the group agent id passed to the publish API
+   * as `targetAgentId` (authorized server-side). Omitted for a personal site.
+   */
+  targetAgentId?: string;
+  /** Display name of the target owner (a group), or null for a personal site. */
+  ownerLabel?: string | null;
+  /** Public URL where the published site is served on this instance. */
+  publishedSiteUrl: string;
   initialPublication: PublicSitePublication | null;
   initialVersions: PublicSiteVersion[];
   sectionIds: string[];
@@ -30,6 +39,9 @@ interface BuilderClientProps {
 
 export function BuilderClient({
   ownerId,
+  targetAgentId,
+  ownerLabel,
+  publishedSiteUrl,
   initialPublication,
   initialVersions,
   sectionIds,
@@ -60,6 +72,7 @@ export function BuilderClient({
         body: JSON.stringify({
           theme,
           sections: sectionIds.filter((id) => selectedSections.has(id)),
+          ...(targetAgentId ? { targetAgentId } : {}),
         }),
       });
       const data = await response.json();
@@ -72,15 +85,30 @@ export function BuilderClient({
     } finally {
       setPublishing(false);
     }
-  }, [theme, sectionIds, selectedSections, toast]);
+  }, [theme, sectionIds, selectedSections, targetAgentId, toast]);
+
+  const isLive = publication?.publishedVersionNumber != null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4">
       <div>
         <h1 className="text-2xl font-semibold">Site Builder</h1>
         <p className="text-sm text-muted-foreground">
-          Generate and publish a static site from your RIVR content.
+          {ownerLabel
+            ? `Generate and publish a static site for ${ownerLabel} from its RIVR content.`
+            : "Generate and publish a static site from your RIVR content."}
         </p>
+        {isLive && (
+          <a
+            href={publishedSiteUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            View published site
+          </a>
+        )}
       </div>
 
       <Card>

@@ -24,6 +24,7 @@ import {
   saveGroupAssistantSettings,
   type GroupAssistantSettings,
 } from "@/lib/group-assistant-settings";
+import { encryptSecret } from "@/lib/crypto/secret-box";
 import { SHARE_CLASS_GROUP_TYPE } from "./wallet/share-classes-types";
 import { ALLOWED_ASSISTANT_MODELS } from "./group-assistant-config-types";
 
@@ -31,6 +32,13 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MAX_SOUL_MD_LENGTH = 8000;
+
+/**
+ * Every Anthropic credential — both API keys (`sk-ant-api…`) and Claude Code
+ * OAuth tokens (`sk-ant-oat…`) — shares this prefix. Used to reject obvious
+ * non-Anthropic input before it is encrypted and stored.
+ */
+const ANTHROPIC_KEY_PREFIX = "sk-ant-";
 
 const ALLOWED_MODEL_SET = new Set<string>(ALLOWED_ASSISTANT_MODELS);
 
@@ -58,6 +66,8 @@ export interface AssistantConfigFetchResult extends AssistantConfigResult {
     customSoulMd: string;
     includedKgScopeIds: string[];
     publicChatEnabled: boolean;
+    /** Whether a group-supplied Anthropic key is configured. Never the key. */
+    hasAssistantApiKey: boolean;
   };
 }
 
@@ -95,6 +105,9 @@ export async function fetchGroupAssistantConfig(
       customSoulMd: direct.settings.customSoulMd,
       includedKgScopeIds: direct.settings.includedKgScopeIds,
       publicChatEnabled: direct.settings.publicChatEnabled,
+      hasAssistantApiKey:
+        typeof direct.settings.assistantApiKeyEnc === "string" &&
+        direct.settings.assistantApiKeyEnc.length > 0,
     },
   };
 }
@@ -183,6 +196,62 @@ export async function updateGroupAssistantConfig(input: {
   // attach to whichever agent actually runs the assistant.
   const direct = await resolveGroupDirectAgent(input.groupId);
   await saveGroupAssistantSettings(direct.directAgentId, patch);
+
+  return { success: true };
+}
+
+/**
+ * Store an admin-supplied Anthropic credential (API key or Claude Code OAuth
+ * token) for the group's assistant. The key is encrypted at rest via
+ * `encryptSecret` and attached to the resolved direct agent's settings; it is
+ * NEVER logged, echoed back, or exposed to any client. Admin-gated.
+ */
+export async function setGroupAssistantApiKey(input: {
+  groupId: string;
+  apiKey: string;
+}): Promise<AssistantConfigResult> {
+  const auth = await requireAdmin(input.groupId);
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  const apiKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
+  if (!apiKey) {
+    return { success: false, error: "Enter an Anthropic API key or OAuth token." };
+  }
+  if (!apiKey.startsWith(ANTHROPIC_KEY_PREFIX)) {
+    return {
+      success: false,
+      error:
+        "That doesn't look like an Anthropic credential. It should start with \"sk-ant-\".",
+    };
+  }
+
+  const encrypted = encryptSecret(apiKey);
+  if (!encrypted) {
+    return { success: false, error: "Could not secure the key. Try again." };
+  }
+
+  const direct = await resolveGroupDirectAgent(input.groupId);
+  await saveGroupAssistantSettings(direct.directAgentId, {
+    assistantApiKeyEnc: encrypted,
+  });
+
+  return { success: true };
+}
+
+/**
+ * Remove the group's stored Anthropic credential, reverting the assistant to
+ * the instance's shared credential. Admin-gated.
+ */
+export async function clearGroupAssistantApiKey(input: {
+  groupId: string;
+}): Promise<AssistantConfigResult> {
+  const auth = await requireAdmin(input.groupId);
+  if (!auth.ok) return { success: false, error: auth.error };
+
+  const direct = await resolveGroupDirectAgent(input.groupId);
+  await saveGroupAssistantSettings(direct.directAgentId, {
+    assistantApiKeyEnc: null,
+  });
 
   return { success: true };
 }

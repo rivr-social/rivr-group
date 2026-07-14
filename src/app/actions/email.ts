@@ -21,6 +21,7 @@ import {
 } from "@/lib/mailer";
 import { groupBroadcastEmail } from "@/lib/email-templates";
 import { getClientIp } from "@/lib/client-ip";
+import { isEmailEnabled } from "@/lib/email-preferences";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -39,32 +40,6 @@ type BroadcastResult = {
   skipped?: number;
   error?: string;
 };
-
-function isEmailEnabled(metadata: unknown): boolean {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return true;
-  }
-
-  const record = metadata as Record<string, unknown>;
-  const topLevel = record.emailNotifications;
-  if (typeof topLevel === "boolean") {
-    return topLevel;
-  }
-
-  const notificationSettings = record.notificationSettings;
-  if (
-    notificationSettings &&
-    typeof notificationSettings === "object" &&
-    !Array.isArray(notificationSettings)
-  ) {
-    const nested = (notificationSettings as Record<string, unknown>).emailNotifications;
-    if (typeof nested === "boolean") {
-      return nested;
-    }
-  }
-
-  return true;
-}
 
 async function isGroupAdmin(userId: string, groupId: string): Promise<boolean> {
   const now = new Date();
