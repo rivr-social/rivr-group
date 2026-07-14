@@ -102,6 +102,34 @@ function buildCspHeader(nonce: string): string {
   ).trim().replace(/\/+$/, "");
   const globalWss = globalBase.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 
+  // Federated-peer connect sources. Next soft-navigations / RSC prefetches to
+  // peer instances (a remote viewer's home links, canonical redirects) are
+  // cross-origin fetches from the browser; when connect-src blocks them the
+  // client throws a fatal RSC fetch error — the transient "Application error"
+  // flash (same class global fixed 2026-06-28 by allowing same-apex peers).
+  // (1) allow `https://*.<apex>` derived from the runtime app URL, and
+  // (2) allow operator-listed peer origins OUTSIDE the apex (e.g. a person
+  // instance on its own domain) via FEDERATED_PEER_ORIGINS (comma-separated
+  // absolute origins; runtime env — NEXT_PUBLIC_ vars inline EMPTY into the
+  // middleware bundle at build time, the 2026-06-28 lesson).
+  const apexPeerSources: string[] = [];
+  try {
+    if (appUrl) {
+      const host = new URL(appUrl).hostname;
+      const parts = host.split(".");
+      if (parts.length >= 2) {
+        const apex = parts.slice(-2).join(".");
+        apexPeerSources.push(`https://*.${apex}`);
+      }
+    }
+  } catch {
+    // Unparseable app URL — skip the apex wildcard rather than break CSP.
+  }
+  const envPeerOrigins = (process.env.FEDERATED_PEER_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter((origin) => /^https:\/\/[a-z0-9.-]+$/i.test(origin));
+
   const connectSources = [
     "'self'",
     "ws://localhost:*",
@@ -133,6 +161,8 @@ function buildCspHeader(nonce: string): string {
     "https://nominatim.openstreetmap.org",
     ...(matrixUrl ? [matrixUrl] : []),
     ...(matrixWss ? [matrixWss] : []),
+    ...apexPeerSources,
+    ...envPeerOrigins,
   ];
 
   // In dev mode, use 'unsafe-inline' for scripts to avoid CSP noise from
