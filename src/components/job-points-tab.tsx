@@ -35,6 +35,7 @@ import {
 import { Award, BadgeCheck, CheckCircle2, ClipboardCheck, Star, Users, Zap } from "lucide-react"
 import { setJobPointShareInputAction, claimJobFinishedAction, type JobShareData, type JobCompletionClaimant } from "@/app/actions/job-peer-allocation"
 import { markJobDoneAction } from "@/app/actions/job-completion"
+import { VolunteerCompleteDialog } from "@/components/volunteer-complete-dialog"
 import { useToast } from "@/components/ui/use-toast"
 
 /** Default slider weight for an unrated teammate. */
@@ -46,13 +47,19 @@ interface JobPointsTabProps {
   canManage: boolean
   /** Server-computed: viewer may attest completion (admin OR project QA/lead). */
   canAttest: boolean
+  /** Job pay kind — a `volunteer` job settles Thanks via the voucher dialog. */
+  payKind?: string | null
+  /** The job's max-hours budget, driving the volunteer Thanks preview. */
+  estimatedHours?: number | null
 }
 
-export function JobPointsTab({ share, canManage, canAttest }: JobPointsTabProps) {
+export function JobPointsTab({ share, canManage, canAttest, payKind, estimatedHours }: JobPointsTabProps) {
   const router = useRouter()
   const { toast } = useToast()
   const [isPending, startTransition] = useTransition()
   const [isSettling, setIsSettling] = useState(false)
+  const [isVolunteerCompleteOpen, setIsVolunteerCompleteOpen] = useState(false)
+  const isVolunteer = payKind === "volunteer"
   // Optimistic self-QA: when an attester claims the job complete themselves,
   // surface the attest/settle affordance immediately (before the refetch).
   const [selfClaim, setSelfClaim] = useState<JobCompletionClaimant | null>(null)
@@ -112,7 +119,13 @@ export function JobPointsTab({ share, canManage, canAttest }: JobPointsTabProps)
 
   // Attester approves the job-level claim(s) by marking the job done (records
   // contributions + settles pay/points). Authority is re-checked server-side.
+  // Volunteer jobs route through the voucher-creator dialog so the attester sets
+  // the Thanks value on the Complete action itself.
   const handleAttestMarkDone = () => {
+    if (isVolunteer) {
+      setIsVolunteerCompleteOpen(true)
+      return
+    }
     setIsSettling(true)
     void (async () => {
       try {
@@ -170,7 +183,7 @@ export function JobPointsTab({ share, canManage, canAttest }: JobPointsTabProps)
             {canManage ? (
               <Button size="sm" onClick={handleAttestMarkDone} disabled={isSettling}>
                 <BadgeCheck className="h-4 w-4 mr-1" />
-                {isSettling ? "Settling…" : "Attest & mark job done"}
+                {isSettling ? "Settling…" : isVolunteer ? "Attest & pay Thanks" : "Attest & mark job done"}
               </Button>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -179,6 +192,16 @@ export function JobPointsTab({ share, canManage, canAttest }: JobPointsTabProps)
             )}
           </CardContent>
         </Card>
+      )}
+
+      {isVolunteer && (
+        <VolunteerCompleteDialog
+          jobId={share.jobId}
+          open={isVolunteerCompleteOpen}
+          onOpenChange={setIsVolunteerCompleteOpen}
+          estimatedHours={estimatedHours ?? null}
+          onCompleted={() => router.refresh()}
+        />
       )}
 
       {/* Aggregate allocation */}
