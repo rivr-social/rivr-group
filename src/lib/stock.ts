@@ -22,9 +22,35 @@ export type StockInventoryType = (typeof STOCK_INVENTORY_TYPES)[number];
 
 const STOCK_INVENTORY_TYPE_SET: ReadonlySet<string> = new Set(STOCK_INVENTORY_TYPES);
 
+/**
+ * `metadata.resourceKind` values that ride on the generic `resource` type but
+ * are NOT tangible pantry stock — bookkeeping/economic rows that share the
+ * `resource` DB type. They must never surface on the Inventory subtab:
+ *  - `workperiod`: a tracked job-timer segment (job-timer resources carry
+ *    `metadata.jobId`, so `getResourcesByJobId` returns them alongside real
+ *    stock — they were wrongly rendering as inventory rows).
+ *  - `fund`: a named treasury sub-pool (a wallet-bound `resource`, not stock).
+ */
+export const NON_STOCK_RESOURCE_KINDS = ["workperiod", "fund"] as const;
+export type NonStockResourceKind = (typeof NON_STOCK_RESOURCE_KINDS)[number];
+
+const NON_STOCK_RESOURCE_KIND_SET: ReadonlySet<string> = new Set(NON_STOCK_RESOURCE_KINDS);
+
 /** Whether a resource type counts as tangible stock for the Inventory subtab. */
 export function isStockInventoryType(type: string | null | undefined): boolean {
   return typeof type === "string" && STOCK_INVENTORY_TYPE_SET.has(type);
+}
+
+/**
+ * Whether a resource is tangible pantry stock: a stock TYPE whose
+ * `metadata.resourceKind` is not one of the non-tangible economic kinds
+ * ({@link NON_STOCK_RESOURCE_KINDS}). This is the query/adapter-level gate that
+ * keeps work-period timer rows (and treasury funds) out of Inventory.
+ */
+export function isStockInventoryResource(resource: StockResourceLike): boolean {
+  if (!isStockInventoryType(resource.type)) return false;
+  const resourceKind = asRecord(resource.metadata).resourceKind;
+  return !(typeof resourceKind === "string" && NON_STOCK_RESOURCE_KIND_SET.has(resourceKind));
 }
 
 /** The parent object a Stock tab hangs on. */
@@ -171,10 +197,15 @@ export function toStockInventoryItem(resource: StockResourceLike): StockInventor
   };
 }
 
-/** Project a list of resources into inventory rows, keeping only stock types. */
+/**
+ * Project a list of resources into inventory rows, keeping only tangible stock
+ * (stock TYPE and not a non-tangible economic `resourceKind` — see
+ * {@link isStockInventoryResource}). This is where work-period timer rows and
+ * treasury funds are filtered out of Inventory.
+ */
 export function toStockInventory(resources: StockResourceLike[]): StockInventoryItem[] {
   return resources
-    .filter((resource) => isStockInventoryType(resource.type))
+    .filter((resource) => isStockInventoryResource(resource))
     .map((resource) => toStockInventoryItem(resource));
 }
 

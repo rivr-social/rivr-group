@@ -5,9 +5,11 @@
 import { describe, expect, it } from "vitest";
 import {
   MIN_STOCK_NEED_QUANTITY,
+  NON_STOCK_RESOURCE_KINDS,
   STOCK_INVENTORY_TYPES,
   buildNeedRequestText,
   extractStockNeeds,
+  isStockInventoryResource,
   isStockInventoryType,
   normalizeStockNeedQuantity,
   parseStockNeed,
@@ -126,6 +128,27 @@ describe("toStockInventoryItem", () => {
   });
 });
 
+describe("isStockInventoryResource", () => {
+  it("accepts tangible stock resources with no/other resourceKind", () => {
+    expect(isStockInventoryResource({ id: "1", name: "Tent", type: "asset", metadata: {} })).toBe(true);
+    expect(isStockInventoryResource({ id: "2", name: "Rope", type: "resource", metadata: { resourceKind: "supply" } })).toBe(true);
+    expect(isStockInventoryResource({ id: "3", name: "Widget", type: "resource", metadata: { listingType: "product" } })).toBe(true);
+  });
+
+  it("rejects non-stock types regardless of resourceKind", () => {
+    expect(isStockInventoryResource({ id: "4", name: "Post", type: "post", metadata: {} })).toBe(false);
+    expect(isStockInventoryResource({ id: "5", name: "Job", type: "job", metadata: {} })).toBe(false);
+  });
+
+  it("excludes non-tangible economic resourceKinds (workperiod, fund)", () => {
+    for (const kind of NON_STOCK_RESOURCE_KINDS) {
+      expect(
+        isStockInventoryResource({ id: `k-${kind}`, name: kind, type: "resource", metadata: { resourceKind: kind } }),
+      ).toBe(false);
+    }
+  });
+});
+
 describe("toStockInventory", () => {
   it("keeps only tangible stock types", () => {
     const items = toStockInventory([
@@ -135,6 +158,16 @@ describe("toStockInventory", () => {
       { id: "4", name: "Event", type: "event", metadata: {} },
     ]);
     expect(items.map((i) => i.id)).toEqual(["1", "2"]);
+  });
+
+  it("drops work-period timer rows and treasury funds (item 9 regression)", () => {
+    const items = toStockInventory([
+      { id: "tent", name: "Tent", type: "resource", metadata: { quantity: 2 } },
+      { id: "wp", name: "Work period — Setup", type: "resource", metadata: { resourceKind: "workperiod", jobId: "j1", durationMs: 3600000 } },
+      { id: "fund", name: "Operations Fund", type: "resource", metadata: { resourceKind: "fund", walletKind: "fund" } },
+      { id: "asset", name: "Ladder", type: "asset", metadata: {} },
+    ]);
+    expect(items.map((i) => i.id)).toEqual(["tent", "asset"]);
   });
 });
 
