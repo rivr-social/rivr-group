@@ -19,6 +19,10 @@
  * client bundle stays light.
  *
  * Auth: Redirects unauthenticated visitors to `/auth/login?next=/builder`.
+ * Resolves the viewer via the remote-viewer-aware pair (local session OR the
+ * `rivr_remote_viewer` cookie, entity-map-normalized) — a federated group
+ * owner/admin has NO local NextAuth session, and a bare `auth()` gate locked
+ * them out of their own builder in a login loop.
  *
  * Sovereign adaptation: unlike global, this group instance has no A7 DNS
  * connector lane, so custom-domain binding is not offered here — a published
@@ -29,6 +33,8 @@
 import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
+import { getAuthenticatedActorId } from "@/lib/server-auth";
+import { resolveLocalActorId } from "@/lib/federation/resolution";
 import { db } from "@/db";
 import { agents } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -48,12 +54,15 @@ export default async function BuilderPage(props: {
   searchParams: Promise<{ group?: string }>;
 }) {
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) {
+  const rawActorId = session?.user?.id ?? (await getAuthenticatedActorId());
+  if (!rawActorId) {
     const { group } = await props.searchParams;
     const next = group ? `/builder?group=${encodeURIComponent(group)}` : "/builder";
     redirect(`/auth/login?next=${encodeURIComponent(next)}`);
   }
+  // A remote-viewer cookie carries the actor's HOME id; authority edges key
+  // the local projection — normalize before any access check.
+  const userId = await resolveLocalActorId(rawActorId);
 
   const { group: requestedGroupId } = await props.searchParams;
 
