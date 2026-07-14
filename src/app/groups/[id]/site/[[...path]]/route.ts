@@ -28,7 +28,7 @@ import {
   getSitePublication,
   getSiteVersionFiles,
 } from "@/lib/builder/site-service";
-import { INDEX_FILE } from "@/lib/builder/site-model";
+import { contentTypeFor, resolveSitePath, withSiteBase } from "@/lib/builder/site-serve";
 
 export const dynamic = "force-dynamic";
 
@@ -36,58 +36,8 @@ export const dynamic = "force-dynamic";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/** Content types for the file extensions a generated site can contain. */
-const CONTENT_TYPES: Record<string, string> = {
-  html: "text/html; charset=utf-8",
-  css: "text/css; charset=utf-8",
-  js: "text/javascript; charset=utf-8",
-  json: "application/json; charset=utf-8",
-  svg: "image/svg+xml",
-  txt: "text/plain; charset=utf-8",
-  xml: "application/xml; charset=utf-8",
-};
-
 /** Published sites may be cached briefly by shared caches. */
 const CACHE_CONTROL = "public, max-age=60";
-
-/**
- * Resolves the requested site-relative path from the catch-all segments to a
- * single snapshot key, defaulting to the index document and rejecting traversal.
- * Returns `null` when the path escapes the published set.
- */
-function resolveSitePath(segments: string[] | undefined): string | null {
-  const joined = (segments ?? []).join("/").replace(/^\/+/, "");
-  const path = joined === "" || joined.endsWith("/") ? `${joined}${INDEX_FILE}` : joined;
-  // Reject any traversal or absolute escape — only in-snapshot files are served.
-  if (path.split("/").some((part) => part === "..")) return null;
-  return path;
-}
-
-/** Picks a content type from the file extension, defaulting to octet-stream. */
-function contentTypeFor(path: string): string {
-  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-  return CONTENT_TYPES[ext] ?? "application/octet-stream";
-}
-
-/**
- * Anchors an HTML document's RELATIVE URLs to the site root. Next.js
- * canonicalizes `/groups/<id>/site/` to `/groups/<id>/site` (no trailing
- * slash), so a generated `<link href="style.css">` resolved against the PARENT
- * path and 404'd — the site rendered completely unstyled. A `<base>` tag pins
- * resolution to the snapshot root; documents that already declare one are left
- * untouched.
- */
-function withSiteBase(html: string, siteRoot: string): string {
-  if (/<base\s/i.test(html)) return html;
-  const baseTag = `<base href="${siteRoot}/" />`;
-  const headOpen = /<head(\s[^>]*)?>/i.exec(html);
-  if (headOpen) {
-    const insertAt = headOpen.index + headOpen[0].length;
-    return `${html.slice(0, insertAt)}${baseTag}${html.slice(insertAt)}`;
-  }
-  // Headless fragment — prepend so relative URLs still anchor correctly.
-  return `${baseTag}${html}`;
-}
 
 /** Renders a minimal, self-contained 404 page for unpublished/missing files. */
 function notFound(message: string): Response {

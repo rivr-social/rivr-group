@@ -217,6 +217,47 @@ function applySecurityHeaders(response: NextResponse, cspHeader: string, nonce: 
 // ---------------------------------------------------------------------------
 
 /**
+ * The instance's own hostnames, from base-url env. Returns null when NO env is
+ * set — in that case host-dispatch is disabled (fail safe to normal app
+ * routing) rather than risk treating every request as a foreign custom domain.
+ */
+function resolveOwnHosts(): Set<string> | null {
+  const set = new Set<string>();
+  const urls = [
+    process.env.NEXT_PUBLIC_BASE_URL,
+    process.env.BASE_URL,
+    process.env.NEXTAUTH_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+  ];
+  for (const url of urls) {
+    if (!url) continue;
+    try {
+      set.add(new URL(url).hostname.toLowerCase());
+    } catch {
+      // ignore malformed URL env values
+    }
+  }
+  if (set.size === 0) return null;
+  set.add("localhost");
+  set.add("127.0.0.1");
+  return set;
+}
+
+/**
+ * The foreign host a request targets (a candidate custom domain to be
+ * host-dispatched), or null when the request targets the app itself.
+ */
+function resolveForeignHost(request: NextRequest): string | null {
+  const own = resolveOwnHosts();
+  if (!own) return null;
+  const raw =
+    request.headers.get("x-forwarded-host") || request.headers.get("host") || "";
+  const host = raw.trim().toLowerCase().replace(/\.$/, "").split(":")[0] ?? "";
+  if (!host || own.has(host)) return null;
+  return host;
+}
+
+/**
  * Next.js edge middleware entry point.
  *
  * Execution flow:
@@ -232,6 +273,26 @@ function applySecurityHeaders(response: NextResponse, cspHeader: string, nonce: 
  */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Host-dispatch: a request whose Host is NOT this instance's own app host is
+  // a bound custom domain (or an unknown host). Rewrite it to the `/site-host`
+  // handler, which serves the published static site from the live snapshot (or
+  // a 404). Runs BEFORE auth and app-CSP: published sites bypass the app's
+  // login gate and get their own minimal CSP in the handler. Rewrites do not
+  // re-enter middleware, so there is no loop. Fail-safe: with no base-url env,
+  // host-dispatch is disabled entirely (every request routes as the app).
+  if (!pathname.startsWith("/site-host")) {
+    const foreignHost = resolveForeignHost(request);
+    if (foreignHost) {
+      const rewriteUrl = new URL(
+        `/site-host${pathname === "/" ? "" : pathname}`,
+        request.url,
+      );
+      const siteHeaders = new Headers(request.headers);
+      siteHeaders.set("x-site-host", foreignHost);
+      return NextResponse.rewrite(rewriteUrl, { request: { headers: siteHeaders } });
+    }
+  }
 
   const nonce = btoa(crypto.randomUUID());
   const cspHeader = buildCspHeader(nonce);
