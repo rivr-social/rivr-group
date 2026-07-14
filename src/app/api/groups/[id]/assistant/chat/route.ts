@@ -29,8 +29,10 @@ import { buildContext } from "@/lib/kg/autobot-kg-client";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import {
   nativeCloudChat,
+  isAnthropicModel,
   type HistoryMessage,
 } from "@/lib/ai/native-chat";
+import { decryptSecret } from "@/lib/crypto/secret-box";
 import { buildGroupConnectorTools } from "@/lib/connectors/assistant-tools";
 import { buildGroupActionToolset } from "@/lib/federation/group-action-tools";
 
@@ -296,6 +298,20 @@ export async function POST(
     systemPrompt += `\n\n## Group Actions\nYou can create and manage things in this group on the operator's behalf: projects (with jobs/tasks), events, offerings, and documents, plus claiming/advancing jobs and tasks. Create resources only when the operator clearly asks; confirm the key details (title, date, price) before creating anything public-facing.\n`;
   }
 
+  // ---- Resolve the group's own Anthropic credential, if configured --------
+  // Anthropic models only; the decrypted key stays server-side and is never
+  // logged. A non-Anthropic model ignores it (undefined → instance credential).
+  let anthropicAuthToken: string | undefined;
+  if (
+    isAnthropicModel(direct.settings.selectedModel) &&
+    direct.settings.assistantApiKeyEnc
+  ) {
+    const decrypted = decryptSecret(direct.settings.assistantApiKeyEnc);
+    if (decrypted) {
+      anthropicAuthToken = decrypted;
+    }
+  }
+
   // ---- Answer natively ----------------------------------------------------
   try {
     const result = await nativeCloudChat({
@@ -305,6 +321,7 @@ export async function POST(
       message,
       tools: combinedTools.length > 0 ? combinedTools : undefined,
       executeTool: executeCombinedTool,
+      anthropicAuthToken,
     });
 
     return NextResponse.json({

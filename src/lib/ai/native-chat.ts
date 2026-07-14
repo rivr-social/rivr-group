@@ -23,6 +23,13 @@ import path from "node:path";
 export const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 export const ANTHROPIC_VERSION = "2023-06-01";
 export const ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20";
+/**
+ * Prefix of a Claude (Max) OAuth access token (`sk-ant-oat…`). These tokens are
+ * only authorized for Claude Code usage and must be sent as a Bearer credential
+ * with the oauth beta header + the identity system block. A plain Anthropic API
+ * key (`sk-ant-api…`) does NOT match this prefix and takes the `x-api-key` path.
+ */
+export const ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat";
 // Claude (Max) OAuth credentials are only authorized for Claude Code usage.
 // The Messages API rejects them (HTTP 429 rate_limit_error) unless the first
 // system block is exactly this identity string. We prepend it as a separate
@@ -92,6 +99,13 @@ export interface NativeChatParams {
   systemPrompt: string | null;
   history: HistoryMessage[];
   message: string;
+  /**
+   * Optional Anthropic credential (a group's own key) overriding the instance's
+   * shared credential. Anthropic models ONLY — other providers ignore it.
+   * `sk-ant-oat…` OAuth tokens keep the Claude-Code Bearer/identity behavior;
+   * any other `sk-ant-…` value is a real API key sent via `x-api-key`.
+   */
+  anthropicAuthToken?: string;
   /**
    * Optional agentic tool support (Anthropic models only — other providers
    * ignore these and return a plain text completion). When both `tools` and
@@ -181,6 +195,66 @@ export async function resolveClaudeOAuthToken(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Anthropic credential-type branching
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a token is a Claude (Max) OAuth access token (`sk-ant-oat…`).
+ *
+ * OAuth tokens must use `Authorization: Bearer …` + the oauth beta header +
+ * the CLAUDE_CODE_IDENTITY system block. A plain Anthropic API key
+ * (`sk-ant-api…`, or any other `sk-ant-…` value) returns false and takes the
+ * `x-api-key` path with no beta header and no identity block.
+ */
+export function isOAuthAnthropicToken(token: string): boolean {
+  return (
+    typeof token === "string" &&
+    token.trim().startsWith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+  );
+}
+
+/**
+ * Build the Anthropic request headers for a given credential. OAuth tokens
+ * (`sk-ant-oat…`) authenticate with a Bearer credential + the oauth beta
+ * header; plain API keys authenticate with `x-api-key` and NO oauth beta
+ * header. `anthropic-version` + `Content-Type` are sent on both.
+ */
+export function buildAnthropicRequestHeaders(
+  token: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "anthropic-version": ANTHROPIC_VERSION,
+  };
+  if (isOAuthAnthropicToken(token)) {
+    headers.Authorization = `Bearer ${token}`;
+    headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  } else {
+    headers["x-api-key"] = token;
+  }
+  return headers;
+}
+
+/**
+ * Build the system blocks for an Anthropic request. OAuth tokens require the
+ * CLAUDE_CODE_IDENTITY block to lead so the Messages API accepts them; API keys
+ * omit it. The operator's real system prompt follows in both cases.
+ */
+export function buildAnthropicSystemBlocks(
+  systemPrompt: string | null,
+  isOAuthToken: boolean,
+): Array<{ type: "text"; text: string }> {
+  const blocks: Array<{ type: "text"; text: string }> = [];
+  if (isOAuthToken) {
+    blocks.push({ type: "text", text: CLAUDE_CODE_IDENTITY });
+  }
+  if (systemPrompt) {
+    blocks.push({ type: "text", text: systemPrompt });
+  }
+  return blocks;
+}
+
+// ---------------------------------------------------------------------------
 // Provider calls
 // ---------------------------------------------------------------------------
 
@@ -209,15 +283,18 @@ function extractTextReply(blocks: AnthropicContentBlock[] | undefined): string {
 export async function chatViaAnthropic(
   params: NativeChatParams,
 ): Promise<CloudChatResult> {
-  const token = await resolveClaudeOAuthToken();
+  // A caller-supplied group key (if any) overrides the instance credential;
+  // its type (OAuth vs API key) drives header + system-block selection.
+  const token = params.anthropicAuthToken
+    ? params.anthropicAuthToken
+    : await resolveClaudeOAuthToken();
+  const isOAuthToken = isOAuthAnthropicToken(token);
   const modelId = params.selectedModel.slice("anthropic/".length);
 
-  const systemBlocks: Array<{ type: "text"; text: string }> = [
-    { type: "text", text: CLAUDE_CODE_IDENTITY },
-  ];
-  if (params.systemPrompt) {
-    systemBlocks.push({ type: "text", text: params.systemPrompt });
-  }
+  const systemBlocks = buildAnthropicSystemBlocks(
+    params.systemPrompt,
+    isOAuthToken,
+  );
 
   const messages: AnthropicMessage[] = [
     ...params.history.map((m) => ({ role: m.role, content: m.content })),
@@ -238,16 +315,11 @@ export async function chatViaAnthropic(
 
     const response = await fetch(ANTHROPIC_API_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "anthropic-beta": ANTHROPIC_OAUTH_BETA,
-      },
+      headers: buildAnthropicRequestHeaders(token),
       body: JSON.stringify({
         model: modelId,
         max_tokens: ANTHROPIC_MAX_TOKENS,
-        system: systemBlocks,
+        ...(systemBlocks.length > 0 ? { system: systemBlocks } : {}),
         messages,
         ...(useTools && !toolsExhausted ? { tools: params.tools } : {}),
       }),

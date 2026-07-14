@@ -49,6 +49,13 @@ export interface GroupAssistantSettings {
   publicChatEnabled: boolean;
   /** Auto-provisioned MCP token for this agent. Lazily created on first access. */
   mcpToken?: AssistantMcpToken | null;
+  /**
+   * Admin-supplied Anthropic credential (an API key or Claude Code OAuth token)
+   * stored ENCRYPTED via `encryptSecret` (an `enc:v1:…` envelope). When present,
+   * the assistant uses the group's own key for Anthropic models instead of the
+   * instance's shared credential. Server-side only — never sent to any client.
+   */
+  assistantApiKeyEnc?: string | null;
   updatedAt?: string;
 }
 
@@ -95,12 +102,19 @@ export function sanitizeGroupAssistantSettings(
 
   const mcpToken = sanitizeMcpToken(record.mcpToken);
 
+  const assistantApiKeyEnc =
+    typeof record.assistantApiKeyEnc === "string" &&
+    record.assistantApiKeyEnc.trim().length > 0
+      ? record.assistantApiKeyEnc
+      : null;
+
   return {
     selectedModel,
     customSoulMd,
     includedKgScopeIds,
     publicChatEnabled,
     mcpToken,
+    assistantApiKeyEnc,
     updatedAt,
   };
 }
