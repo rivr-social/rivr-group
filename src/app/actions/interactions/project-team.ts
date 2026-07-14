@@ -3,12 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { ledger, resources } from "@/db/schema";
+import { agents, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
 import { ensureLocalActorAgent } from "@/lib/federation/actor-projection";
+import {
+  JOB_CLAIMED_EVENT_TYPE,
+  buildJobClaimCalendarPayload,
+  readStringMeta,
+} from "@/lib/federation/job-claim-event";
 import { getUserBadgeIds } from "@/lib/queries/resources";
 import {
   evaluateJobClaimEligibility,
@@ -112,7 +117,7 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
 
   const [job] = await db
-    .select({ id: resources.id, ownerId: resources.ownerId, metadata: resources.metadata })
+    .select({ id: resources.id, name: resources.name, ownerId: resources.ownerId, metadata: resources.metadata })
     .from(resources)
     .where(
       and(
@@ -239,6 +244,40 @@ export async function claimJobAction(jobId: string): Promise<ActionResult> {
     actorId: userId,
     payload: { action: approvalRequired ? "job_claim_request" : "job_claim" },
   }).catch(() => {});
+
+  // A8 (cross-instance): on a REAL (non-pending) claim, emit a self-describing
+  // `job.claimed` event carrying the calendar-ready fields so the claimant's
+  // HOME instance (person/global) can materialize the claimed job onto their
+  // profile calendar without fetching the job back from us. Pending, approval-
+  // gated claims are NOT committed work yet, so they emit no calendar event.
+  // Best-effort: a signing/emit failure never blocks the claim.
+  if (!approvalRequired) {
+    void (async () => {
+      const [group] = await db
+        .select({ name: agents.name })
+        .from(agents)
+        .where(eq(agents.id, groupId))
+        .limit(1);
+      const payload = buildJobClaimCalendarPayload({
+        claimantId: userId,
+        jobId,
+        jobName: job.name ?? "Job",
+        startDate: readStringMeta(meta, "startDate"),
+        deadline: readStringMeta(meta, "deadline"),
+        projectId,
+        groupId,
+        groupName: group?.name ?? "Group",
+        claimedAt: new Date().toISOString(),
+      });
+      await emitDomainEvent({
+        eventType: JOB_CLAIMED_EVENT_TYPE,
+        entityType: "job",
+        entityId: jobId,
+        actorId: userId,
+        payload: payload as unknown as Record<string, unknown>,
+      });
+    })().catch(() => {});
+  }
 
   return (
     facadeResult.data ??
@@ -529,7 +568,7 @@ export async function reviewJobClaimRequest(
   if (!jobId) return { success: false, message: "Claim request is missing its job reference." };
 
   const [job] = await db
-    .select({ ownerId: resources.ownerId, metadata: resources.metadata })
+    .select({ name: resources.name, ownerId: resources.ownerId, metadata: resources.metadata })
     .from(resources)
     .where(and(eq(resources.id, jobId), eq(resources.type, "job"), sql`${resources.deletedAt} IS NULL`))
     .limit(1);
@@ -589,6 +628,38 @@ export async function reviewJobClaimRequest(
     actorId: userId,
     payload: { action: "job_claim_review", decision, claimantId: request.subjectId },
   }).catch(() => {});
+
+  // A8 (cross-instance): an APPROVED claim is now committed work — emit the same
+  // self-describing `job.claimed` calendar event so the claimant's HOME instance
+  // materializes it, mirroring the direct-claim path. Keyed on the CLAIMANT
+  // (request.subjectId), not the reviewing admin. Best-effort.
+  if (decision === "approved") {
+    void (async () => {
+      const [group] = await db
+        .select({ name: agents.name })
+        .from(agents)
+        .where(eq(agents.id, job.ownerId))
+        .limit(1);
+      const payload = buildJobClaimCalendarPayload({
+        claimantId: request.subjectId,
+        jobId,
+        jobName: job.name ?? "Job",
+        startDate: readStringMeta(jobMeta, "startDate"),
+        deadline: readStringMeta(jobMeta, "deadline"),
+        projectId,
+        groupId: job.ownerId,
+        groupName: group?.name ?? "Group",
+        claimedAt: new Date().toISOString(),
+      });
+      await emitDomainEvent({
+        eventType: JOB_CLAIMED_EVENT_TYPE,
+        entityType: "job",
+        entityId: jobId,
+        actorId: request.subjectId,
+        payload: payload as unknown as Record<string, unknown>,
+      });
+    })().catch(() => {});
+  }
 
   return {
     success: true,
