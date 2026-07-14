@@ -56,6 +56,8 @@ import { serializeResource, type SerializedResource } from "@/lib/graph-serializ
 import { resolveEventWindow } from "@/lib/calendar/event-window"
 import { extractStockNeeds, toStockInventory } from "@/lib/stock"
 import { ProjectDistributionTab } from "@/components/project-distribution-tab"
+import { NavBreadcrumbs } from "@/components/nav-breadcrumbs"
+import { buildContainmentChain, type BreadcrumbNode } from "@/lib/breadcrumbs"
 import { ProjectExpensePanel } from "@/components/project-expense-panel"
 import { parseProjectDistribution, resolveSettlementSplits, allocateByBps, type SettlementRole } from "@/lib/settlement-splits"
 import {
@@ -485,6 +487,26 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     name: lineageAncestorAgents[index]?.name ?? id,
   }))
 
+  // Hierarchical breadcrumb (group → subgroup → project). The owning agent
+  // (`projectOwnerAgentId`, resolved above) is the reliable containment anchor —
+  // NOT metadata.groupId, which is often "". `lineageAncestors` is nearest-first
+  // (excluding the owner), so reverse it to root-first, then append the owning
+  // group/subgroup itself, then the project as the current (link-less) page.
+  const projectBreadcrumbAncestors: BreadcrumbNode[] = [
+    ...[...lineageAncestors].reverse().map((a) => ({
+      id: a.agentId,
+      label: a.name,
+      href: `/groups/${a.agentId}`,
+    })),
+    ...(projectOwnerAgentId && ownerAgentForLineage
+      ? [{ id: projectOwnerAgentId, label: ownerAgentForLineage.name, href: `/groups/${projectOwnerAgentId}` }]
+      : []),
+  ]
+  const projectBreadcrumbItems = buildContainmentChain(
+    projectBreadcrumbAncestors,
+    { id: project.id, label: project.name },
+  )
+
   // Read-only treasury view: balance + recent settlement transactions. The
   // wallet is only created lazily on first settlement, so absence is normal.
   const projectWallet = await getProjectWalletForResource(project.id).catch(() => null)
@@ -578,6 +600,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         <ArrowLeft className="h-4 w-4" />
         Back to home
       </Link>
+
+      {/* Hierarchical breadcrumb (group → subgroup → project). */}
+      <NavBreadcrumbs items={projectBreadcrumbItems} className="mt-2" />
 
       {/* Main project header card */}
       <Card>

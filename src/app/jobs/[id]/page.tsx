@@ -21,7 +21,9 @@ import { getJobById, getShifts, getProjects, getUserBadgeIds, getResource, getRe
 import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
 import { getJobShareData } from "@/app/actions/job-peer-allocation"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
+import { fetchGroupLineage, fetchPublicAgentById } from "@/app/actions/graph"
 import { extractStockNeeds, toStockInventory } from "@/lib/stock"
+import { buildContainmentChain, type BreadcrumbNode } from "@/lib/breadcrumbs"
 import { JobDetailClient } from "./job-detail"
 
 export default async function JobPage(props: { params: Promise<{ id: string }> }) {
@@ -93,6 +95,36 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   const { getJobQaReviewData } = await import("@/app/actions/job-qa")
   const reviewData = canManage || canAttest ? await getJobQaReviewData(jobId).catch(() => null) : null
 
+  // Hierarchical breadcrumb (group → subgroup → project → job), computed
+  // server-side from the true containment: the job resource's owning agent
+  // (owner_id) → its group lineage, then the linked project. Client state can't
+  // see the owner/lineage, so this is resolved here and passed down.
+  const jobMetaForCrumbs = (jobResource?.metadata ?? {}) as Record<string, unknown>
+  const breadcrumbProjectId =
+    typeof jobMetaForCrumbs.projectId === "string" && jobMetaForCrumbs.projectId.length > 0
+      ? jobMetaForCrumbs.projectId
+      : null
+  const breadcrumbProject = breadcrumbProjectId
+    ? projects.find((p) => p.id === breadcrumbProjectId) ?? null
+    : null
+  let breadcrumbItems: BreadcrumbNode[] = []
+  if (owningAgentId && job) {
+    const [ownerLineage, ownerAgent] = await Promise.all([
+      fetchGroupLineage(owningAgentId).catch(() => []),
+      fetchPublicAgentById(owningAgentId).catch(() => null),
+    ])
+    const ancestors: BreadcrumbNode[] = [
+      ...ownerLineage.map((a) => ({ id: a.id, label: a.name, href: `/groups/${a.id}` })),
+      ...(ownerAgent
+        ? [{ id: owningAgentId, label: ownerAgent.name, href: `/groups/${owningAgentId}` }]
+        : []),
+      ...(breadcrumbProject
+        ? [{ id: breadcrumbProject.id, label: breadcrumbProject.title, href: `/projects/${breadcrumbProject.id}` }]
+        : []),
+    ]
+    breadcrumbItems = buildContainmentChain(ancestors, { id: jobId, label: job.title })
+  }
+
   return (
     <JobDetailClient
       jobId={jobId}
@@ -109,6 +141,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       canAttest={canAttest}
       share={share}
       reviewData={reviewData}
+      breadcrumbItems={breadcrumbItems}
     />
   )
 }

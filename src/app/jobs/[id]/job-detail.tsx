@@ -17,6 +17,8 @@ import { JobClaimPanel } from "@/components/job-claim-panel"
 import { JobPointsTab } from "@/components/job-points-tab"
 import { JobQaReviewTab } from "@/components/job-qa-review-tab"
 import { CommentFeed } from "@/components/comment-feed"
+import { NavBreadcrumbs } from "@/components/nav-breadcrumbs"
+import type { BreadcrumbNode } from "@/lib/breadcrumbs"
 import { StockTab } from "@/components/stock-tab"
 import type { StockInventoryItem, StockNeed } from "@/lib/stock"
 import type { JobClaimPanelData } from "@/app/actions/interactions/project-team"
@@ -46,9 +48,15 @@ interface JobDetailClientProps {
   share?: JobShareData | null
   /** Server-computed admin QA review data (Review tab); null hides the tab. */
   reviewData?: JobQaReviewData | null
+  /**
+   * Server-computed hierarchical breadcrumb chain (group → subgroup → project →
+   * job), root-first with the job last. Empty when there's no containment to
+   * show. Resolved from the job's owner_id + linked project server-side.
+   */
+  breadcrumbItems?: BreadcrumbNode[]
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share, reviewData }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share, reviewData, breadcrumbItems = [] }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -135,13 +143,17 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
       {/* Job Header */}
       <div className="mb-6">
-        {parentProject && (
+        {/* Hierarchical breadcrumb (group → subgroup → project → job). Falls back
+            to the simple "Part of project" line when the server chain is empty. */}
+        {breadcrumbItems.length >= 2 ? (
+          <NavBreadcrumbs items={breadcrumbItems} className="mb-3" />
+        ) : parentProject ? (
           <div className="mb-3">
-            <p className="text-sm text-gray-500">
-              Part of project: <span className="font-medium text-blue-600">{parentProject.title}</span>
+            <p className="text-sm text-muted-foreground">
+              Part of project: <span className="font-medium text-foreground">{parentProject.title}</span>
             </p>
           </div>
-        )}
+        ) : null}
         <div className="flex justify-between items-start mb-4">
           <div>
             <Badge variant="outline" className="mb-2 bg-blue-100 text-blue-800 border-blue-200">
