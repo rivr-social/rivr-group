@@ -512,7 +512,7 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                   {job.payKind === "volunteer"
                     ? "This completes the job and records a contribution for every assignee. No cash moves — each volunteer receives a Thanks voucher the group claims from them, valued from their claim-complete ratings."
                     : job.payKind
-                      ? "This completes the job, records a contribution for every assignee, and pays cash compensation from the group treasury wallet. Payouts blocked by an underfunded treasury are parked and retried the next time you mark it done."
+                      ? "This completes the job, records a contribution for every assignee, and pays cash compensation — from the project's wallet when the job belongs to a project (its approved budget), otherwise from the group treasury wallet. Underfunded payouts are parked and retried the next time you mark it done."
                       : "This completes the job and records a contribution for every assignee. This is a points-only job — no cash moves."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
