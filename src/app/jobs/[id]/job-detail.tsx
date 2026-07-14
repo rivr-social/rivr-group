@@ -15,10 +15,12 @@ import { JobTasksTab } from "@/components/job-tasks-tab"
 import { JobTimerTab } from "@/components/job-timer-tab"
 import { JobClaimPanel } from "@/components/job-claim-panel"
 import { JobPointsTab } from "@/components/job-points-tab"
+import { JobQaReviewTab } from "@/components/job-qa-review-tab"
 import { StockTab } from "@/components/stock-tab"
 import type { StockInventoryItem, StockNeed } from "@/lib/stock"
 import type { JobClaimPanelData } from "@/app/actions/interactions/project-team"
 import type { JobShareData } from "@/app/actions/job-peer-allocation"
+import type { JobQaReviewData } from "@/app/actions/job-qa"
 
 interface JobDetailClientProps {
   jobId: string
@@ -41,9 +43,11 @@ interface JobDetailClientProps {
   canAttest: boolean
   /** Server-computed peer point-share data (Points tab); null hides the tab. */
   share?: JobShareData | null
+  /** Server-computed admin QA review data (Review tab); null hides the tab. */
+  reviewData?: JobQaReviewData | null
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share, reviewData }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -214,11 +218,20 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className={`grid w-full ${share ? "grid-cols-5" : "grid-cols-4"}`}>
+        <TabsList
+          className={`grid w-full ${
+            4 + (share ? 1 : 0) + (reviewData ? 1 : 0) === 6
+              ? "grid-cols-6"
+              : 4 + (share ? 1 : 0) + (reviewData ? 1 : 0) === 5
+                ? "grid-cols-5"
+                : "grid-cols-4"
+          }`}
+        >
           <TabsTrigger value="about">About</TabsTrigger>
           <TabsTrigger value="tasks">Tasks ({totalTasks})</TabsTrigger>
           <TabsTrigger value="timer">Timer</TabsTrigger>
           {share && <TabsTrigger value="points">Points</TabsTrigger>}
+          {reviewData && <TabsTrigger value="review">Review</TabsTrigger>}
           <TabsTrigger value="stock">Stock</TabsTrigger>
         </TabsList>
 
@@ -237,6 +250,12 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
         {share && (
           <TabsContent value="points" className="mt-6">
             <JobPointsTab share={share} />
+          </TabsContent>
+        )}
+
+        {reviewData && (
+          <TabsContent value="review" className="mt-6">
+            <JobQaReviewTab data={reviewData} />
           </TabsContent>
         )}
 

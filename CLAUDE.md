@@ -348,6 +348,46 @@ split their bps proportionally to the same weights
 memberWeights)`), falling back to an equal split only when nobody in the class
 holds points. Group-only feature — do NOT port to locale/region.
 
+## Job QA admin review + editable times/points (2026-07-13)
+
+The attester's review surface on the job detail page — an admin-only **Review**
+tab (`src/components/job-qa-review-tab.tsx`, gated by server-computed
+`reviewData`, hidden for non-admins). Backed by `src/app/actions/job-qa.ts`:
+
+- `getJobQaReviewData(jobId)` — per-assignee recorded work periods across BOTH
+  timer rails (current `workperiod` resources + legacy `time_entry` ledger
+  rows — the same two `getTrackedMsForAssignee` reads), their claim-complete
+  ratings / proposed points, their attested points, and the DISCREPANCIES
+  between claimed and recorded/attested values (claimed-with-0-tracked-time,
+  time-over-`maxHours`, proposed-≠-attested, claim-awaiting-attestation).
+  Returns null unless the viewer can manage/attest.
+- `editWorkPeriodDurationAction` — corrects a recorded period's `durationMs`
+  (admins on any row; a worker on their OWN), stamping
+  `durationEditedBy`/`durationEditedAt`/`previousDurationMs` onto the row.
+  Refuses a running period; hourly pay re-reads the corrected value at the
+  next mark-done. Does NOT touch the points rail.
+- `setAttestedPointsAction` — (re)settles a worker's points on a task or the
+  job THROUGH `attestWork` (the single `task-points-earned` writer — never
+  written directly here); zero routes through a `rejected` outcome to
+  genuinely deactivate the edge.
+
+Authority is resolved against the job RESOURCE's `owner_id` via the
+remote-viewer-aware unified session (`getCurrentUserId ?? getAuthenticatedActorId`),
+`hasGroupWriteAccess` (cascades via `isGroupAdmin`) + `canAttestWork`. Point
+edits are gated by `canAttestWork`, never a bare membership check. Tests:
+`src/app/actions/__tests__/job-qa.test.ts` (`pnpm test:db`).
+
+**Authority-gating sweep (directive #5).** The jobs page (`jobs/[id]/page.tsx`)
+now computes `canManage`/`canAttest` against the job resource's `owner_id` (the
+node the server actions enforce), not the domain `job.groupId`
+(`metadata.groupId`, often `""` or a different group — which silently hid the
+admin panel from admins the server would authorize). **Project Jobs tab**
+(`project-jobs-tab.tsx`) gained explicit Attest/Reject controls for admins on a
+worker's `awaiting_approval` task (the checkbox there RETRACTED the claim via
+`toggleTaskCompletion`; it is now locked for admins on claimed tasks so the
+buttons are the control) — the attester now immediately sees approve/reject
+without a reload, matching the job-detail Tasks tab.
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or
