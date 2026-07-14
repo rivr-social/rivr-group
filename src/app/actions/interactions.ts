@@ -23,7 +23,6 @@ export {
   redeemVoucherAction,
   sendThanksTokenAction,
   sendThanksTokensAction,
-  mintThanksTokensForVoucherRedemption,
   claimTasksAction,
   updateTaskStatus,
   recordJobContributionAction,

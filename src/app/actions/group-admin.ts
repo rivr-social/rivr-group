@@ -1030,6 +1030,14 @@ async function isDirectGroupAdmin(userId: string, groupId: string): Promise<bool
  * automatically administers every circle nested under Spirit.
  */
 export async function isGroupAdmin(userId: string, groupId: string): Promise<boolean> {
+  // The group agent is its own admin (Cameron, 2026-07-13): a principal
+  // authenticated AS the group (the instance autobot via AIAGENT_MCP_TOKEN, or
+  // a verified federated binding to the group agent) holds admin authority over
+  // the group itself — and, via the ancestor cascade below, its subgroups.
+  // Reaching here already requires authenticating as the group agent, so this
+  // widens nothing for ordinary members.
+  if (userId === groupId) return true;
+
   if (await isDirectGroupAdmin(userId, groupId)) return true;
 
   // Cascade: inherit admin from any ancestor group the user directly administers.
@@ -1042,6 +1050,8 @@ export async function isGroupAdmin(userId: string, groupId: string): Promise<boo
   const ancestors = Array.isArray(row?.pathIds) ? row.pathIds : [];
   for (const ancestorId of ancestors) {
     if (typeof ancestorId === "string" && ancestorId && ancestorId !== groupId) {
+      // Self-admin cascades too: the group agent administers its own subtree.
+      if (ancestorId === userId) return true;
       if (await isDirectGroupAdmin(userId, ancestorId)) return true;
     }
   }

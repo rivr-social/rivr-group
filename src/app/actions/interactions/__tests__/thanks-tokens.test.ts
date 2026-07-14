@@ -47,7 +47,6 @@ import { auth } from "@/auth";
 import {
   sendThanksTokenAction,
   sendThanksTokensAction,
-  mintThanksTokensForVoucherRedemption,
 } from "../thanks-tokens";
 import type { TestDatabase } from "@/test/db";
 
@@ -375,64 +374,4 @@ describe("thanks-tokens interaction actions", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // mintThanksTokensForVoucherRedemption
-  // ---------------------------------------------------------------------------
-
-  describe("mintThanksTokensForVoucherRedemption", () => {
-    it("does nothing when count is 0", () =>
-      withTestTransaction(async (txDb) => {
-        const owner = await createTestAgent(txDb);
-        const redeemer = await createTestAgent(txDb);
-
-        await mintThanksTokensForVoucherRedemption(
-          txDb as never,
-          "voucher-id",
-          owner.id,
-          redeemer.id,
-          0
-        );
-
-        const tokens = await txDb
-          .select()
-          .from(resources)
-          .where(eq(resources.type, "thanks_token"));
-
-        expect(tokens.length).toBe(0);
-      }));
-
-    it("mints the specified number of tokens for the voucher owner", () =>
-      withTestTransaction(async (txDb) => {
-        const owner = await createTestAgent(txDb);
-        const redeemer = await createTestAgent(txDb);
-
-        await mintThanksTokensForVoucherRedemption(
-          txDb as never,
-          "11111111-1111-4111-8111-111111111111",
-          owner.id,
-          redeemer.id,
-          3
-        );
-
-        const tokens = await txDb
-          .select()
-          .from(resources)
-          .where(
-            and(
-              eq(resources.ownerId, owner.id),
-              eq(resources.type, "thanks_token")
-            )
-          );
-
-        expect(tokens.length).toBe(3);
-
-        const meta = tokens[0].metadata as Record<string, unknown>;
-        expect(meta.entityType).toBe("thanks_token");
-        expect(meta.creatorId).toBe(owner.id);
-        expect(meta.sourceVoucherId).toBe("11111111-1111-4111-8111-111111111111");
-        expect(meta.mintedByClaimantId).toBe(redeemer.id);
-        expect(Array.isArray(meta.transferHistory)).toBe(true);
-        const history = meta.transferHistory as Array<Record<string, unknown>>;
-        expect(history[0].kind).toBe("mint");
-      }));
-  });
 });

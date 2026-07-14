@@ -268,42 +268,8 @@ export async function sendThanksTokensAction(
   };
 }
 
-export async function mintThanksTokensForVoucherRedemption(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  voucherId: string,
-  voucherOwnerId: string,
-  redeemedBy: string,
-  count: number
-) {
-  if (count <= 0) return;
-
-  const mintedAt = new Date().toISOString();
-  const enteredAccountAt = new Date(mintedAt);
-  const values = Array.from({ length: count }, () => ({
-    name: "Thanks Token",
-    type: "thanks_token" as const,
-    ownerId: voucherOwnerId,
-    enteredAccountAt,
-    description: "A gratitude token minted when a voucher is redeemed.",
-    metadata: {
-      entityType: "thanks_token",
-      creatorId: voucherOwnerId,
-      currentOwnerId: voucherOwnerId,
-      sourceVoucherId: voucherId,
-      mintedByClaimantId: redeemedBy,
-      mintedAt,
-      transferHistory: [
-        {
-          from: null,
-          to: voucherOwnerId,
-          at: mintedAt,
-          kind: "mint",
-          sourceVoucherId: voucherId,
-          redeemedBy,
-        },
-      ],
-    },
-  }));
-
-  await tx.insert(resources).values(values);
-}
+// NOTE (Cameron, 2026-07-13): voucher redemption NEVER mints Thanks. The live
+// redemption rail (redeemVoucherAction) releases the claimant's ESCROWED
+// tokens to the voucher owner, and the volunteer-job rail transfers the
+// group's own held tokens — supply only ever moves, it is not created here.
+// The legacy mintThanksTokensForVoucherRedemption helper was removed.

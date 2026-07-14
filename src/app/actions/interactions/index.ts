@@ -37,7 +37,6 @@ export {
 export {
   sendThanksTokenAction,
   sendThanksTokensAction,
-  mintThanksTokensForVoucherRedemption,
 } from "./thanks-tokens";
 
 export {
