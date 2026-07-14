@@ -48,7 +48,11 @@
   --secondary: 180 30% 18%;
   --secondary-foreground: 170 10% 90%;
   --muted: 180 25% 17%;
-  --muted-foreground: 175 15% 55%;
+  /* Raised from 55% L: the old value measured ~4.7:1 against the dark teal
+     card/background — at or below the WCAG AA 4.5:1 floor and visibly "too
+     gray" in practice. 63% L / 13% S measures ~5.8:1, clearing AA with margin
+     while staying muted. (Dark-mode-only accessibility fix, D20 2026-07-14.) */
+  --muted-foreground: 175 13% 63%;
   --accent: 180 30% 18%;
   --accent-foreground: 170 10% 95%;
   --destructive: 0 62.8% 30.6%;
