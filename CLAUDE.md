@@ -500,6 +500,54 @@ Connect account via a federated payout-intent, what substrate already exists
 `stripeConnectAccountId`), and the safest first increment (a no-money "payout
 readiness" projection). Do NOT implement money movement without Cameron.
 
+## Navigation + UI wave (breadcrumbs, bottom nav, contrast, stake, gallery, 2026-07-14)
+
+- **Hierarchical breadcrumbs (C17).** One reusable component
+  `components/nav-breadcrumbs.tsx` (chevron-separated, muted, mobile-truncated,
+  collapsing ellipsis dropdown — NOT a bare slash path) over the shadcn
+  `ui/breadcrumb` primitives. The chain math is pure + unit-tested in
+  `lib/breadcrumbs.ts` (`buildContainmentChain` appends the current page
+  link-less; `collapseBreadcrumbs` collapses the middle, always keeping head +
+  current). Wired: the group page (subgroup lineage, via
+  `group-profile-header.tsx` — replaced its ad-hoc chevron nav), the project
+  page (`(main)/projects/[id]/page.tsx` — chain from `projectOwnerAgentId` +
+  `lineageAncestors`, the reliable owner, NOT `metadata.groupId`), and the job
+  page (`jobs/[id]/page.tsx` computes the chain server-side from the job's
+  `owner_id` group-lineage + linked project, passed to `JobDetailClient` as
+  `breadcrumbItems`; falls back to the old "Part of project" line). Project
+  cards: the Jobs-board card (`job-board-tab.tsx`) already carried
+  `subgroupName`; now shown with a `FolderTree` icon so it reads as the parent.
+  Test: `lib/__tests__/breadcrumbs.test.ts` (`pnpm test:unit`).
+- **Bottom nav everywhere (C18).** The persistent mobile chrome (bottom nav +
+  command-palette launcher + palette) was hoisted OUT of `app/(main)/layout.tsx`
+  into `components/app-chrome.tsx`, rendered ONCE in the ROOT layout
+  (`app/layout.tsx`), so every surface outside `(main)` — `/groups/[id]`
+  subgroups, `/jobs/[id]`, `/events`, `/badges`, `/marketplace`, `/settings` —
+  now has it. `AppChrome` hides itself on `/login` + `/auth`. The `(main)`
+  layout is now just the page container.
+- **Dark-mode contrast (D20).** Token-level fix in `globals.css`:
+  `--muted-foreground` dark raised `175 15% 55%` → `175 13% 63%` (measured
+  ~4.7:1 → ~5.8:1 against the dark teal card/bg, clearing WCAG AA with margin).
+  Conservative, single-token; light mode untouched.
+- **Stake points per subgroup (D21).** New READ-ONLY query
+  `getMemberSubgroupPointsBreakdown` (`lib/queries/stakes.ts`) partitions a
+  member's task points by the task resource's DIRECT `owner_id` (non-overlapping;
+  sums back to the subtree total) off the SAME `earn`/`task-points-earned` rail —
+  it NEVER writes points. Threaded group page → `group-tabs-client` (as a plain
+  `Record`, since Map doesn't cross the RSC boundary) → `stake-tab.tsx`, which
+  renders a "Your points by subgroup" card for the viewer + an inline per-member
+  breakdown in the overview.
+- **Instagram-style image grid (D22).** `media-gallery.tsx` gained a
+  `layout: "cards" | "grid"` prop; `"grid"` is a dense, gapless, square,
+  caption-less wall (3–5 cols) reusing the SAME lightbox. The group Press → Media
+  gallery (`press-tab.tsx`) defaults to `grid` with a Grid/List toggle.
+- **Polotno license key (D26).** `polotno-editor.tsx` now reads
+  `NEXT_PUBLIC_POLOTNO_KEY` (public build-time env; falls back to empty → editor
+  still works, just the SDK's unlicensed default). **Cameron must supply the key**
+  to silence the "license key missing" warning — set `NEXT_PUBLIC_POLOTNO_KEY`
+  in the group instance env. We do NOT suppress the watermark beyond Polotno's
+  own `showCredit: false`.
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or
