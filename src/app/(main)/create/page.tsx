@@ -1053,9 +1053,31 @@ export default function CreatePage() {
 
     const jobMaxHours = Number(currentJob.maxHoursInput)
     const jobLevelPoints = Number(currentJob.jobPointsInput)
+
+    // Flush a task the user typed into the Add-Task fields but never clicked
+    // "Add Task" for. Without this the pending task is silently dropped and the
+    // created job shows "Tasks (0)" — the reported full-form bug. Mirrors the
+    // `addTask` construction so the flushed task is identical to a clicked one.
+    const pendingTaskName = currentTask.name.trim()
+    const flushedTasks: TaskFormData[] = [...currentJob.tasks]
+    if (pendingTaskName) {
+      const pendingTaskMaxHours = Number(currentTask.maxHoursInput)
+      flushedTasks.push({
+        id: `task-${Date.now()}`,
+        name: pendingTaskName,
+        description: currentTask.description,
+        estimatedTime: currentTask.estimatedTime,
+        points: currentTask.points,
+        required: currentTask.required,
+        deadline: currentTask.deadline || null,
+        maxHours: Number.isFinite(pendingTaskMaxHours) && pendingTaskMaxHours > 0 ? pendingTaskMaxHours : null,
+      })
+    }
+
     const newJob = {
       id: `job-${Date.now()}`,
       ...currentJob,
+      tasks: flushedTasks,
       // Volunteer jobs carry no cash fields — keep the payKind regardless;
       // cash pay models are only kept when an amount/rate was actually set.
       payKind: payKind === "volunteer" ? "volunteer" : payAmountCents || hourlyRateCents ? payKind : null,
@@ -1064,7 +1086,7 @@ export default function CreatePage() {
       maxHours: Number.isFinite(jobMaxHours) && jobMaxHours > 0 ? jobMaxHours : null,
       points: Number.isFinite(jobLevelPoints) && jobLevelPoints > 0 ? jobLevelPoints : null,
       duration: calculateJobDuration(),
-      totalPoints: calculateJobTotalPoints(),
+      totalPoints: flushedTasks.reduce((total, task) => total + task.points, 0),
       status: "open",
       assignees: [],
       createdAt: new Date().toISOString(),
@@ -1094,6 +1116,16 @@ export default function CreatePage() {
       hourlyRateDollars: "",
       maxHoursInput: "",
       jobPointsInput: "",
+    })
+    // Clear the pending-task fields too — a flushed task is now on the job.
+    setCurrentTask({
+      name: "",
+      description: "",
+      estimatedTime: 30,
+      points: 10,
+      required: true,
+      deadline: "",
+      maxHoursInput: "",
     })
     setShowJobCreation(false)
 
