@@ -1065,6 +1065,8 @@ export async function attestJobPayoutAction(jobId: string): Promise<AttestJobPay
   }
 
   // Every job-payout receipt for this job (owned by each payee).
+  // NB: group uses postgres.js — db.execute returns the rows array DIRECTLY
+  // (not a `{ rows }` wrapper as node-postgres would).
   const receiptRows = (await db.execute(sql`
     SELECT id, owner_id, metadata
     FROM resources
@@ -1072,12 +1074,10 @@ export async function attestJobPayoutAction(jobId: string): Promise<AttestJobPay
       AND deleted_at IS NULL
       AND metadata->>'receiptKind' = 'job-payout'
       AND metadata->>'jobId' = ${jobId}
-  `)) as unknown as {
-    rows: Array<{ id: string; owner_id: string; metadata: Record<string, unknown> }>;
-  };
+  `)) as unknown as Array<{ id: string; owner_id: string; metadata: Record<string, unknown> }>;
 
   const entries: AttestPayoutEntry[] = [];
-  for (const row of receiptRows.rows) {
+  for (const row of receiptRows) {
     const meta = row.metadata ?? {};
     const currentStatus = meta.connectPayoutStatus as ConnectPayoutStatus | undefined;
     // Skip already-paid receipts and any not in a releasable state.
