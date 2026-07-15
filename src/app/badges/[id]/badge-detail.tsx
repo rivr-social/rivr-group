@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -62,6 +62,17 @@ export function BadgeDetailClient({ badgeId, allBadges, isEarned, jobShifts }: B
   })
   const [expandedModule, setExpandedModule] = useState<string | null>(null)
   const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({})
+
+  // Auto-expand the first not-yet-completed module so its "Mark as Read/Complete"
+  // action is visible without hunting — modules are collapsed by default and the
+  // completion button only renders inside the expanded body.
+  useEffect(() => {
+    if (expandedModule) return
+    const modules = badge?.trainingModules ?? []
+    if (modules.length === 0) return
+    const firstIncomplete = modules.find((m) => !moduleProgress[m.id]) ?? modules[0]
+    if (firstIncomplete) setExpandedModule(firstIncomplete.id)
+  }, [badge, moduleProgress, expandedModule])
 
   if (!badge) {
     return (
