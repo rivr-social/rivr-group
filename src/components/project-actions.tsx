@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation"
 import { updateResource, deleteResource } from "@/app/actions/create-resources"
 import { completeProjectAction } from "@/app/actions/project-completion"
 import { addJobToProjectAction } from "@/app/actions/job-management"
+import { JobRequiredBadgesField } from "@/components/job-required-badges-field"
 import {
   Select,
   SelectContent,
@@ -100,6 +101,7 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
   const [jobHourlyRate, setJobHourlyRate] = useState("")
   const [jobMaxAssignees, setJobMaxAssignees] = useState("1")
   const [jobDeadline, setJobDeadline] = useState("")
+  const [jobRequiredBadges, setJobRequiredBadges] = useState<string[]>([])
 
   /**
    * Syncs draft fields from latest server values when edit dialog opens.
@@ -255,6 +257,7 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
         hourlyRateCents: jobPayKind === "hourly" ? hourlyRateCents : null,
         maxAssignees: Number.isInteger(maxAssignees) && maxAssignees > 0 ? maxAssignees : 1,
         deadline: jobDeadline || null,
+        requiredBadges: jobRequiredBadges,
       })
       if (!result.success) {
         toast({ title: "Failed to add job", description: result.message, variant: "destructive" })
@@ -267,6 +270,7 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
       setJobHourlyRate("")
       setJobMaxAssignees("1")
       setJobDeadline("")
+      setJobRequiredBadges([])
       setIsAddJobOpen(false)
       toast({ title: "Job added" })
       router.refresh()
@@ -374,6 +378,11 @@ export function ProjectActions({ projectId, projectName, projectDescription, own
                 />
               </div>
             </div>
+            <JobRequiredBadgesField
+              value={jobRequiredBadges}
+              onChange={setJobRequiredBadges}
+              active={isAddJobOpen}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsAddJobOpen(false)} disabled={isAddingJob}>
