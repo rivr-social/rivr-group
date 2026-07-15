@@ -559,6 +559,67 @@ export async function awardBadgeToMemberAction(input: {
   return { success: true, message: "Badge awarded." };
 }
 
+/**
+ * Earns a badge for the CURRENT user by completing its training — the
+ * self-service "get badge" path. Called when the learner finishes all of the
+ * badge's training modules (badge detail page). Writes the same `assign` ledger
+ * edge the job badge-gate reads, so the earner can then claim gated jobs.
+ * Idempotent. Requires the badge to actually HAVE training modules (a badge with
+ * no curriculum has no earn path here — it must be admin-awarded instead).
+ */
+export async function earnBadgeThroughTrainingAction(badgeId: string): Promise<ActionResult> {
+  if (!badgeId?.trim()) {
+    return { success: false, message: "badgeId is required", error: { code: "INVALID_INPUT" } };
+  }
+
+  const userId = await resolveAuthenticatedUserId();
+  if (!userId) {
+    return { success: false, message: "You must be logged in to earn a badge", error: { code: "UNAUTHENTICATED" } };
+  }
+
+  const [badge] = await db
+    .select({ id: resources.id, metadata: resources.metadata })
+    .from(resources)
+    .where(and(eq(resources.id, badgeId), eq(resources.type, "badge"), sql`${resources.deletedAt} IS NULL`))
+    .limit(1);
+  if (!badge) return { success: false, message: "Badge not found", error: { code: "NOT_FOUND" } };
+
+  const meta = (badge.metadata ?? {}) as Record<string, unknown>;
+  const trainingModules = Array.isArray(meta.trainingModules) ? meta.trainingModules : [];
+  if (trainingModules.length === 0) {
+    return {
+      success: false,
+      message: "This badge has no training to complete; it must be awarded by an admin.",
+      error: { code: "NO_TRAINING" },
+    };
+  }
+
+  // Idempotent — already earned. (postgres.js: rows returned directly.)
+  const existing = (await db.execute(sql`
+    SELECT id FROM ledger
+    WHERE subject_id = ${userId}::uuid
+      AND resource_id = ${badgeId}::uuid
+      AND verb = 'assign'
+      AND is_active = true
+    LIMIT 1
+  `)) as unknown as Array<{ id: string }>;
+  if (existing.length > 0) {
+    return { success: true, message: "You already hold this badge." };
+  }
+
+  await db.insert(ledger).values({
+    verb: "assign",
+    subjectId: userId,
+    objectId: badgeId,
+    objectType: "resource",
+    resourceId: badgeId,
+    isActive: true,
+    metadata: { earnedVia: "training", earnedAt: new Date().toISOString() },
+  });
+
+  return { success: true, message: "Badge earned! You can now claim jobs that require it." };
+}
+
 export async function createBadgeResourceAction(input: {
   groupId: string;
   name: string;

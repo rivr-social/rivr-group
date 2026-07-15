@@ -69,6 +69,7 @@ export {
   deleteResource,
   createBadgeResourceAction,
   awardBadgeToMemberAction,
+  earnBadgeThroughTrainingAction,
   createLiveClassAction,
   createDocumentResourceAction,
   createProjectResource,

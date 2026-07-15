@@ -27,6 +27,7 @@ import {
   AlertCircle
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
+import { earnBadgeThroughTrainingAction } from "@/app/actions/create-resources"
 import Link from "next/link"
 import type { UserBadge, TrainingModule, JobShift } from "@/types/domain"
 import { describeJobPay, JOB_PAY_TONE_CLASS } from "@/lib/job-pay"
@@ -106,7 +107,7 @@ export function BadgeDetailClient({ badgeId, allBadges, isEarned, jobShifts }: B
     }
   }
 
-  const completeModule = (moduleId: string) => {
+  const completeModule = async (moduleId: string) => {
     const newProgress = { ...moduleProgress, [moduleId]: true }
     setModuleProgress(newProgress)
     localStorage.setItem(`badge-progress-${badgeId}`, JSON.stringify(newProgress))
@@ -118,10 +119,26 @@ export function BadgeDetailClient({ badgeId, allBadges, isEarned, jobShifts }: B
 
     const totalCompleted = Object.values(newProgress).filter(Boolean).length
     if (totalCompleted === totalModules) {
-      toast({
-        title: "Training completed!",
-        description: "You've finished all online training modules. Ready for the practical assessment!",
-      })
+      // Finishing all modules EARNS the badge server-side (writes the `assign`
+      // ledger edge the job badge-gate reads) — previously this was only a
+      // localStorage/toast flow and never actually granted the badge.
+      try {
+        const result = await earnBadgeThroughTrainingAction(badgeId)
+        toast({
+          title: result.success ? "Badge earned! 🎉" : "Training completed",
+          description: result.success
+            ? "You've completed the training and earned this badge — you can now claim jobs that require it."
+            : result.message,
+          variant: result.success ? undefined : "destructive",
+        })
+        if (result.success) router.refresh()
+      } catch {
+        toast({
+          title: "Training completed",
+          description: "Finished the modules, but earning the badge failed — please try again.",
+          variant: "destructive",
+        })
+      }
     }
   }
 
