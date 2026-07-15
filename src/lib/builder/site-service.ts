@@ -433,6 +433,29 @@ export async function publishSite(
   return { version, publication: toPublicPublication(publicationRow) };
 }
 
+/**
+ * Publishes an EXPLICIT file map as the new live version — the builder
+ * assistant's deploy path (its edit loop produces raw files; regenerating from
+ * resources like {@link publishSite} would discard them). Same snapshot +
+ * publication mechanics; theme is left untouched.
+ */
+export async function publishSiteFiles(
+  agentId: string,
+  files: SiteFiles,
+  commitMessage: string | null = "Published from the builder assistant",
+): Promise<PublishResult> {
+  const version = await createSiteVersion(agentId, files, {
+    commitMessage,
+    trigger: SITE_TRIGGER_PUBLISH,
+  });
+  const publicationRow = await upsertPublication(agentId, {
+    publishedVersionId: version.id,
+    publishedVersionNumber: version.versionNumber,
+    publishedAt: new Date(),
+  });
+  return { version, publication: toPublicPublication(publicationRow) };
+}
+
 // ---------------------------------------------------------------------------
 // Owner resolution (group session model)
 // ---------------------------------------------------------------------------

@@ -736,6 +736,41 @@ treasury-to-treasury moves are net-zero so funding never double-counts.
   payout rail) — BY DESIGN, not a destination charge. Do NOT convert these to
   destination charges without Cameron (changes the settlement model; live money).
 
+## Builder assistant — agentic edit + publish inside /builder (2026-07-14)
+
+Cameron's directive: "the assistant in builder should be able to edit and
+deploy app and site codebases from right there in builder." V1 = site
+workspaces (app codebases land with the own-environment/broker lane).
+
+- **Toolset (pure):** `lib/builder/assistant-tools.ts` —
+  `makeBuilderToolset(initialFiles, publish)` closes over a WORKING COPY and
+  exposes `list_files` / `read_file` / `write_file` / `delete_file` /
+  `publish_site` as `NativeChatToolSpec`s. Jail: `validateSitePath`
+  (workspace-relative, no dot-leading segments, extension allowlist =
+  html/css/js/json/svg/txt/xml), per-file 400KB / workspace 2MB / 60-file
+  caps; `index.html` undeletable; publish is an INJECTED callback (module has
+  no DB imports). Tests: `lib/builder/__tests__/assistant-tools.test.ts`
+  (`pnpm test:unit`, 8 cases).
+- **Route:** `POST /api/builder/assistant` — authority via
+  `resolveSiteOwnerSubject` (remote-viewer-aware; `targetAgentId` = a group
+  the caller must hold write access on). Loads the base workspace from the
+  LIVE published snapshot (else generates fresh from resources), runs
+  `nativeCloudChat` with the toolset (the existing Anthropic tool-use loop,
+  `TOOL_LOOP_MAX_ITERATIONS`), and returns `{reply, files, changedPaths,
+  published, publication, toolCalls}` so the UI previews edits BEFORE
+  anything goes live. Group targets use the group's encrypted assistant key
+  (D24) when configured, else the instance env credential — identical
+  resolution to the group assistant chat route.
+- **Publish path:** `publishSiteFiles(agentId, files, commitMessage)` in
+  `site-service.ts` — the raw-files sibling of `publishSite` (which always
+  REGENERATES from resources and would discard assistant edits). Same
+  snapshot + publication mechanics; the system prompt forbids publishing
+  unless the operator explicitly asked.
+- **UI:** `components/builder-assistant-panel.tsx` in `/builder` — thin
+  transcript + input; shows per-turn changed-file chips ("✎ style.css") and
+  a "Published vN" badge; on publish it updates the publication state and
+  `router.refresh()`es the version history.
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or

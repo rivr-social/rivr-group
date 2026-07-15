@@ -14,7 +14,10 @@
 import { useCallback, useState } from "react";
 import { ExternalLink, Loader2, Rocket } from "lucide-react";
 
+import { useRouter } from "next/navigation";
+
 import { Button } from "@/components/ui/button";
+import { BuilderAssistantPanel } from "@/components/builder-assistant-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CustomDomainPanel } from "@/components/custom-domain-panel";
 import { Label } from "@/components/ui/label";
@@ -49,6 +52,7 @@ export function BuilderClient({
   themePresets,
 }: BuilderClientProps) {
   const { toast } = useToast();
+  const router = useRouter();
   const [publication, setPublication] = useState(initialPublication);
   const [versions, setVersions] = useState(initialVersions);
   const [theme, setTheme] = useState(initialPublication?.theme ?? themePresets[0] ?? "default");
@@ -171,6 +175,17 @@ export function BuilderClient({
           )}
         </CardContent>
       </Card>
+
+      <BuilderAssistantPanel
+        targetAgentId={targetAgentId}
+        ownerLabel={ownerLabel}
+        onPublished={(nextPublication) => {
+          setPublication(nextPublication as PublicSitePublication);
+          toast({ title: "Published", description: "The assistant published the site." });
+          // Refresh the server-provided version history.
+          router.refresh();
+        }}
+      />
 
       <CustomDomainPanel targetAgentId={targetAgentId} isPublished={isLive} />
 
