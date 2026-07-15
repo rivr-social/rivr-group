@@ -12,6 +12,7 @@
  */
 
 import { useState, useTransition } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -39,15 +40,15 @@ export function JobClaimPanel({ data }: JobClaimPanelProps) {
   const slotsFull =
     data.maxAssignees != null && data.maxAssignees > 0 && data.claimantCount >= data.maxAssignees
 
-  // Badge-gate label: name the required badge(s) instead of the generic
-  // "Members only" chip. One badge → "Requires the <name> badge"; multiple →
-  // "Requires one of: A, B" (holding ANY one qualifies).
+  // Gates are ADDITIVE: a job can be both members-only AND badge-gated, so the
+  // chips are shown together (see below), never one instead of the other. Each
+  // required badge links to its /badges/<id> page so a blocked user can go earn
+  // it. Holding ANY one required badge qualifies.
   const hasBadgeGate = data.requiredBadges.length > 0
-  const badgeGateLabel = hasBadgeGate
-    ? data.requiredBadgeNames.length === 1
-      ? `Requires the ${data.requiredBadgeNames[0]} badge`
-      : `Requires one of: ${data.requiredBadgeNames.join(", ")}`
-    : ""
+  const badgePairs = data.requiredBadges.map((id, index) => ({
+    id,
+    name: data.requiredBadgeNames[index] ?? "a required",
+  }))
 
   const handleClaim = () => {
     startTransition(async () => {
@@ -87,21 +88,47 @@ export function JobClaimPanel({ data }: JobClaimPanelProps) {
                   <ShieldCheck className="h-3 w-3" /> Approval required
                 </Badge>
               )}
-              {hasBadgeGate ? (
+              {data.gateMembership && (
+                <Badge variant="outline" className="gap-1">
+                  <UserCheck className="h-3 w-3" /> Members only
+                </Badge>
+              )}
+              {hasBadgeGate && (
                 <Badge
                   variant={data.viewerHoldsRequiredBadge ? "secondary" : "outline"}
                   className="gap-1"
                   title={data.viewerHoldsRequiredBadge ? "You hold a required badge" : undefined}
                 >
-                  <Award className="h-3 w-3" /> {badgeGateLabel}
+                  <Award className="h-3 w-3" />
+                  {badgePairs.length === 1 ? (
+                    <span>
+                      Requires the{" "}
+                      <Link
+                        href={`/badges/${badgePairs[0].id}`}
+                        className="underline underline-offset-2 hover:opacity-80"
+                      >
+                        {badgePairs[0].name}
+                      </Link>{" "}
+                      badge
+                    </span>
+                  ) : (
+                    <span>
+                      Requires one of:{" "}
+                      {badgePairs.map((badge, index) => (
+                        <span key={badge.id}>
+                          {index > 0 && ", "}
+                          <Link
+                            href={`/badges/${badge.id}`}
+                            className="underline underline-offset-2 hover:opacity-80"
+                          >
+                            {badge.name}
+                          </Link>
+                        </span>
+                      ))}
+                    </span>
+                  )}
                   {data.viewerHoldsRequiredBadge && " ✓"}
                 </Badge>
-              ) : (
-                data.gateMembership && (
-                  <Badge variant="outline" className="gap-1">
-                    <UserCheck className="h-3 w-3" /> Members only
-                  </Badge>
-                )
               )}
               {data.gateAdmin && (
                 <Badge variant="outline" className="gap-1">
