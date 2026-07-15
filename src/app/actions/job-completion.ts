@@ -40,6 +40,7 @@ import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
 import { getOrCreateProjectWallet, getSettlementWalletForAgent, transferP2P } from "@/lib/wallet";
 import { MAX_TRANSFER_CENTS, MIN_TRANSFER_CENTS } from "@/lib/wallet-constants";
+import { settleConnectPayout } from "@/lib/connect-payout";
 import { getCurrentUserId } from "@/app/actions/interactions/helpers";
 import { recordJobContributionAction } from "@/app/actions/interactions/project-team";
 import { computeVoucherThanksValue } from "@/lib/voucher-valuation";
@@ -377,6 +378,42 @@ async function payAssignee(input: {
       paidAt,
     },
   } as NewLedgerEntry);
+
+  // Real-money leg (best-effort, flag-gated): move actual funds from the
+  // platform balance into the payee's Stripe connected account. The internal
+  // ledger above stays the source of truth; this only ADDS a real transfer when
+  // STRIPE_CONNECT_PAYOUTS_ENABLED is on and the payee can receive it. Any
+  // failure is captured as a status on the receipt, never thrown — a Stripe
+  // hiccup must not undo a recorded payout. Idempotency-keyed on the receipt id
+  // so a retried mark-done never double-transfers.
+  const connectPayout = await settleConnectPayout({
+    payeeAgentId: input.assigneeId,
+    amountCents: input.amountCents,
+    idempotencyKey: receipt.id,
+    metadata: {
+      jobId: input.jobId,
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      payerGroupId: input.groupId,
+    },
+  });
+
+  await db
+    .update(resources)
+    .set({
+      metadata: sql`${resources.metadata} || ${JSON.stringify({
+        connectPayoutStatus: connectPayout.status,
+        ...(connectPayout.transferId ? { stripeTransferId: connectPayout.transferId } : {}),
+        ...(connectPayout.connectAccountId
+          ? { payeeConnectAccountId: connectPayout.connectAccountId }
+          : {}),
+        ...(connectPayout.detail ? { connectPayoutDetail: connectPayout.detail } : {}),
+        ...(connectPayout.status === "paid"
+          ? { paymentMethod: "stripe_connect" }
+          : {}),
+      })}::jsonb`,
+      updatedAt: new Date(),
+    })
+    .where(eq(resources.id, receipt.id));
 
   return receipt.id;
 }
