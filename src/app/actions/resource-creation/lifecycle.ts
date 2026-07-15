@@ -490,6 +490,75 @@ export async function deleteResource(resourceId: string): Promise<ActionResult> 
   return deleteActionResult;
 }
 
+/**
+ * Awards an EXISTING group badge to a member — group-admin gated (the platform
+ * `assignBadgeToUser` requires siteRole=admin, which a group owner is not).
+ *
+ * The job badge-gate reads active `assign` ledger edges, so this is how a member
+ * "gets" a badge that has no self-serve earn path (seeded badges with no training
+ * modules / live class). Idempotent; safe to re-run.
+ */
+export async function awardBadgeToMemberAction(input: {
+  groupId: string;
+  memberId: string;
+  badgeId: string;
+}): Promise<ActionResult> {
+  if (!input.groupId?.trim() || !input.memberId?.trim() || !input.badgeId?.trim()) {
+    return { success: false, message: "groupId, memberId, and badgeId are required", error: { code: "INVALID_INPUT" } };
+  }
+
+  const userId = await resolveAuthenticatedUserId();
+  if (!userId) {
+    return { success: false, message: "You must be logged in to award badges", error: { code: "UNAUTHENTICATED" } };
+  }
+
+  const canWrite = await hasGroupWriteAccess(userId, input.groupId);
+  if (!canWrite) {
+    return { success: false, message: "You do not have permission to award badges for this group.", error: { code: "FORBIDDEN" } };
+  }
+
+  const [badge] = await db
+    .select({ id: resources.id })
+    .from(resources)
+    .where(and(eq(resources.id, input.badgeId), eq(resources.type, "badge"), sql`${resources.deletedAt} IS NULL`))
+    .limit(1);
+  if (!badge) return { success: false, message: "Badge not found", error: { code: "NOT_FOUND" } };
+
+  const [member] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(eq(agents.id, input.memberId))
+    .limit(1);
+  if (!member) return { success: false, message: "Member not found", error: { code: "NOT_FOUND" } };
+
+  // Idempotent — skip when the member already holds the badge. (postgres.js:
+  // db.execute returns the rows array DIRECTLY.)
+  const existing = (await db.execute(sql`
+    SELECT id FROM ledger
+    WHERE subject_id = ${input.memberId}::uuid
+      AND resource_id = ${input.badgeId}::uuid
+      AND verb = 'assign'
+      AND is_active = true
+    LIMIT 1
+  `)) as unknown as Array<{ id: string }>;
+  if (existing.length > 0) {
+    return { success: true, message: "Member already holds this badge." };
+  }
+
+  await db.insert(ledger).values({
+    verb: "assign",
+    subjectId: input.memberId,
+    objectId: input.badgeId,
+    objectType: "resource",
+    resourceId: input.badgeId,
+    isActive: true,
+    metadata: { assignedBy: userId, assignedAt: new Date().toISOString(), groupId: input.groupId },
+  });
+
+  revalidatePath(`/groups/${input.groupId}`);
+  return { success: true, message: "Badge awarded." };
+}
+
 export async function createBadgeResourceAction(input: {
   groupId: string;
   name: string;

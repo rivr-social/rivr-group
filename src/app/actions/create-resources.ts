@@ -32,6 +32,7 @@ export {
   updateResource,
   deleteResource,
   createBadgeResourceAction,
+  awardBadgeToMemberAction,
   createLiveClassAction,
   createDocumentResourceAction,
   createProjectResource,

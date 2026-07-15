@@ -16,8 +16,73 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Award, Users, CheckCircle, Star, Leaf, Wrench, Target } from "lucide-react"
 import type { MemberInfo, UserBadge } from "@/types/domain"
 import { fetchGroupBadges, fetchUserBadges } from "@/app/actions/graph"
-import { createBadgeResourceAction } from "@/app/actions/create-resources"
+import { createBadgeResourceAction, awardBadgeToMemberAction } from "@/app/actions/create-resources"
 import { useToast } from "@/components/ui/use-toast"
+
+/**
+ * Admin control to award an existing badge to a group member. Lives inside the
+ * badge card (which is a Link), so its interactions preventDefault/stopPropagation
+ * to avoid navigating. This is the "get badge" path for badges with no self-serve
+ * earn flow (seeded badges without training modules).
+ */
+function AwardBadgeControl({
+  badgeId,
+  groupId,
+  members,
+}: {
+  badgeId: string
+  groupId: string
+  members: MemberInfo[]
+}) {
+  const { toast } = useToast()
+  const [memberId, setMemberId] = useState("")
+  const [awarding, setAwarding] = useState(false)
+
+  const award = async () => {
+    if (!memberId) return
+    setAwarding(true)
+    try {
+      const result = await awardBadgeToMemberAction({ groupId, memberId, badgeId })
+      toast({
+        title: result.success ? "Badge awarded" : "Could not award badge",
+        description: result.message,
+        variant: result.success ? undefined : "destructive",
+      })
+      if (result.success) setMemberId("")
+    } catch {
+      toast({ title: "Could not award badge", description: "An unexpected error occurred.", variant: "destructive" })
+    } finally {
+      setAwarding(false)
+    }
+  }
+
+  return (
+    <div
+      className="flex items-center gap-2 border-t pt-3"
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+      }}
+    >
+      <Select value={memberId} onValueChange={setMemberId}>
+        <SelectTrigger className="h-8 text-xs">
+          <SelectValue placeholder="Award to member…" />
+        </SelectTrigger>
+        <SelectContent>
+          {members.map((m) => (
+            <SelectItem key={m.id} value={m.id}>
+              {m.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button size="sm" variant="secondary" disabled={!memberId || awarding} onClick={() => void award()}>
+        <Award className="mr-1.5 h-3.5 w-3.5" />
+        {awarding ? "…" : "Award"}
+      </Button>
+    </div>
+  )
+}
 
 /**
  * Badge discovery and progress tab for group/community pages.
@@ -297,6 +362,11 @@ export function BadgesTab({ groupId, currentUserId, isAdmin, members = [] }: Bad
               </Button>
             )}
           </div>
+
+          {/* Admin: award this badge to a member (the "get badge" path). */}
+          {isAdmin && members.length > 0 && (
+            <AwardBadgeControl badgeId={badge.id} groupId={groupId} members={members} />
+          )}
         </CardContent>
       </Card>
     </Link>
