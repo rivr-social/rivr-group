@@ -6,7 +6,7 @@ import { Card, CardContent, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Bookmark, Heart, MessageCircle, Share2 } from "lucide-react"
+import { Bookmark, CalendarDays, Heart, MapPin, MessageCircle, Share2, Ticket } from "lucide-react"
 import Image from "next/image"
 import { CanonicalLink } from "@/components/canonical-link"
 import { useRouter } from "next/navigation"
@@ -65,9 +65,14 @@ export function MarketplaceFeed({
     return listing.type === filter
   })
 
-  // Card click navigates to the listing detail page.
-  const handleCardClick = (id: string) => {
-    router.push(`/marketplace/${id}`)
+  // Card click navigates to the listing detail page — except event tickets,
+  // which link to the event they admit to so the buyer lands on the event.
+  const handleCardClick = (listing: MarketplaceListing) => {
+    if (listing.type === "ticket" && listing.eventId) {
+      router.push(`/events/${listing.eventId}`)
+      return
+    }
+    router.push(`/marketplace/${listing.id}`)
   }
 
   return (
@@ -100,7 +105,7 @@ export function MarketplaceFeed({
                 <Card
                 key={listing.id}
                 className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
-                onClick={() => handleCardClick(listing.id)}
+                onClick={() => handleCardClick(listing)}
               >
                 <div className="relative h-48 w-full">
                   {/* Conditional media rendering with a fallback placeholder when no listing image exists. */}
@@ -125,8 +130,8 @@ export function MarketplaceFeed({
                 </div>
 
                 <CardContent className="p-4">
-                  <div className="flex justify-between items-start">
-                    <div>
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="min-w-0 flex-1">
                       <h3 className="font-semibold text-lg line-clamp-1">{listing.title}</h3>
                       <div className="text-xl font-bold">
                         {typeof listing.thanksValue === "number" && listing.thanksValue > 0 ? (
@@ -142,10 +147,21 @@ export function MarketplaceFeed({
                         )}
                       </div>
                     </div>
-                    <Badge variant="outline">{listing.category}</Badge>
+                    {listing.category ? (
+                      <Badge variant="outline" className="shrink-0">{listing.category}</Badge>
+                    ) : null}
                   </div>
 
                   <p className="text-muted-foreground text-sm mt-2 line-clamp-2">{listing.description}</p>
+
+                  {listing.type === "ticket" ? (
+                    <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Ticket className="h-3.5 w-3.5" />
+                      <span>
+                        Event ticket{listing.eventName ? ` · ${listing.eventName}` : ""}
+                      </span>
+                    </div>
+                  ) : null}
 
                   <div className="flex items-center mt-3 text-sm text-muted-foreground gap-2 flex-wrap">
                     <CanonicalLink
@@ -162,8 +178,15 @@ export function MarketplaceFeed({
                     <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
                       {listing.ownerLabel || "Member offer"}
                     </Badge>
-                    <span>•</span>
-                    <span>{listing.location}</span>
+                    {listing.location && listing.location.trim().length > 0 ? (
+                      <>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1">
+                          <MapPin className="h-3 w-3" />
+                          {listing.location}
+                        </span>
+                      </>
+                    ) : null}
                   </div>
                 </CardContent>
 
@@ -174,11 +197,25 @@ export function MarketplaceFeed({
                     onClick={(e) => {
                       // Prevent parent card navigation when handling a card action.
                       e.stopPropagation()
+                      // Tickets route to their event instead of contacting a seller.
+                      if (listing.type === "ticket" && listing.eventId) {
+                        handleCardClick(listing)
+                        return
+                      }
                       onContact(listing.id)
                     }}
                   >
-                    <MessageCircle className="h-4 w-4 mr-2" />
-                    Contact
+                    {listing.type === "ticket" && listing.eventId ? (
+                      <>
+                        <CalendarDays className="h-4 w-4 mr-2" />
+                        View Event
+                      </>
+                    ) : (
+                      <>
+                        <MessageCircle className="h-4 w-4 mr-2" />
+                        Contact
+                      </>
+                    )}
                   </Button>
                   <div className="flex gap-2">
                     <Button

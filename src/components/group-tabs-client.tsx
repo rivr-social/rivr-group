@@ -17,6 +17,8 @@ import { GroupSubgroups } from "@/components/group-subgroups"
 import { GroupAffiliates } from "@/components/group-affiliates"
 import { PostFeed } from "@/components/post-feed"
 import { PeopleFeed } from "@/components/people-feed"
+import { MarketplaceFeed } from "@/components/marketplace-feed"
+import { toggleSaveListing } from "@/app/actions/interactions"
 import { resourceToPost, resourceToMarketplaceListing } from "@/lib/graph-adapters"
 import { GroupPlanCard } from "@/components/group-plan-card"
 import { collectGalleryItems, type GallerySourcePost, type GallerySourceResource } from "@/lib/gallery"
@@ -315,6 +317,7 @@ export function GroupTabsClient({
   const requestedTab = searchParams.get("tab")
 
   const [offeringModalOpen, setOfferingModalOpen] = useState(false)
+  const [savedListings, setSavedListings] = useState<string[]>([])
   const [flowPassOpen, setFlowPassOpen] = useState(false)
   const [accessDialogOpen, setAccessDialogOpen] = useState(
     () => !!passwordRequired && !isGroupMember
@@ -583,6 +586,35 @@ export function GroupTabsClient({
     toast({ title: "Link copied", description: "Post URL copied to clipboard." })
   }
 
+  // ── Marketplace (Mart) card handlers ── mirror the global home Mart tab so the
+  // group feed renders the same rich, clickable MarketplaceFeed cards.
+  const handleSaveListing = async (listingId: string) => {
+    const result = await toggleSaveListing(listingId)
+    if (!result.success) {
+      toast({ title: "Could not save listing", description: result.message, variant: "destructive" })
+      return
+    }
+    setSavedListings((prev) =>
+      prev.includes(listingId) ? prev.filter((id) => id !== listingId) : [...prev, listingId]
+    )
+  }
+
+  const handleContactListing = (listingId: string) => {
+    const listing = listingResources.find((r) => r.id === listingId)
+    const sellerId = listing?.ownerId
+    router.push(sellerId ? `/messages?user=${sellerId}` : `/messages?listing=${listingId}`)
+  }
+
+  const handleShareListing = async (listingId: string) => {
+    const shareUrl = `${window.location.origin}/marketplace/${listingId}`
+    if (navigator.share) {
+      await navigator.share({ title: "Mart listing", url: shareUrl })
+      return
+    }
+    await navigator.clipboard.writeText(shareUrl)
+    toast({ title: "Link copied", description: "Listing link copied to clipboard." })
+  }
+
   const handleTabChange = (nextTab: string) => {
     setActiveTab(nextTab)
 
@@ -846,38 +878,14 @@ export function GroupTabsClient({
             <p className="text-sm text-muted-foreground">No listings in this group yet. Add the first one!</p>
           </div>
         ) : (
-          listingResources.map((listing) => {
-            const meta = listing.metadata ?? {}
-            const seller = membersById.get(listing.ownerId)
-            const isGroupOwnedListing = listing.ownerId === groupId
-            const ownerLabel = isGroupOwnedListing
-              ? `${groupName} · Group offer`
-              : seller
-                ? `${seller.name} · Member offer`
-                : "Member offer"
-            return (
-              <Card key={listing.id}>
-                <CardContent className="py-3 space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-medium">{listing.name}</p>
-                    {typeof meta.listingType === "string" && (
-                      <Badge variant="outline">{meta.listingType}</Badge>
-                    )}
-                  </div>
-                  <p className="text-sm text-muted-foreground">{listing.description || "No description"}</p>
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs text-muted-foreground">By {ownerLabel}</p>
-                    <Badge variant={isGroupOwnedListing ? "default" : "secondary"}>
-                      {isGroupOwnedListing ? "Group" : "Member"}
-                    </Badge>
-                  </div>
-                  {typeof meta.price === "number" && (
-                    <p className="text-sm font-medium">${meta.price}</p>
-                  )}
-                </CardContent>
-              </Card>
-            )
-          })
+          <MarketplaceFeed
+            listings={listingResources.map((r) => resourceToMarketplaceListing(r))}
+            getSeller={getUser}
+            onSave={(id) => void handleSaveListing(id)}
+            onContact={handleContactListing}
+            onShare={(id) => void handleShareListing(id)}
+            savedListings={savedListings}
+          />
         )}
       </TabsContent>
 

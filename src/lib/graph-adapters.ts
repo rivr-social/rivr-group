@@ -451,7 +451,19 @@ export function resourceToMarketplaceListing(
   // 2. Hourly rate (from service offerings) formatted as "$X/hr"
   // 3. Base price in cents (from offering creator) formatted as "$X.XX"
   // 4. Total price in cents (computed from bundled items)
-  const listingType = (meta.listingType as MarketplaceListing["type"]) ?? "product";
+  const rawListingType = (meta.listingType as MarketplaceListing["type"]) ?? "product";
+  // Event tickets are persisted as `listingType:"product"` (see
+  // resource-creation/events.ts) but carry `productKind`/`offeringType:"ticket"`
+  // + an `eventId`. Reclassify them so the mart labels them "Ticket" and links
+  // the card to the event, instead of showing them as plain products (Cameron:
+  // "objects in the mart that are not products… if they are tickets it should
+  // say that").
+  const isEventTicket =
+    String(meta.productKind ?? "").toLowerCase() === "ticket" ||
+    String(meta.offeringType ?? "").toLowerCase() === "ticket";
+  const listingType: MarketplaceListing["type"] = isEventTicket ? "ticket" : rawListingType;
+  const eventId = typeof meta.eventId === "string" && meta.eventId.length > 0 ? meta.eventId : undefined;
+  const eventName = typeof meta.eventName === "string" && meta.eventName.length > 0 ? meta.eventName : undefined;
   const thanksValue = listingType === "voucher" ? getThanksValue(meta) : undefined;
   const durationMinutes = getDurationMinutes(meta, listingType);
   let displayPrice = thanksValue ? `${thanksValue} Thanks` : "Free";
@@ -485,6 +497,8 @@ export function resourceToMarketplaceListing(
     condition: (meta.condition as string) ?? undefined,
     category: (meta.category as string) ?? undefined,
     type: listingType,
+    eventId,
+    eventName,
     location: (meta.location as string) ?? undefined,
     currency: (meta.currency as string) ?? undefined,
     acceptedCurrencies: Array.isArray(meta.acceptedCurrencies)

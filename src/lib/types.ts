@@ -280,6 +280,10 @@ export type MarketplaceListing = {
 
   // Type of listing
   type?: 'product' | 'service' | 'voucher' | 'ticket' | 'bounty' | 'gift' | 'skill' | 'resource' | 'trip' | 'data' | 'standalone'
+  /** For event-ticket listings: the id of the event the ticket admits to (links the card to `/events/{eventId}`). */
+  eventId?: string
+  /** For event-ticket listings: the human-readable event name for card labeling. */
+  eventName?: string
   location?: string
   /** Currency the seller accepts (e.g. USD, USDC, ETH) */
   currency?: string
