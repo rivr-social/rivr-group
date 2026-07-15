@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, ledger, resources } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
@@ -742,6 +742,12 @@ export interface JobClaimPanelData {
   maxAssignees: number | null;
   claimable: boolean;
   pendingRequests: JobClaimRequestRecord[];
+  /** Badge resource ids required to claim (empty = no badge gate). */
+  requiredBadges: string[];
+  /** Display names of the required badges, for the gate label. */
+  requiredBadgeNames: string[];
+  /** Whether the signed-in viewer already holds one of the required badges. */
+  viewerHoldsRequiredBadge: boolean;
 }
 
 /**
@@ -771,8 +777,30 @@ export async function getJobClaimPanelData(jobId: string): Promise<JobClaimPanel
   const maxAssignees = typeof meta.maxAssignees === "number" ? meta.maxAssignees : null;
   const status = typeof meta.status === "string" ? meta.status : "open";
   const claimable = status !== "closed" && status !== "cancelled" && status !== "filled";
+  const requiredBadges = Array.isArray(meta.requiredBadges)
+    ? meta.requiredBadges.filter((b): b is string => typeof b === "string")
+    : [];
 
   const userId = await getCurrentUserId();
+
+  // Resolve the required-badge display names (for the gate label) and whether
+  // the viewer already holds one of them (so the panel can read "you hold it").
+  let requiredBadgeNames: string[] = [];
+  let viewerHoldsRequiredBadge = false;
+  if (requiredBadges.length > 0) {
+    const [badgeRows, heldBadgeIds] = await Promise.all([
+      db
+        .select({ id: resources.id, name: resources.name })
+        .from(resources)
+        .where(inArray(resources.id, requiredBadges)),
+      userId ? getUserBadgeIds(userId) : Promise.resolve<string[]>([]),
+    ]);
+    // Preserve the metadata order; fall back to a short id for a missing badge.
+    const nameById = new Map(badgeRows.map((row) => [row.id, row.name] as const));
+    requiredBadgeNames = requiredBadges.map((id) => nameById.get(id) ?? "a required");
+    const held = new Set(heldBadgeIds);
+    viewerHoldsRequiredBadge = requiredBadges.some((id) => held.has(id));
+  }
 
   // Active-claimant count (team size) — active job-claim edges only.
   const countRows = (await db.execute(sql`
@@ -812,5 +840,8 @@ export async function getJobClaimPanelData(jobId: string): Promise<JobClaimPanel
     maxAssignees,
     claimable,
     pendingRequests,
+    requiredBadges,
+    requiredBadgeNames,
+    viewerHoldsRequiredBadge,
   };
 }

@@ -16,7 +16,7 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { CheckCircle2, Clock3, ShieldCheck, UserCheck, Lock } from "lucide-react"
+import { CheckCircle2, Clock3, ShieldCheck, UserCheck, Lock, Award } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import {
   claimJobAction,
@@ -38,6 +38,16 @@ export function JobClaimPanel({ data }: JobClaimPanelProps) {
 
   const slotsFull =
     data.maxAssignees != null && data.maxAssignees > 0 && data.claimantCount >= data.maxAssignees
+
+  // Badge-gate label: name the required badge(s) instead of the generic
+  // "Members only" chip. One badge → "Requires the <name> badge"; multiple →
+  // "Requires one of: A, B" (holding ANY one qualifies).
+  const hasBadgeGate = data.requiredBadges.length > 0
+  const badgeGateLabel = hasBadgeGate
+    ? data.requiredBadgeNames.length === 1
+      ? `Requires the ${data.requiredBadgeNames[0]} badge`
+      : `Requires one of: ${data.requiredBadgeNames.join(", ")}`
+    : ""
 
   const handleClaim = () => {
     startTransition(async () => {
@@ -77,10 +87,21 @@ export function JobClaimPanel({ data }: JobClaimPanelProps) {
                   <ShieldCheck className="h-3 w-3" /> Approval required
                 </Badge>
               )}
-              {data.gateMembership && (
-                <Badge variant="outline" className="gap-1">
-                  <UserCheck className="h-3 w-3" /> Members only
+              {hasBadgeGate ? (
+                <Badge
+                  variant={data.viewerHoldsRequiredBadge ? "secondary" : "outline"}
+                  className="gap-1"
+                  title={data.viewerHoldsRequiredBadge ? "You hold a required badge" : undefined}
+                >
+                  <Award className="h-3 w-3" /> {badgeGateLabel}
+                  {data.viewerHoldsRequiredBadge && " ✓"}
                 </Badge>
+              ) : (
+                data.gateMembership && (
+                  <Badge variant="outline" className="gap-1">
+                    <UserCheck className="h-3 w-3" /> Members only
+                  </Badge>
+                )
               )}
               {data.gateAdmin && (
                 <Badge variant="outline" className="gap-1">
