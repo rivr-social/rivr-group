@@ -179,72 +179,10 @@ export async function createPayout(
   return payout;
 }
 
-/**
- * Creates a Stripe **Transfer** from the PLATFORM balance to a connected
- * account (`destinationConnectAccountId`). This is the real-money leg of a job/
- * project payout: after the internal ledger records who is owed what, this moves
- * actual funds from the platform's pooled balance into the payee's connected
- * account, from which they can later {@link createPayout} to their bank.
- *
- * @param destinationConnectAccountId The payee's connected account (`acct_...`).
- * @param amountCents Transfer amount in cents (USD).
- * @param opts `idempotencyKey` (dedupes retries of the SAME payout — pass the
- *   payout receipt/edge id) and `metadata` stamped on the Stripe transfer.
- * @returns The Stripe transfer object (`tr_...`).
- * @throws {Error} When the transfer fails (e.g. insufficient platform balance,
- *   destination not payout-capable) — callers treat this as best-effort.
- */
-export async function createTransfer(
-  destinationConnectAccountId: string,
-  amountCents: number,
-  opts: { idempotencyKey?: string; metadata?: Record<string, string> } = {}
-) {
-  const stripe = getStripe();
-  const transfer = await stripe.transfers.create(
-    {
-      amount: amountCents,
-      currency: 'usd',
-      destination: destinationConnectAccountId,
-      ...(opts.metadata ? { metadata: opts.metadata } : {}),
-    },
-    opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined
-  );
-  return transfer;
-}
-
-/**
- * Reads a connected account's payout-readiness (does NOT create anything).
- * Used by the payout rail to decide whether a real transfer can settle to this
- * account or whether the payee still needs to finish onboarding.
- *
- * @param connectAccountId Stripe Connect account identifier (`acct_...`).
- * @returns `chargesEnabled` / `payoutsEnabled` / `transfersActive` flags.
- * @throws {Error} When the account cannot be retrieved.
- */
-export async function getConnectPayoutReadiness(
-  connectAccountId: string
-): Promise<{ chargesEnabled: boolean; payoutsEnabled: boolean; transfersActive: boolean }> {
-  const stripe = getStripe();
-  const account = await stripe.accounts.retrieve(connectAccountId);
-  return {
-    chargesEnabled: Boolean(account.charges_enabled),
-    payoutsEnabled: Boolean(account.payouts_enabled),
-    transfersActive: account.capabilities?.transfers === 'active',
-  };
-}
-
-/**
- * Reads the PLATFORM's own available balance in USD cents (funds that can back a
- * {@link createTransfer}). Distinct from {@link getConnectBalance}, which reads a
- * connected account's balance.
- */
-export async function getPlatformAvailableCents(): Promise<number> {
-  const stripe = getStripe();
-  const balance = await stripe.balance.retrieve();
-  return balance.available
-    .filter((b) => b.currency === 'usd')
-    .reduce((sum, b) => sum + b.amount, 0);
-}
+// Note: the real platform→payee Transfer + readiness/balance helpers live on
+// GLOBAL (the single Connect authority) — see repos/global stripe-connect.ts.
+// This sovereign instance routes payouts to global via
+// `lib/connect-payout.ts` and never transfers directly.
 
 /**
  * Creates a login link to the Stripe Express dashboard for a Connect account.

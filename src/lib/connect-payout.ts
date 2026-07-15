@@ -1,71 +1,79 @@
 /**
- * Real-money payout leg for job/project settlement (Stripe Connect Transfer).
+ * Real-money payout leg — sovereign CLIENT to GLOBAL's Connect authority.
  *
- * The internal ledger (`transferP2P`) is the SOURCE OF TRUTH for who-owes-whom;
- * this module adds the optional real-money hop on top: after a payout is
- * recorded internally, move actual funds from the PLATFORM balance into the
- * payee's connected account via a Stripe `Transfer`. The payee can then cash out
- * to their bank with the existing `requestPayoutAction` → `createPayout` rail.
+ * GLOBAL holds all Connect accounts. This sovereign instance does NOT transfer
+ * money itself; it records the internal-ledger obligation (transferP2P, the
+ * source of truth) and, on admin attestation, asks GLOBAL to make the real
+ * Stripe Transfer via the peer-authed `/api/federation/connect/payout` endpoint.
+ * Global resolves the payee's connected account (held on its platform) and
+ * settles; we record the returned verdict on the payout receipt.
  *
- * This is the code the `sovereign-payout-connect-bridge` design doc scoped. In
- * the current sandbox every instance shares ONE Stripe test platform key, so the
- * transfer is initiated locally (no federation round-trip); the funding model is
- * "platform holds pooled real revenue, internal ledger apportions it".
- *
- * BEST-EFFORT: a Stripe failure NEVER breaks the internal payout — the caller
- * records the returned status on the receipt and moves on. Gated behind
- * `STRIPE_CONNECT_PAYOUTS_ENABLED` (off by default; real money moves only when
- * an operator turns it on with a TEST key).
+ * BEST-EFFORT: never throws; a failed/unreachable global returns a verdict the
+ * caller records. Gated behind `STRIPE_CONNECT_PAYOUTS_ENABLED` (TEST posture).
  */
-import {
-  createTransfer,
-  getConnectPayoutReadiness,
-  getPlatformAvailableCents,
-} from '@/lib/stripe-connect';
-import { ensureConnectAccountForAgent } from '@/lib/connect-account';
+import { getGlobalUrl } from '@/lib/federation/global-url';
 
 /** Verdict of a connect-payout attempt, recorded on the payout receipt. */
 export type ConnectPayoutStatus =
   | 'awaiting_attestation' // job marked done; a group admin must attest to release the real payout
-  | 'paid' // a real Stripe transfer settled to the payee's connected account
+  | 'paid' // global settled a real Stripe transfer to the payee's connected account
   | 'disabled' // the STRIPE_CONNECT_PAYOUTS_ENABLED flag is off
-  | 'needs_onboarding' // payee has a connected account but it can't receive transfers yet
-  | 'insufficient_funds' // the platform balance can't cover the transfer
-  | 'error'; // Stripe rejected the transfer (message captured)
+  | 'needs_onboarding' // payee has a connected account on global but it can't receive transfers yet
+  | 'insufficient_funds' // global's platform balance can't cover the transfer
+  | 'error'; // global rejected/unreachable (message captured)
 
 /** Receipt payout status set at mark-done, before an admin attests the payout. */
 export const CONNECT_PAYOUT_AWAITING_ATTESTATION: ConnectPayoutStatus = 'awaiting_attestation';
 
 export interface ConnectPayoutResult {
   status: ConnectPayoutStatus;
-  /** The payee's connected account id, when resolved. */
   connectAccountId?: string;
-  /** The Stripe transfer id (`tr_...`) when `status === 'paid'`. */
   transferId?: string;
-  /** Human-readable detail for `needs_onboarding` / `error`. */
   detail?: string;
 }
+
+export interface SettleConnectPayoutInput {
+  /** The agent being paid (their connected account is resolved on global). */
+  payeeAgentId: string;
+  amountCents: number;
+  /** Dedupe key for retries of the SAME payout — the receipt/edge id. */
+  idempotencyKey: string;
+  metadata?: Record<string, string>;
+}
+
+/** Path of the global Connect payout authority endpoint. */
+const GLOBAL_PAYOUT_PATH = '/api/federation/connect/payout';
+const REQUEST_TIMEOUT_MS = 15_000;
 
 /** True when the operator has enabled real Connect payouts (TEST key expected). */
 export function isConnectPayoutsEnabled(): boolean {
   return process.env.STRIPE_CONNECT_PAYOUTS_ENABLED === 'true';
 }
 
-export interface SettleConnectPayoutInput {
-  /** The agent being paid (their settlement wallet holds the connected account). */
-  payeeAgentId: string;
-  /** Amount to transfer, in cents (matches the internal ledger payout). */
-  amountCents: number;
-  /** Dedupe key for retries of the SAME payout — pass the receipt/edge id. */
-  idempotencyKey: string;
-  /** Metadata stamped on the Stripe transfer (jobId/projectId/payerGroupId, …). */
-  metadata?: Record<string, string>;
+/**
+ * Peer-auth headers for the sovereign→global call. Mirrors the federation-sync
+ * cron's `resolvePeerAuthHeaders`: `x-peer-slug` identifies US (our instance
+ * slug), `x-peer-secret` is the shared secret for the global peer
+ * (`FEDERATION_PEER_SECRET_GLOBAL`); falls back to `x-node-admin-key`. Returns
+ * null when no credential is configured (caller reports needs-config).
+ */
+function buildPeerAuthHeaders(): Record<string, string> | null {
+  const localSlug = process.env.INSTANCE_SLUG?.trim();
+  const peerSecret = process.env.FEDERATION_PEER_SECRET_GLOBAL?.trim();
+  if (localSlug && peerSecret) {
+    return { 'x-peer-slug': localSlug, 'x-peer-secret': peerSecret };
+  }
+  const adminKey = process.env.NODE_ADMIN_KEY?.trim();
+  if (adminKey) {
+    return { 'x-node-admin-key': adminKey };
+  }
+  return null;
 }
 
 /**
- * Settle the real-money leg of a payout. Ensures the payee has a connected
- * account, checks it can receive transfers and that the platform has funds,
- * then creates a Stripe `Transfer`. Returns a verdict; never throws.
+ * Ask GLOBAL to settle the real-money leg for a payout. Records the internal
+ * ledger stays elsewhere; this only requests the real transfer. Returns a
+ * verdict; never throws.
  */
 export async function settleConnectPayout(
   input: SettleConnectPayoutInput,
@@ -77,40 +85,47 @@ export async function settleConnectPayout(
     return { status: 'error', detail: 'Non-positive payout amount.' };
   }
 
+  const authHeaders = buildPeerAuthHeaders();
+  if (!authHeaders) {
+    return {
+      status: 'error',
+      detail: 'No federation peer credential configured (FEDERATION_PEER_SECRET_GLOBAL / NODE_ADMIN_KEY).',
+    };
+  }
+
   try {
-    // 1. Resolve/create the payee's connected account (idempotent).
-    const { connectAccountId } = await ensureConnectAccountForAgent(input.payeeAgentId);
-
-    // 2. Gate on payout-readiness — an un-onboarded account can't receive transfers.
-    const readiness = await getConnectPayoutReadiness(connectAccountId);
-    if (!readiness.transfersActive) {
-      return {
-        status: 'needs_onboarding',
-        connectAccountId,
-        detail: 'Connected account has not completed onboarding (transfers capability inactive).',
-      };
-    }
-
-    // 3. Gate on platform funds — a transfer beyond the available balance fails.
-    const availableCents = await getPlatformAvailableCents();
-    if (availableCents < input.amountCents) {
-      return {
-        status: 'insufficient_funds',
-        connectAccountId,
-        detail: `Platform available balance ${availableCents}¢ < payout ${input.amountCents}¢.`,
-      };
-    }
-
-    // 4. Move real money: platform balance -> payee connected account.
-    const transfer = await createTransfer(connectAccountId, input.amountCents, {
-      idempotencyKey: `connect-payout:${input.idempotencyKey}`,
-      metadata: {
-        payeeAgentId: input.payeeAgentId,
-        ...(input.metadata ?? {}),
+    const response = await fetch(getGlobalUrl(GLOBAL_PAYOUT_PATH), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...authHeaders,
       },
+      body: JSON.stringify({
+        payeeAgentId: input.payeeAgentId,
+        amountCents: input.amountCents,
+        idempotencyKey: input.idempotencyKey,
+        metadata: input.metadata ?? {},
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
-    return { status: 'paid', connectAccountId, transferId: transfer.id };
+    if (!response.ok) {
+      let detail = `global payout endpoint returned ${response.status}`;
+      try {
+        const err = (await response.json()) as { error?: string };
+        if (err?.error) detail = `global: ${err.error}`;
+      } catch {
+        // non-JSON error body — keep the status-code detail
+      }
+      return { status: 'error', detail };
+    }
+
+    const data = (await response.json()) as ConnectPayoutResult;
+    if (!data || typeof data.status !== 'string') {
+      return { status: 'error', detail: 'Malformed response from global payout endpoint.' };
+    }
+    return data;
   } catch (error) {
     return {
       status: 'error',

@@ -1,21 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the Stripe + connect-account substrate so the payout logic is tested in
-// isolation (no real Stripe calls).
-const mocks = vi.hoisted(() => ({
-  ensureConnectAccountForAgent: vi.fn(),
-  getConnectPayoutReadiness: vi.fn(),
-  getPlatformAvailableCents: vi.fn(),
-  createTransfer: vi.fn(),
-}));
-
-vi.mock("@/lib/connect-account", () => ({
-  ensureConnectAccountForAgent: mocks.ensureConnectAccountForAgent,
-}));
-vi.mock("@/lib/stripe-connect", () => ({
-  getConnectPayoutReadiness: mocks.getConnectPayoutReadiness,
-  getPlatformAvailableCents: mocks.getPlatformAvailableCents,
-  createTransfer: mocks.createTransfer,
+// Global-URL resolution is mocked so the client's target is deterministic.
+vi.mock("@/lib/federation/global-url", () => ({
+  getGlobalUrl: (path: string) => `https://global.test${path}`,
 }));
 
 import { settleConnectPayout, isConnectPayoutsEnabled } from "@/lib/connect-payout";
@@ -27,63 +14,93 @@ const BASE = {
   metadata: { jobId: "job-1" },
 };
 
-describe("settleConnectPayout", () => {
-  const prev = process.env.STRIPE_CONNECT_PAYOUTS_ENABLED;
+/** Installs a fetch stub returning `body` with `ok`/`status`. */
+function stubFetch(body: unknown, ok = true, status = 200) {
+  const fn = vi.fn().mockResolvedValue({
+    ok,
+    status,
+    json: async () => body,
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+describe("settleConnectPayout (sovereign → global client)", () => {
+  const prevFlag = process.env.STRIPE_CONNECT_PAYOUTS_ENABLED;
+  const prevSlug = process.env.INSTANCE_SLUG;
+  const prevSecret = process.env.FEDERATION_PEER_SECRET_GLOBAL;
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.STRIPE_CONNECT_PAYOUTS_ENABLED = "true";
-    mocks.ensureConnectAccountForAgent.mockResolvedValue({ connectAccountId: "acct_x", created: false });
-    mocks.getConnectPayoutReadiness.mockResolvedValue({ chargesEnabled: true, payoutsEnabled: true, transfersActive: true });
-    mocks.getPlatformAvailableCents.mockResolvedValue(1_000_000);
-    mocks.createTransfer.mockResolvedValue({ id: "tr_123" });
+    process.env.INSTANCE_SLUG = "mutual-aid-boulder";
+    process.env.FEDERATION_PEER_SECRET_GLOBAL = "s3cr3t";
   });
   afterEach(() => {
-    process.env.STRIPE_CONNECT_PAYOUTS_ENABLED = prev;
+    vi.unstubAllGlobals();
+    process.env.STRIPE_CONNECT_PAYOUTS_ENABLED = prevFlag;
+    process.env.INSTANCE_SLUG = prevSlug;
+    process.env.FEDERATION_PEER_SECRET_GLOBAL = prevSecret;
   });
 
   it("is disabled when the flag is off", async () => {
     process.env.STRIPE_CONNECT_PAYOUTS_ENABLED = "false";
+    const fetchFn = stubFetch({});
     expect(isConnectPayoutsEnabled()).toBe(false);
     const r = await settleConnectPayout(BASE);
     expect(r.status).toBe("disabled");
-    expect(mocks.createTransfer).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("pays via a real transfer when ready and funded", async () => {
+  it("posts a peer-authed request to global's payout endpoint and returns its verdict", async () => {
+    const fetchFn = stubFetch({ status: "paid", transferId: "tr_123", connectAccountId: "acct_x" });
     const r = await settleConnectPayout(BASE);
     expect(r.status).toBe("paid");
     expect(r.transferId).toBe("tr_123");
-    expect(r.connectAccountId).toBe("acct_x");
-    expect(mocks.createTransfer).toHaveBeenCalledWith("acct_x", 5000, {
-      idempotencyKey: "connect-payout:receipt-1",
-      metadata: { payeeAgentId: "agent-1", jobId: "job-1" },
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(url).toBe("https://global.test/api/federation/connect/payout");
+    expect(init.method).toBe("POST");
+    expect(init.headers["x-peer-slug"]).toBe("mutual-aid-boulder");
+    expect(init.headers["x-peer-secret"]).toBe("s3cr3t");
+    expect(JSON.parse(init.body)).toMatchObject({
+      payeeAgentId: "agent-1",
+      amountCents: 5000,
+      idempotencyKey: "receipt-1",
     });
   });
 
-  it("returns needs_onboarding when transfers capability is inactive", async () => {
-    mocks.getConnectPayoutReadiness.mockResolvedValue({ chargesEnabled: false, payoutsEnabled: false, transfersActive: false });
+  it("falls back to x-node-admin-key when no peer secret is set", async () => {
+    delete process.env.FEDERATION_PEER_SECRET_GLOBAL;
+    process.env.NODE_ADMIN_KEY = "admin-key";
+    const fetchFn = stubFetch({ status: "paid", transferId: "tr_9" });
     const r = await settleConnectPayout(BASE);
-    expect(r.status).toBe("needs_onboarding");
-    expect(r.connectAccountId).toBe("acct_x");
-    expect(mocks.createTransfer).not.toHaveBeenCalled();
+    expect(r.status).toBe("paid");
+    expect(fetchFn.mock.calls[0][1].headers["x-node-admin-key"]).toBe("admin-key");
+    delete process.env.NODE_ADMIN_KEY;
   });
 
-  it("returns insufficient_funds when the platform balance is short", async () => {
-    mocks.getPlatformAvailableCents.mockResolvedValue(100);
-    const r = await settleConnectPayout(BASE);
-    expect(r.status).toBe("insufficient_funds");
-    expect(mocks.createTransfer).not.toHaveBeenCalled();
-  });
-
-  it("captures Stripe errors as status=error, never throws", async () => {
-    mocks.createTransfer.mockRejectedValue(new Error("stripe boom"));
+  it("returns error (no transfer) when no peer credential is configured", async () => {
+    delete process.env.FEDERATION_PEER_SECRET_GLOBAL;
+    delete process.env.NODE_ADMIN_KEY;
+    const fetchFn = stubFetch({});
     const r = await settleConnectPayout(BASE);
     expect(r.status).toBe("error");
-    expect(r.detail).toContain("stripe boom");
+    expect(r.detail).toContain("peer credential");
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("rejects a non-positive amount", async () => {
+  it("maps a non-ok global response to error with its message", async () => {
+    stubFetch({ error: "Peer is not trusted" }, false, 401);
+    const r = await settleConnectPayout(BASE);
+    expect(r.status).toBe("error");
+    expect(r.detail).toContain("Peer is not trusted");
+  });
+
+  it("rejects a non-positive amount before any call", async () => {
+    const fetchFn = stubFetch({});
     const r = await settleConnectPayout({ ...BASE, amountCents: 0 });
     expect(r.status).toBe("error");
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });
