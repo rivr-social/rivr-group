@@ -52,6 +52,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { BadgeCheck, ListPlus, Pencil } from "lucide-react"
+import { JobRequiredBadgesField } from "@/components/job-required-badges-field"
 import { VolunteerCompleteDialog } from "@/components/volunteer-complete-dialog"
 import type { JobShift } from "@/types/domain"
 
@@ -59,6 +60,10 @@ interface JobAdminPanelProps {
   job: JobShift
   /** Server-computed: job owner or group write access on the owning agent. */
   canManage: boolean
+  /** Server-computed: every cash-payout receipt on the job has settled a real
+   *  Stripe transfer. When true the "Release payment" button is replaced by a
+   *  "Paid ✓" indicator (nothing left to release). */
+  payoutReleased?: boolean
 }
 
 /** Formats cents as a plain dollar string for input defaults (e.g. 2500 → "25"). */
@@ -76,7 +81,7 @@ function dollarInputToCents(value: string): number | null {
   return Math.round(parsed * 100)
 }
 
-export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
+export function JobAdminPanel({ job, canManage, payoutReleased = false }: JobAdminPanelProps) {
   const router = useRouter()
   const { toast } = useToast()
 
@@ -102,6 +107,9 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
   const [draftJobPoints, setDraftJobPoints] = useState(
     typeof job.points === "number" && job.points > 0 ? String(job.points) : "",
   )
+  const [draftRequiredBadges, setDraftRequiredBadges] = useState<string[]>(
+    Array.isArray(job.requiredBadges) ? job.requiredBadges : [],
+  )
 
   // Add-task drafts
   const [taskName, setTaskName] = useState("")
@@ -123,6 +131,7 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
     setDraftDeadline(job.deadline ? job.deadline.slice(0, 10) : "")
     setDraftMaxHours(job.maxHours ? String(job.maxHours) : "")
     setDraftJobPoints(typeof job.points === "number" && job.points > 0 ? String(job.points) : "")
+    setDraftRequiredBadges(Array.isArray(job.requiredBadges) ? job.requiredBadges : [])
   }, [isEditOpen, job])
 
   if (!canManage) return null
@@ -177,6 +186,7 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
           deadline: draftDeadline || null,
           maxHours,
           points: jobPoints,
+          requiredBadges: draftRequiredBadges,
         },
       })
       if (!result.success) {
@@ -420,6 +430,11 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                     placeholder="split across assignees at completion"
                   />
                 </div>
+                <JobRequiredBadgesField
+                  value={draftRequiredBadges}
+                  onChange={setDraftRequiredBadges}
+                  active={isEditOpen}
+                />
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setIsEditOpen(false)} disabled={isSaving}>
@@ -567,17 +582,26 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
           {/* Release payment: attest the completed job's payout and fire the real
               Stripe transfer to each payee's connected account. Shown once the job
               is completed and it pays cash. Idempotent + re-runnable (retries
-              payees that needed onboarding/funds). */}
+              payees that needed onboarding/funds). Once every payout receipt has
+              settled (`payoutReleased`), the live button becomes a "Paid ✓"
+              indicator — there is nothing left to release. */}
           {isCompleted && (job.payKind === "fixed" || job.payKind === "hourly") && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={isReleasing}
-              onClick={() => void handleReleasePayment()}
-            >
-              <BadgeCheck className="mr-1.5 h-3.5 w-3.5" />
-              {isReleasing ? "Releasing..." : "Release payment"}
-            </Button>
+            payoutReleased ? (
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-green-600">
+                <BadgeCheck className="h-4 w-4" />
+                Paid ✓
+              </span>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isReleasing}
+                onClick={() => void handleReleasePayment()}
+              >
+                <BadgeCheck className="mr-1.5 h-3.5 w-3.5" />
+                {isReleasing ? "Releasing..." : "Release payment"}
+              </Button>
+            )
           )}
         </div>
       </CardContent>

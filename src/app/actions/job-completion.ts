@@ -1136,3 +1136,53 @@ export async function attestJobPayoutAction(jobId: string): Promise<AttestJobPay
     entries,
   };
 }
+
+/** Payout-release state for a job's cash payout receipts (drives the admin UI). */
+export interface JobPayoutReleaseState {
+  /** The job has at least one job-payout receipt (i.e. it was marked done + pays cash). */
+  hasReceipts: boolean;
+  /** Every payout receipt has settled a real Stripe transfer (`connectPayoutStatus = 'paid'`). */
+  allPaid: boolean;
+  /** Count of receipts already `paid`. */
+  paidCount: number;
+  /** Total job-payout receipts on the job. */
+  totalCount: number;
+}
+
+/**
+ * Reads the cash-payout receipts for a job and reports whether the real
+ * payout has been fully released. Used to hide/relabel the admin "Release
+ * payment" button once every payee's Stripe transfer has settled (`paid`) so a
+ * completed, fully-paid job no longer shows a live release control. No
+ * authority gate: it returns only aggregate counts (no payee/amount detail).
+ */
+export async function getJobPayoutReleaseState(jobId: string): Promise<JobPayoutReleaseState> {
+  const empty: JobPayoutReleaseState = { hasReceipts: false, allPaid: false, paidCount: 0, totalCount: 0 };
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
+    return empty;
+  }
+
+  // NB: group uses postgres.js — db.execute returns the rows array directly.
+  const receiptRows = (await db.execute(sql`
+    SELECT metadata
+    FROM resources
+    WHERE type = 'receipt'
+      AND deleted_at IS NULL
+      AND metadata->>'receiptKind' = 'job-payout'
+      AND metadata->>'jobId' = ${jobId}
+  `)) as unknown as Array<{ metadata: Record<string, unknown> }>;
+
+  const totalCount = receiptRows.length;
+  if (totalCount === 0) return empty;
+
+  const paidCount = receiptRows.filter(
+    (row) => (row.metadata ?? {}).connectPayoutStatus === "paid",
+  ).length;
+
+  return {
+    hasReceipts: true,
+    allPaid: paidCount === totalCount,
+    paidCount,
+    totalCount,
+  };
+}

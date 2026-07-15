@@ -95,6 +95,14 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   const { getJobQaReviewData } = await import("@/app/actions/job-qa")
   const reviewData = canManage || canAttest ? await getJobQaReviewData(jobId).catch(() => null) : null
 
+  // Payout-release state (drives the admin "Release payment" button). Once every
+  // job-payout receipt has settled a real Stripe transfer, the button becomes a
+  // "Paid ✓" indicator instead of a live release control. Only computed for
+  // managers (the only viewers who see the button).
+  const { getJobPayoutReleaseState } = await import("@/app/actions/job-completion")
+  const payoutState = canManage ? await getJobPayoutReleaseState(jobId).catch(() => null) : null
+  const payoutReleased = payoutState?.allPaid ?? false
+
   // Hierarchical breadcrumb (group → subgroup → project → job), computed
   // server-side from the true containment: the job resource's owning agent
   // (owner_id) → its group lineage, then the linked project. Client state can't
@@ -141,6 +149,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       canAttest={canAttest}
       share={share}
       reviewData={reviewData}
+      payoutReleased={payoutReleased}
       breadcrumbItems={breadcrumbItems}
     />
   )

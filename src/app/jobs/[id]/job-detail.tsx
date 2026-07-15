@@ -48,6 +48,10 @@ interface JobDetailClientProps {
   share?: JobShareData | null
   /** Server-computed admin QA review data (Review tab); null hides the tab. */
   reviewData?: JobQaReviewData | null
+  /** Server-computed: every cash-payout receipt on the job has settled a real
+   *  Stripe transfer. When true the admin "Release payment" control shows a
+   *  "Paid ✓" indicator instead of a live release button. */
+  payoutReleased?: boolean
   /**
    * Server-computed hierarchical breadcrumb chain (group → subgroup → project →
    * job), root-first with the job last. Empty when there's no containment to
@@ -56,7 +60,7 @@ interface JobDetailClientProps {
   breadcrumbItems?: BreadcrumbNode[]
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share, reviewData, breadcrumbItems = [] }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share, reviewData, payoutReleased = false, breadcrumbItems = [] }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -237,7 +241,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
 
       {/* Admin controls — always available to owners/group admins, on every tab */}
       <div className="mb-6">
-        <JobAdminPanel job={job} canManage={canManage} />
+        <JobAdminPanel job={job} canManage={canManage} payoutReleased={payoutReleased} />
       </div>
 
       {/* Tabs */}
