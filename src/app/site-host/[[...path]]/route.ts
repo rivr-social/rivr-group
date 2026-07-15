@@ -30,9 +30,16 @@ export const dynamic = "force-dynamic";
 const STATUS_OK = 200;
 const STATUS_NOT_FOUND = 404;
 
-/** Minimal, permissive-but-sane CSP for served static sites (not the app CSP). */
+/**
+ * Minimal, permissive-but-sane CSP for served static sites (not the app CSP).
+ * Published sites are author-controlled static pages that routinely pull styles
+ * and fonts from CDNs (Google Fonts, etc.), so `style-src`/`font-src`/`img-src`
+ * allow `https:`. `script-src` stays locked to `'self' 'unsafe-inline'` (no
+ * third-party https scripts) so a published site cannot pull in arbitrary
+ * remote JS — the XSS boundary is kept tight while fonts/CSS work.
+ */
 const SITE_CSP =
-  "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; " +
+  "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https:; " +
   "font-src 'self' data: https:; script-src 'self' 'unsafe-inline'; frame-ancestors 'self'; base-uri 'self'";
 
 /** Renders the 404 fallback page for an unbound host or a missing file. */
