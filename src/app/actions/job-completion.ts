@@ -40,7 +40,11 @@ import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
 import { getOrCreateProjectWallet, getSettlementWalletForAgent, transferP2P } from "@/lib/wallet";
 import { MAX_TRANSFER_CENTS, MIN_TRANSFER_CENTS } from "@/lib/wallet-constants";
-import { settleConnectPayout } from "@/lib/connect-payout";
+import {
+  CONNECT_PAYOUT_AWAITING_ATTESTATION,
+  settleConnectPayout,
+  type ConnectPayoutStatus,
+} from "@/lib/connect-payout";
 import { getCurrentUserId } from "@/app/actions/interactions/helpers";
 import { recordJobContributionAction } from "@/app/actions/interactions/project-team";
 import { computeVoucherThanksValue } from "@/lib/voucher-valuation";
@@ -379,37 +383,16 @@ async function payAssignee(input: {
     },
   } as NewLedgerEntry);
 
-  // Real-money leg (best-effort, flag-gated): move actual funds from the
-  // platform balance into the payee's Stripe connected account. The internal
-  // ledger above stays the source of truth; this only ADDS a real transfer when
-  // STRIPE_CONNECT_PAYOUTS_ENABLED is on and the payee can receive it. Any
-  // failure is captured as a status on the receipt, never thrown — a Stripe
-  // hiccup must not undo a recorded payout. Idempotency-keyed on the receipt id
-  // so a retried mark-done never double-transfers.
-  const connectPayout = await settleConnectPayout({
-    payeeAgentId: input.assigneeId,
-    amountCents: input.amountCents,
-    idempotencyKey: receipt.id,
-    metadata: {
-      jobId: input.jobId,
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-      payerGroupId: input.groupId,
-    },
-  });
-
+  // The real-money leg does NOT fire here. Marking a job done records the
+  // internal-ledger obligation above (the worker's RIVR balance) and stamps the
+  // receipt AWAITING ATTESTATION; a group admin must then attest the payout
+  // (`attestJobPayoutAction`) to release the real Stripe transfer. This keeps a
+  // deliberate human gate in front of real money: done → admin attest → pay out.
   await db
     .update(resources)
     .set({
       metadata: sql`${resources.metadata} || ${JSON.stringify({
-        connectPayoutStatus: connectPayout.status,
-        ...(connectPayout.transferId ? { stripeTransferId: connectPayout.transferId } : {}),
-        ...(connectPayout.connectAccountId
-          ? { payeeConnectAccountId: connectPayout.connectAccountId }
-          : {}),
-        ...(connectPayout.detail ? { connectPayoutDetail: connectPayout.detail } : {}),
-        ...(connectPayout.status === "paid"
-          ? { paymentMethod: "stripe_connect" }
-          : {}),
+        connectPayoutStatus: CONNECT_PAYOUT_AWAITING_ATTESTATION,
       })}::jsonb`,
       updatedAt: new Date(),
     })
@@ -1013,4 +996,143 @@ export async function markJobDoneAction(
       status: "completed",
     }
   );
+}
+
+// ─── Payout attestation (admin releases the real Stripe transfer) ─────────────
+
+/** Payout-receipt statuses that are still eligible to be attested/released. */
+const RELEASABLE_PAYOUT_STATUSES = new Set<ConnectPayoutStatus>([
+  "awaiting_attestation",
+  "needs_onboarding",
+  "insufficient_funds",
+  "error",
+]);
+
+/** One receipt's outcome from an attest-payout pass. */
+export interface AttestPayoutEntry {
+  receiptId: string;
+  payeeAgentId: string;
+  amountCents: number;
+  status: ConnectPayoutStatus;
+  transferId?: string;
+  detail?: string;
+}
+
+export interface AttestJobPayoutResult {
+  success: boolean;
+  message: string;
+  entries?: AttestPayoutEntry[];
+}
+
+/**
+ * Admin attestation that RELEASES the real Stripe payout for a completed job.
+ *
+ * `markJobDoneAction` records the internal-ledger obligation and stamps each
+ * job-payout receipt `awaiting_attestation` — no real money moves. This action,
+ * gated to the job owner or a group admin, is the deliberate human release: for
+ * every not-yet-paid payout receipt on the job it runs {@link settleConnectPayout}
+ * (the real platform→payee Stripe transfer) and records the result on the
+ * receipt. Idempotent — receipts already `paid` are skipped, and the transfer
+ * itself is idempotency-keyed on the receipt id, so re-attesting never
+ * double-pays. Re-runnable to retry payees who were `needs_onboarding` /
+ * `insufficient_funds` on a prior pass.
+ */
+export async function attestJobPayoutAction(jobId: string): Promise<AttestJobPayoutResult> {
+  const userId = await getCurrentUserId();
+  if (!userId) return { success: false, message: "You must be logged in to attest a payout." };
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
+    return { success: false, message: "Invalid job id." };
+  }
+
+  const [job] = await db
+    .select({ id: resources.id, ownerId: resources.ownerId })
+    .from(resources)
+    .where(
+      and(
+        eq(resources.id, jobId),
+        inArray(resources.type, [...JOB_RESOURCE_TYPES]),
+        sql`${resources.deletedAt} IS NULL`,
+      ),
+    )
+    .limit(1);
+  if (!job) return { success: false, message: "Job not found." };
+
+  const { hasGroupWriteAccess } = await import("@/app/actions/create-resources");
+  const canAttest = job.ownerId === userId ? true : await hasGroupWriteAccess(userId, job.ownerId);
+  if (!canAttest) {
+    return { success: false, message: "Only the job owner or a group admin can attest a payout." };
+  }
+
+  // Every job-payout receipt for this job (owned by each payee).
+  const receiptRows = (await db.execute(sql`
+    SELECT id, owner_id, metadata
+    FROM resources
+    WHERE type = 'receipt'
+      AND deleted_at IS NULL
+      AND metadata->>'receiptKind' = 'job-payout'
+      AND metadata->>'jobId' = ${jobId}
+  `)) as unknown as {
+    rows: Array<{ id: string; owner_id: string; metadata: Record<string, unknown> }>;
+  };
+
+  const entries: AttestPayoutEntry[] = [];
+  for (const row of receiptRows.rows) {
+    const meta = row.metadata ?? {};
+    const currentStatus = meta.connectPayoutStatus as ConnectPayoutStatus | undefined;
+    // Skip already-paid receipts and any not in a releasable state.
+    if (currentStatus && !RELEASABLE_PAYOUT_STATUSES.has(currentStatus)) continue;
+    const amountCents = typeof meta.amountCents === "number" ? meta.amountCents : 0;
+    if (amountCents <= 0) continue;
+
+    const result = await settleConnectPayout({
+      payeeAgentId: row.owner_id,
+      amountCents,
+      idempotencyKey: row.id,
+      metadata: {
+        jobId,
+        ...(typeof meta.projectId === "string" ? { projectId: meta.projectId } : {}),
+        ...(typeof meta.payerGroupId === "string" ? { payerGroupId: meta.payerGroupId } : {}),
+        attestedBy: userId,
+      },
+    });
+
+    await db
+      .update(resources)
+      .set({
+        metadata: sql`${resources.metadata} || ${JSON.stringify({
+          connectPayoutStatus: result.status,
+          ...(result.transferId ? { stripeTransferId: result.transferId } : {}),
+          ...(result.connectAccountId ? { payeeConnectAccountId: result.connectAccountId } : {}),
+          ...(result.detail ? { connectPayoutDetail: result.detail } : {}),
+          ...(result.status === "paid"
+            ? { paymentMethod: "stripe_connect", payoutAttestedBy: userId, payoutAttestedAt: new Date().toISOString() }
+            : {}),
+        })}::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(eq(resources.id, row.id));
+
+    entries.push({
+      receiptId: row.id,
+      payeeAgentId: row.owner_id,
+      amountCents,
+      status: result.status,
+      transferId: result.transferId,
+      detail: result.detail,
+    });
+  }
+
+  const paid = entries.filter((e) => e.status === "paid").length;
+  if (entries.length === 0) {
+    return { success: true, message: "No payouts awaiting attestation on this job.", entries };
+  }
+  return {
+    success: true,
+    message:
+      paid === entries.length
+        ? `Released ${paid} payout${paid === 1 ? "" : "s"}.`
+        : `Released ${paid}/${entries.length} payout(s); the rest need onboarding, funds, or retry.`,
+    entries,
+  };
 }

@@ -16,7 +16,7 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { updateResource } from "@/app/actions/create-resources"
 import { addTaskToJobAction } from "@/app/actions/job-management"
-import { markJobDoneAction } from "@/app/actions/job-completion"
+import { markJobDoneAction, attestJobPayoutAction } from "@/app/actions/job-completion"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -85,6 +85,7 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
   const [isSaving, setIsSaving] = useState(false)
   const [isAddingTask, setIsAddingTask] = useState(false)
   const [isCompleting, setIsCompleting] = useState(false)
+  const [isReleasing, setIsReleasing] = useState(false)
   // Volunteer jobs settle Thanks via a voucher-creator dialog on Complete.
   const [isVolunteerCompleteOpen, setIsVolunteerCompleteOpen] = useState(false)
 
@@ -254,6 +255,23 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
       toast({ title: "Failed to mark job done", description: "An unexpected error occurred.", variant: "destructive" })
     } finally {
       setIsCompleting(false)
+    }
+  }
+
+  const handleReleasePayment = async () => {
+    setIsReleasing(true)
+    try {
+      const result = await attestJobPayoutAction(job.id)
+      toast({
+        title: result.success ? "Payout attested" : "Payout release failed",
+        description: result.message,
+        variant: result.success ? undefined : "destructive",
+      })
+      if (result.success) router.refresh()
+    } catch {
+      toast({ title: "Payout release failed", description: "An unexpected error occurred.", variant: "destructive" })
+    } finally {
+      setIsReleasing(false)
     }
   }
 
@@ -532,7 +550,7 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                   <AlertDialogTitle>Mark this job done?</AlertDialogTitle>
                   <AlertDialogDescription>
                     {job.payKind
-                      ? "This completes the job, records a contribution for every assignee, and pays cash compensation — from the project's wallet when the job belongs to a project (its approved budget), otherwise from the group treasury wallet. Underfunded payouts are parked and retried the next time you mark it done."
+                      ? "This completes the job, records a contribution for every assignee, and records the cash owed — from the project's wallet when the job belongs to a project (its approved budget), otherwise from the group treasury wallet. Real payout to the worker's connected account is a separate step: after marking done, use “Release payment” to attest and pay out."
                       : "This completes the job and records a contribution for every assignee. This is a points-only job — no cash moves."}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
@@ -544,6 +562,22 @@ export function JobAdminPanel({ job, canManage }: JobAdminPanelProps) {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+          )}
+
+          {/* Release payment: attest the completed job's payout and fire the real
+              Stripe transfer to each payee's connected account. Shown once the job
+              is completed and it pays cash. Idempotent + re-runnable (retries
+              payees that needed onboarding/funds). */}
+          {isCompleted && (job.payKind === "fixed" || job.payKind === "hourly") && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isReleasing}
+              onClick={() => void handleReleasePayment()}
+            >
+              <BadgeCheck className="mr-1.5 h-3.5 w-3.5" />
+              {isReleasing ? "Releasing..." : "Release payment"}
+            </Button>
           )}
         </div>
       </CardContent>

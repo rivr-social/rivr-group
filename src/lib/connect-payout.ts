@@ -26,11 +26,15 @@ import { ensureConnectAccountForAgent } from '@/lib/connect-account';
 
 /** Verdict of a connect-payout attempt, recorded on the payout receipt. */
 export type ConnectPayoutStatus =
+  | 'awaiting_attestation' // job marked done; a group admin must attest to release the real payout
   | 'paid' // a real Stripe transfer settled to the payee's connected account
   | 'disabled' // the STRIPE_CONNECT_PAYOUTS_ENABLED flag is off
   | 'needs_onboarding' // payee has a connected account but it can't receive transfers yet
   | 'insufficient_funds' // the platform balance can't cover the transfer
   | 'error'; // Stripe rejected the transfer (message captured)
+
+/** Receipt payout status set at mark-done, before an admin attests the payout. */
+export const CONNECT_PAYOUT_AWAITING_ATTESTATION: ConnectPayoutStatus = 'awaiting_attestation';
 
 export interface ConnectPayoutResult {
   status: ConnectPayoutStatus;
