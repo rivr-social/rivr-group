@@ -45,6 +45,7 @@ import {
   fetchGroupDetail,
   fetchMarketplaceListings,
   fetchPublicResources,
+  fetchAllResources,
 } from "@/app/actions/graph"
 import { fetchManagedGroupsAction } from "@/app/actions/event-form"
 import type { SerializedResource } from "@/lib/graph-serializers"
@@ -295,7 +296,11 @@ export default function CreatePage() {
         setVenuesLoading(false)
       })
 
-    fetchPublicResources(500)
+    // Badges are group-scoped and usually `members` visibility, so the
+    // public-only feed excluded them (empty picker). Fetch by type through the
+    // permission-checked reader so a group member/admin sees the group's badges
+    // they're allowed to gate a job on.
+    fetchAllResources({ type: "badge", limit: 500 })
       .then((rows) => {
         if (cancelled) return
         const badges = rows.filter((resource) => {
@@ -1215,6 +1220,23 @@ export default function CreatePage() {
 
     // Use the real resource ID returned by the server action
     const badgeId = result.resourceId as string
+    // Add the freshly-created badge to the live list so it renders in BOTH the
+    // Available Badges grid and the Selected Badges chips (the chip render bails
+    // when the id isn't in liveBadges, so a create-and-add otherwise showed
+    // nothing attached).
+    setLiveBadges((prev) =>
+      prev.some((b) => b.id === badgeId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: badgeId,
+              name: newBadge.name.trim(),
+              type: "badge",
+              metadata: { icon: newBadge.icon || undefined },
+            } as unknown as SerializedResource,
+          ],
+    )
     addBadgeToJob(badgeId)
 
     // Reset form
