@@ -16,6 +16,7 @@ import { ExternalLink, Loader2, Rocket } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CustomDomainPanel } from "@/components/custom-domain-panel";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import type { PublicSitePublication, PublicSiteVersion } from "@/lib/builder/site-service";
@@ -170,6 +171,8 @@ export function BuilderClient({
           )}
         </CardContent>
       </Card>
+
+      <CustomDomainPanel targetAgentId={targetAgentId} isPublished={isLive} />
 
       <Card>
         <CardHeader>

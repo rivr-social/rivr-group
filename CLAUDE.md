@@ -613,9 +613,45 @@ readiness" projection). Do NOT implement money movement without Cameron.
   `/api/builder/publish`), and **the serve leg** is public GET
   `groups/[id]/site/[[...path]]/route.ts` (streams the live version snapshot from
   the DB; index.html default; content-type by ext; traversal-safe; nosniff). No
-  custom-domain/DNS lane — published sites are served under the instance's OWN
-  host at `/groups/{id}/site` (documented boundary; the generate→publish→serve
-  loop is fully functional). A **Site** tab in group settings links to both.
+  custom-domain/DNS lane at the time — superseded by the custom-domain port
+  below (2026-07-14 PM). A **Site** tab in group settings links to both.
+
+## Custom domains for published sites (2026-07-14)
+
+Port of the person app's custom-domain lane (manual DNS v1 — no DNS-write
+connectors here). A published site (personal OR group) can be served on the
+owner's own domain:
+
+- **Pure lane:** `lib/builder/site-host-resolve.ts` (normalizeHost,
+  matchPublicationForHost on the DB-snapshot shape `publishedVersionId`,
+  computeDomainVerification + injectable-DNS `verifyDomainPointsToApp`) and
+  `lib/builder/site-serve.ts` (resolveSitePath/contentTypeFor/withSiteBase —
+  now SHARED by both serve routes; the `/groups/[id]/site` route was refactored
+  onto it). Tests: `lib/builder/__tests__/site-host-resolve.test.ts`
+  (`pnpm test:unit`, 16 cases).
+- **Service:** `site-service.ts` — `setDomainStatus`, `bindCustomDomain`
+  (requires a live published version; DOMAIN_TAKEN when bound to another owner
+  — the `site_publications_domain_idx` unique index backstops the race),
+  `unbindCustomDomain`, `resolveBoundPublicationByHost`.
+- **Host-dispatch:** `middleware.ts` rewrites any request whose Host is not
+  this instance's own app host (from base-url env; fail-safe disabled when
+  unset) to `app/site-host/[[...path]]/route.ts`, which resolves the bound
+  domain and streams the snapshot with a minimal per-site CSP; HTML gets
+  `<base href="/">` (domain-root serving).
+- **API:** `/api/builder/domain` (GET state+records / POST verify|bind /
+  DELETE unbind) — authority via `resolveSiteOwnerSubject` (remote-viewer-
+  aware; `targetAgentId` names a group the caller must hold write access on).
+- **UI:** `components/custom-domain-panel.tsx` in `/builder` (status, DNS
+  records, Verify, Connect, Disconnect).
+- **Operator prerequisite (NOT app code):** the instance's Traefik needs a
+  catch-all router + HTTP-01 certs so unknown Hosts reach this container —
+  same requirement as person `docs/CUSTOM_DOMAINS.md`. Schema needed NO
+  migration (0046 already carried the domain columns).
+- **Boundary:** the middleware matcher excludes some static extensions
+  (.html/.json/.svg …) — generated sites link pages extension-lessly and the
+  known asset types (css/js) pass through, but a deep link to a literal
+  `*.html` path on a custom domain bypasses host-dispatch. Revisit if the
+  generator ever emits .html hrefs.
 - **Assistant admin key (D24):** a group admin can enter their own Anthropic API
   key OR Claude Code OAuth token; stored ENCRYPTED (secret-box) as
   `assistantApiKeyEnc` on the direct agent's `autobotSettings`, NEVER returned to

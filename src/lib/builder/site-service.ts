@@ -39,6 +39,7 @@ import {
   resolveAuthenticatedUserId,
   hasGroupWriteAccess,
 } from "@/app/actions/resource-creation/helpers";
+import { matchPublicationForHost, normalizeHost } from "@/lib/builder/site-host-resolve";
 import {
   buildSiteFiles,
   fileCount,
@@ -60,6 +61,8 @@ export const SITE_TRIGGER_SAVE = "save";
 
 /** Domain binding statuses persisted in `site_publications.domain_status`. */
 export const DOMAIN_STATUS_UNBOUND = "unbound";
+export const DOMAIN_STATUS_PENDING = "pending";
+export const DOMAIN_STATUS_BOUND = "bound";
 
 /** Max resources loaded per owner when generating a site. */
 const MAX_OWNER_RESOURCES = 500;
@@ -292,6 +295,109 @@ async function upsertPublication(
     })
     .returning();
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Custom domains (host-dispatch serving)
+// ---------------------------------------------------------------------------
+
+/**
+ * Patches the owner's domain-binding state. `customDomain: null` clears the
+ * binding fields; omitted fields are left untouched.
+ */
+export async function setDomainStatus(
+  agentId: string,
+  domainStatus: string,
+  patch: {
+    customDomain?: string | null;
+    domainProvider?: string | null;
+    domainError?: string | null;
+  } = {},
+): Promise<PublicSitePublication> {
+  const row = await upsertPublication(agentId, { domainStatus, ...patch });
+  return toPublicPublication(row);
+}
+
+/**
+ * Binds a custom domain to the owner's PUBLISHED site so host-dispatch serves
+ * it. Requires a live published version; refuses a domain already bound to a
+ * DIFFERENT owner (the unique index backstops this atomically).
+ *
+ * @throws {SiteServiceError} NOT_PUBLISHED | DOMAIN_TAKEN | DOMAIN_REQUIRED
+ */
+export async function bindCustomDomain(
+  agentId: string,
+  domain: string,
+): Promise<PublicSitePublication> {
+  const normalized = normalizeHost(domain);
+  if (!normalized) {
+    throw new SiteServiceError("DOMAIN_REQUIRED", "A custom domain is required.");
+  }
+  const publication = await getSitePublication(agentId);
+  if (!publication?.publishedVersionId) {
+    throw new SiteServiceError(
+      "NOT_PUBLISHED",
+      "Publish the site before binding a custom domain.",
+    );
+  }
+  const [holder] = await db
+    .select({ agentId: sitePublications.agentId })
+    .from(sitePublications)
+    .where(eq(sitePublications.customDomain, normalized))
+    .limit(1);
+  if (holder && holder.agentId !== agentId) {
+    throw new SiteServiceError(
+      "DOMAIN_TAKEN",
+      "That domain is already bound to another published site on this instance.",
+    );
+  }
+  try {
+    const row = await upsertPublication(agentId, {
+      customDomain: normalized,
+      domainStatus: DOMAIN_STATUS_BOUND,
+      domainError: null,
+    });
+    return toPublicPublication(row);
+  } catch (error) {
+    // Unique-index race: another owner bound the domain between check and write.
+    throw new SiteServiceError(
+      "DOMAIN_TAKEN",
+      error instanceof Error && /unique|duplicate/i.test(error.message)
+        ? "That domain is already bound to another published site on this instance."
+        : "Failed to bind the domain.",
+    );
+  }
+}
+
+/** Clears the owner's domain binding (host-dispatch stops serving it). */
+export async function unbindCustomDomain(agentId: string): Promise<PublicSitePublication> {
+  const row = await upsertPublication(agentId, {
+    customDomain: null,
+    domainProvider: null,
+    domainStatus: DOMAIN_STATUS_UNBOUND,
+    domainError: null,
+  });
+  return toPublicPublication(row);
+}
+
+/**
+ * Resolves the publication host-dispatch should serve for a foreign Host
+ * header: the row whose bound `customDomain` matches and which has a live
+ * published version. Unknown/unbound host -> null.
+ */
+export async function resolveBoundPublicationByHost(
+  host: string,
+): Promise<PublicSitePublication | null> {
+  const normalized = normalizeHost(host);
+  if (!normalized) return null;
+  const [row] = await db
+    .select()
+    .from(sitePublications)
+    .where(eq(sitePublications.customDomain, normalized))
+    .limit(1);
+  if (!row) return null;
+  const match = matchPublicationForHost(normalized, [row]);
+  return match ? toPublicPublication(match) : null;
 }
 
 // ---------------------------------------------------------------------------
