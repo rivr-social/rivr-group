@@ -24,6 +24,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { isPublicRoute } from "@/lib/route-access";
+import { resolveHomeRedirectPath } from "@/lib/home-tabs";
 import {
   REMOTE_VIEWER_COOKIE_NAME,
   type RemoteViewerSessionPayload,
@@ -297,6 +298,25 @@ export async function middleware(request: NextRequest) {
   const nonce = btoa(crypto.randomUUID());
   const cspHeader = buildCspHeader(nonce);
   const method = request.method.toUpperCase();
+
+  // Root redirect: `/` → the primary group's page as a REAL HTTP 307. The
+  // `(main)/page.tsx` fallback calls `redirect()` during a STREAMED render
+  // (loading.tsx makes Next send a 200 shell first), so the redirect executed
+  // client-side mid-hydration — which trips AppRouter's hook accounting
+  // (React #310) and flashes the router error boundary ("Application error")
+  // before recovering. Redirecting here means the browser never renders the
+  // intermediate page at all. Foreign hosts were already dispatched above.
+  if (pathname === "/" && (method === "GET" || method === "HEAD")) {
+    const primaryAgentId = process.env.PRIMARY_AGENT_ID?.trim();
+    if (primaryAgentId) {
+      const target = new URL(
+        resolveHomeRedirectPath(primaryAgentId, request.nextUrl.searchParams.get("tab")),
+        request.url,
+      );
+      const response = NextResponse.redirect(target);
+      return applySecurityHeaders(response, cspHeader, nonce);
+    }
+  }
   // Filter non-API POST requests that are neither Server Actions nor form
   // submissions. This prevents bare POST requests from being processed as
   // page navigations, which could be used for CSRF-style attacks.
