@@ -5,6 +5,8 @@ import { db } from "@/db"
 import { agents, ledger, resources } from "@/db/schema"
 import { and, eq, inArray, isNull, sql } from "drizzle-orm"
 import { isGroupAdmin } from "@/app/actions/group-admin"
+import { getCurrentUserId } from "@/app/actions/interactions/helpers"
+import { getAuthenticatedActorId } from "@/lib/server-auth"
 
 type ManagedGroup = {
   id: string
@@ -34,19 +36,29 @@ export type EventTicketOfferingSummary = {
 }
 
 async function resolveAuthenticatedUserId(): Promise<string | null> {
-  const session = await auth()
-  let resolvedUserId = session?.user?.id ?? null
+  // Unified session id: local NextAuth OR a federated session (getCurrentUserId,
+  // which normalizes a federated session to the local actor id), falling back to
+  // the SSO-landed remote-viewer COOKIE (getAuthenticatedActorId). A group admin
+  // arriving via cross-instance SSO holds ONLY the remote-viewer cookie, which
+  // `auth()` cannot see — without this the "Offer this as" owner picker rendered
+  // empty (only "My profile") for federated admins, blocking group-owned
+  // offerings from landing sales in the group's Connect account.
+  const unifiedUserId = (await getCurrentUserId()) ?? (await getAuthenticatedActorId())
+  if (unifiedUserId) return unifiedUserId
 
-  if (!resolvedUserId && session?.user?.email) {
+  // Final fallback: a session that carries an email but no id (rare) resolves to
+  // its agent row by email.
+  const session = await auth()
+  if (session?.user?.email) {
     const [agent] = await db
       .select({ id: agents.id })
       .from(agents)
       .where(eq(agents.email, session.user.email))
       .limit(1)
-    resolvedUserId = agent?.id ?? null
+    return agent?.id ?? null
   }
 
-  return resolvedUserId
+  return null
 }
 
 export async function fetchManagedGroupsAction(): Promise<ManagedGroup[]> {

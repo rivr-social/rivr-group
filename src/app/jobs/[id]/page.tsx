@@ -18,6 +18,7 @@
 import { getCurrentUserId } from "@/app/actions/interactions/helpers"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
 import { getJobById, getShifts, getProjects, getUserBadgeIds, getResource, getResourcesByJobId } from "@/lib/queries/resources"
+import { getAgentsByIds } from "@/lib/queries/agents"
 import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
 import { getJobShareData } from "@/app/actions/job-peer-allocation"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
@@ -115,6 +116,17 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   const breadcrumbProject = breadcrumbProjectId
     ? projects.find((p) => p.id === breadcrumbProjectId) ?? null
     : null
+  // Assignee display names for the About tab's Team Members list. The domain
+  // JobShift carries only agent ids in `assignees`; resolve them to names
+  // server-side (same source the Review tab uses) so claimants render as their
+  // name instead of a raw UUID. Falls back to the id when no agent row exists.
+  const assigneeNames: Record<string, string> = {}
+  const assigneeIds = job?.assignees ?? []
+  if (assigneeIds.length > 0) {
+    const assigneeAgents = await getAgentsByIds(assigneeIds).catch(() => [])
+    for (const agent of assigneeAgents) assigneeNames[agent.id] = agent.name
+  }
+
   let breadcrumbItems: BreadcrumbNode[] = []
   if (owningAgentId && job) {
     const [ownerLineage, ownerAgent] = await Promise.all([
@@ -147,6 +159,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       stockCanManage={stockCanManage}
       canManage={canManage}
       canAttest={canAttest}
+      assigneeNames={assigneeNames}
       share={share}
       reviewData={reviewData}
       payoutReleased={payoutReleased}

@@ -11,14 +11,23 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { MessageSquare, Users, Award, MapPin, Clock, Calendar } from "lucide-react"
+import { getInitials } from "@/lib/utils"
 import type { JobShift } from "@/types/domain"
 
 interface JobAboutTabProps {
   job: JobShift
   currentUserId: string
+  /**
+   * Server-resolved display names for the job's assignee agent ids
+   * (`{ [agentId]: name }`). The Team Members list falls back to the raw id
+   * only when no agent row was found — mirrors how the Review tab resolves the
+   * same actors (see `getJobQaReviewData`). Client user-context cannot see
+   * federated assignees, so names are resolved server-side and threaded down.
+   */
+  assigneeNames?: Record<string, string>
 }
 
-export function JobAboutTab({ job, currentUserId: _currentUserId }: JobAboutTabProps) {
+export function JobAboutTab({ job, currentUserId: _currentUserId, assigneeNames = {} }: JobAboutTabProps) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Main Content */}
@@ -170,18 +179,21 @@ export function JobAboutTab({ job, currentUserId: _currentUserId }: JobAboutTabP
               <p className="text-gray-500 text-sm">No team members yet.</p>
             ) : (
               <div className="space-y-3">
-                {job.assignees.map((assignee) => (
-                  <div key={assignee} className="flex items-center gap-3">
-                    <Avatar className="h-8 w-8">
-                      <AvatarImage src="/placeholder-user.jpg" />
-                      <AvatarFallback>{assignee.slice(0, 2).toUpperCase()}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="font-medium text-sm">{assignee}</p>
-                      <p className="text-xs text-gray-500">Team Member</p>
+                {job.assignees.map((assignee) => {
+                  const displayName = assigneeNames[assignee] ?? assignee
+                  return (
+                    <div key={assignee} className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8">
+                        <AvatarImage src="/placeholder-user.jpg" />
+                        <AvatarFallback>{getInitials(displayName)}</AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="font-medium text-sm">{displayName}</p>
+                        <p className="text-xs text-gray-500">Team Member</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </CardContent>

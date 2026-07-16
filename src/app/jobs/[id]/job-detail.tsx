@@ -44,6 +44,12 @@ interface JobDetailClientProps {
   /** Server-computed: viewer may attest task completions (group authority OR
    *  the project lead/QA — the claim → attest rail). */
   canAttest: boolean
+  /**
+   * Server-resolved display names for the job's assignee agent ids
+   * (`{ [agentId]: name }`). Passed straight to the About tab's Team Members
+   * list so claimants render as their name, not a raw UUID.
+   */
+  assigneeNames?: Record<string, string>
   /** Server-computed peer point-share data (Points tab); null hides the tab. */
   share?: JobShareData | null
   /** Server-computed admin QA review data (Review tab); null hides the tab. */
@@ -60,7 +66,7 @@ interface JobDetailClientProps {
   breadcrumbItems?: BreadcrumbNode[]
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, share, reviewData, payoutReleased = false, breadcrumbItems = [] }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, assigneeNames, share, reviewData, payoutReleased = false, breadcrumbItems = [] }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -266,7 +272,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
         </TabsList>
 
         <TabsContent value="about" className="mt-6">
-          <JobAboutTab job={job} currentUserId={effectiveUserId} />
+          <JobAboutTab job={job} currentUserId={effectiveUserId} assigneeNames={assigneeNames} />
         </TabsContent>
 
         <TabsContent value="tasks" className="mt-6">
