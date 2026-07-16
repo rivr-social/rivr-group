@@ -19,6 +19,7 @@ import { JobQaReviewTab } from "@/components/job-qa-review-tab"
 import { CommentFeed } from "@/components/comment-feed"
 import { NavBreadcrumbs } from "@/components/nav-breadcrumbs"
 import type { BreadcrumbNode } from "@/lib/breadcrumbs"
+import { formatDateStable } from "@/lib/utils"
 import { StockTab } from "@/components/stock-tab"
 import type { StockInventoryItem, StockNeed } from "@/lib/stock"
 import type { JobClaimPanelData } from "@/app/actions/interactions/project-team"
@@ -220,7 +221,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
               <CardContent className="p-4 text-center">
                 <Calendar className="h-5 w-5 mx-auto mb-2 text-gray-500" />
                 <p className="text-sm text-gray-600">Deadline</p>
-                <p className="font-medium">{new Date(job.deadline).toLocaleDateString()}</p>
+                <p className="font-medium">{formatDateStable(job.deadline)}</p>
               </CardContent>
             </Card>
           )}
