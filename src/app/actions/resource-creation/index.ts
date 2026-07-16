@@ -54,6 +54,7 @@ export {
   removeGroupRelationshipAction,
   castGovernanceVoteAction,
   createGovernanceProposalAction,
+  createGovernancePollAction,
   createGovernanceIssueAction,
   fetchGovernanceBadgesAction,
   checkGovernanceBadgeHolderAction,
