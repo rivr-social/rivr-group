@@ -26,7 +26,6 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -113,23 +112,11 @@ export function VolunteerCompleteDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <HandHeart className="h-5 w-5 text-purple-600" />
-            Value the volunteer Thanks
+            Rate your contribution
           </DialogTitle>
-          <DialogDescription>
-            Rate the work&apos;s required skillfulness and difficulty. Completing the job transfers the
-            group&apos;s Thanks to each volunteer at this value, scaled by the hours they worked. No cash moves.
-          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 py-2">
-          <div className="rounded-lg border bg-purple-50 p-4 text-center dark:bg-purple-950/30">
-            <div className="text-sm text-muted-foreground">Thanks per hour worked</div>
-            <div className="text-4xl font-bold text-purple-700 dark:text-purple-300">{thanksPerHour}</div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              ≈ {previewTotal} Thanks for {previewHours}h of work
-            </div>
-          </div>
-
           <div>
             <div className="mb-2 flex items-center justify-between">
               <Label className="flex items-center gap-2">
@@ -145,12 +132,18 @@ export function VolunteerCompleteDialog({
             <div className="mb-2 flex items-center justify-between">
               <Label className="flex items-center gap-2">
                 <Award className="h-4 w-4" />
-                Difficulty
+                Difficulty (sucks-ness)
               </Label>
               <Badge variant="outline">{difficulty[0]}/100</Badge>
             </div>
             <Slider value={difficulty} onValueChange={setDifficulty} min={1} max={100} step={1} />
           </div>
+
+          {/* The computed Thanks value sits below the sliders as a quiet,
+              secondary readout — the ratings are the primary input. */}
+          <p className="text-center text-xs text-muted-foreground">
+            {thanksPerHour} Thanks/hour · ≈ {previewTotal} Thanks for {previewHours}h of work
+          </p>
         </div>
 
         <DialogFooter>
@@ -158,7 +151,7 @@ export function VolunteerCompleteDialog({
             Cancel
           </Button>
           <Button onClick={handleComplete} disabled={isCompleting}>
-            {isCompleting ? "Completing…" : "Complete & pay Thanks"}
+            {isCompleting ? "Completing…" : "Complete"}
           </Button>
         </DialogFooter>
       </DialogContent>
