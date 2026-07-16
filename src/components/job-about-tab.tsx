@@ -12,6 +12,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { MessageSquare, Users, Award, MapPin, Clock, Calendar } from "lucide-react"
 import type { JobShift } from "@/types/domain"
+import { formatDateStable } from "@/lib/utils"
 
 interface JobAboutTabProps {
   job: JobShift
@@ -75,7 +76,7 @@ export function JobAboutTab({ job, currentUserId: _currentUserId }: JobAboutTabP
                         <AvatarFallback>{comment.userId.slice(0, 2).toUpperCase()}</AvatarFallback>
                       </Avatar>
                       <span className="font-medium text-sm">{comment.userId}</span>
-                      <span className="text-xs text-gray-500">{new Date(comment.createdAt).toLocaleDateString()}</span>
+                      <span className="text-xs text-gray-500">{formatDateStable(comment.createdAt)}</span>
                     </div>
                     <p className="text-sm text-gray-700 mb-2">{comment.content}</p>
                     {comment.replies && comment.replies.length > 0 && (
@@ -89,7 +90,7 @@ export function JobAboutTab({ job, currentUserId: _currentUserId }: JobAboutTabP
                               </Avatar>
                               <span className="font-medium text-xs">{reply.userId}</span>
                               <span className="text-xs text-gray-500">
-                                {new Date(reply.createdAt).toLocaleDateString()}
+                                {formatDateStable(reply.createdAt)}
                               </span>
                             </div>
                             <p className="text-xs text-gray-700">{reply.content}</p>
@@ -124,7 +125,7 @@ export function JobAboutTab({ job, currentUserId: _currentUserId }: JobAboutTabP
             {job.deadline && (
               <div className="flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-gray-500" />
-                <span className="text-sm">Due: {new Date(job.deadline).toLocaleDateString()}</span>
+                <span className="text-sm">Due: {formatDateStable(job.deadline)}</span>
               </div>
             )}
             <Separator />

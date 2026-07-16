@@ -55,6 +55,39 @@ export function formatDate(date: Date | string, options?: Intl.DateTimeFormatOpt
 }
 
 /**
+ * Formats a date-like value as a hydration-stable US calendar date.
+ *
+ * Unlike {@link formatDate}, this pins BOTH the locale (`en-US`) AND the time
+ * zone (`UTC`), so the rendered day is byte-for-byte identical on the server
+ * and in every client browser regardless of the runtime's local time zone.
+ *
+ * Use this for any date rendered in server-rendered markup — e.g. job
+ * deadlines and comment dates on the job detail page — to avoid React
+ * hydration text mismatches (error #418): the bare `new Date(x).toLocaleDateString()`
+ * diverges when the SSR host (typically UTC) and the browser sit in different
+ * zones/locales. Date-only inputs like `"2026-07-16"` parse to UTC midnight and
+ * therefore render as their authored calendar day.
+ *
+ * @param {Date | string} date - Date object or parseable date string.
+ * @param {Intl.DateTimeFormatOptions} [options] - Optional formatter overrides;
+ *   the `UTC` time zone is always enforced.
+ * @returns {string} Deterministic locale-formatted date text.
+ * @throws {never} This helper does not intentionally throw.
+ * @example
+ * formatDateStable("2026-07-16"); // "Jul 16, 2026" (same on server and client)
+ */
+export function formatDateStable(date: Date | string, options?: Intl.DateTimeFormatOptions): string {
+  // Reuse formatDate for parsing + en-US pinning; force UTC so SSR and CSR agree.
+  return formatDate(date, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    ...options,
+    timeZone: "UTC",
+  });
+}
+
+/**
  * Formats a date-like value for US English time display.
  *
  * @param {Date | string} date - Date object or parseable date string.
