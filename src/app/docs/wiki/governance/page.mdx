@@ -8,26 +8,41 @@ points-based stake.
 
 ## Where it lives
 
-- Group governance surfaces within `/groups/[id]` org tabs · `src/app/groups/[id]/**`
+- The **Voice** tab within the group page — `src/components/governance-tab.tsx`,
+  mounted from `group-tabs-client.tsx`. It has two sub-tabs: **Issues & Polls**
+  and **Proposals & Votes**.
+- Items persist on the group agent's `metadata` (`proposals`, `polls`, `issues`
+  arrays) and are read back through `group-tabs-client` into the tab.
 - Related: stake and badges (`/badges`, `/points`)
-
-<Callout type="todo" title="Needs live verification">
-  The exact governance routes, proposal lifecycle, and decision mechanics are not
-  yet confirmed against the live app. This page is a scaffold — verify the live
-  governance tab/surface set and fill the interaction list before treating it as
-  product-truth.
-</Callout>
 
 ## Every interaction
 
-- **Create a proposal** — _TODO(verify)._
-- **Vote / decide** — _TODO(verify): voting model, quorum, badge/stake weighting._
-- **View decisions / history** — _TODO(verify)._
+Three creatable governance item types, each with its own composer at the top of
+the Voice tab:
+
+- **Create a proposal** — a yes / no / abstain decision with a pass **threshold**
+  (%) and a **duration** (days). `createGovernanceProposalAction`.
+- **Create a poll** — a lightweight multi-option question (2+ options) with a
+  **duration**. Members pick one option. `createGovernancePollAction`. Distinct
+  from a proposal: a poll gathers preference across several choices rather than
+  ratifying a single motion.
+- **Create an issue** — a titled discussion item (title + description).
+  `createGovernanceIssueAction`.
+- **Vote / decide** — the Vote button opens the voting modal. Proposals take
+  yes/no/abstain; polls take one of their options. `castGovernanceVoteAction`
+  records the vote (one active vote per member per item; re-voting supersedes the
+  prior vote).
+- **View items / results** — proposals show yes/no tallies + threshold; polls
+  show per-option percentages.
 
 ## Permissions / gating
 
-- Governance participation is membership-scoped; proposal/decision authority is
-  likely admin- or stake-weighted. _TODO(verify) against the capability matrix._
+- **Creating** a proposal, poll, or issue requires **group write access**
+  (`hasGroupWriteAccess` — group/subgroup admins, cascading to parent-group
+  admins). This is server-enforced in each create action; the client cannot
+  bypass it.
+- **Voting** requires an authenticated, actively-participating member
+  (`castGovernanceVoteAction`), and is rate-limited.
 
 ## Cross-links
 

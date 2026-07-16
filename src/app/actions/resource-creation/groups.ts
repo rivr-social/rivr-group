@@ -1146,6 +1146,193 @@ export async function createGovernanceProposalAction(input: {
   };
 }
 
+/**
+ * Creates a governance poll for a group (a lightweight multi-option vote,
+ * distinct from a yes/no/abstain Proposal). The poll is appended to the group
+ * agent's `metadata.polls` array — the same read path the Governance tab renders
+ * (`group-tabs-client` → `governancePolls` → `GovernanceTab`) and that
+ * `castGovernanceVoteAction` votes against (`targetType: "poll"`).
+ *
+ * Authority mirrors {@link createGovernanceProposalAction}: authenticated +
+ * group write access (`hasGroupWriteAccess`, cascades to parent-group admins).
+ * Requires at least two non-empty options.
+ */
+export async function createGovernancePollAction(input: {
+  groupId: string;
+  question: string;
+  description?: string;
+  options: string[];
+  duration: number;
+}): Promise<ActionResult> {
+  const cleanedOptions = Array.isArray(input.options)
+    ? input.options.map((o) => (typeof o === "string" ? o.trim() : "")).filter((o) => o.length > 0)
+    : [];
+
+  if (!input.groupId?.trim() || !input.question?.trim()) {
+    return {
+      success: false,
+      message: "groupId and question are required",
+      error: { code: "INVALID_INPUT" },
+    };
+  }
+
+  if (cleanedOptions.length < 2) {
+    return {
+      success: false,
+      message: "A poll requires at least two options",
+      error: { code: "INVALID_INPUT" },
+    };
+  }
+
+  if (typeof input.duration !== "number" || input.duration < 1) {
+    return {
+      success: false,
+      message: "Duration must be at least 1 day",
+      error: { code: "INVALID_INPUT" },
+    };
+  }
+
+  const userId = await resolveAuthenticatedUserId();
+  if (!userId) {
+    return {
+      success: false,
+      message: "You must be logged in to create polls",
+      error: { code: "UNAUTHENTICATED" },
+    };
+  }
+
+  const facadeResult = await updateFacade.execute(
+    {
+      type: "createGovernancePoll",
+      actorId: userId,
+      targetAgentId: input.groupId,
+      payload: {},
+    },
+    async () => {
+  const canWrite = await hasGroupWriteAccess(userId, input.groupId);
+  if (!canWrite) {
+    return {
+      success: false,
+      message: "You do not have permission to create polls for this group.",
+      error: { code: "FORBIDDEN" },
+    };
+  }
+
+  const check = await rateLimit(`resources:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
+  if (!check.success) {
+    return {
+      success: false,
+      message: "Rate limit exceeded. Please try again later.",
+      error: { code: "RATE_LIMITED" },
+    };
+  }
+
+  try {
+    const [group] = await db
+      .select({ metadata: agents.metadata })
+      .from(agents)
+      .where(and(eq(agents.id, input.groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`))
+      .limit(1);
+
+    if (!group) {
+      return { success: false, message: "Group not found.", error: { code: "NOT_FOUND" } };
+    }
+
+    const groupMeta = group.metadata && typeof group.metadata === "object"
+      ? (group.metadata as Record<string, unknown>)
+      : {};
+    const existingPolls = Array.isArray(groupMeta.polls)
+      ? (groupMeta.polls as unknown[])
+      : [];
+
+    const endDate = new Date(Date.now() + input.duration * 24 * 60 * 60 * 1000);
+    const pollId = `poll-${Date.now()}-${userId.slice(0, 8)}`;
+
+    const newPoll = {
+      id: pollId,
+      question: input.question.trim(),
+      description: input.description?.trim() || "",
+      options: cleanedOptions.map((text, idx) => ({
+        id: `${pollId}-opt-${idx}`,
+        text,
+        votes: 0,
+      })),
+      totalVotes: 0,
+      duration: input.duration,
+      status: "active",
+      endDate: endDate.toISOString(),
+      createdAt: new Date().toISOString(),
+      creatorId: userId,
+    };
+
+    const updatedMeta = {
+      ...groupMeta,
+      polls: [...existingPolls, newPoll],
+    };
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(agents)
+        .set({ metadata: updatedMeta, updatedAt: new Date() })
+        .where(and(eq(agents.id, input.groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`));
+
+      await tx.insert(ledger).values({
+        verb: "create",
+        subjectId: userId,
+        objectId: input.groupId,
+        objectType: "agent",
+        isActive: true,
+        metadata: {
+          source: "governance-tab",
+          entityType: "poll",
+          pollId,
+          groupId: input.groupId,
+          question: input.question.trim(),
+        },
+      } as NewLedgerEntry);
+    });
+
+    revalidatePath(`/groups/${input.groupId}`);
+    revalidatePath(`/rings/${input.groupId}`);
+    revalidatePath(`/families/${input.groupId}`);
+
+    return {
+      success: true,
+      message: "Poll created successfully",
+      resourceId: pollId,
+    } as ActionResult;
+  } catch (error) {
+    console.error("[createGovernancePollAction] failed:", error);
+    return {
+      success: false,
+      message: "Failed to create poll",
+      error: { code: "SERVER_ERROR" },
+    } as ActionResult;
+  }
+    }
+  );
+
+  if (facadeResult.success && facadeResult.data) {
+    const data = facadeResult.data as ActionResult;
+    if (data.success) {
+      await emitDomainEvent({
+        eventType: EVENT_TYPES.RESOURCE_CREATED,
+        entityType: "agent",
+        entityId: input.groupId,
+        actorId: userId,
+        payload: { question: input.question, pollId: data.resourceId },
+      }).catch(() => {});
+    }
+    return data;
+  }
+
+  return {
+    success: false,
+    message: facadeResult.error ?? "Failed to create poll",
+    error: { code: facadeResult.errorCode ?? "SERVER_ERROR" },
+  };
+}
+
 export async function createGovernanceIssueAction(input: {
   groupId: string;
   title: string;

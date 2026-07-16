@@ -26,8 +26,9 @@ import { Textarea } from "@/components/ui/textarea"
 
 import { VotingModal } from "./voting-modal"
 import { CreateProposalModal } from "./create-proposal-modal"
+import { CreatePollModal } from "./create-poll-modal"
 import type { Poll, Proposal } from "@/lib/types"
-import { castGovernanceVoteAction, createGovernanceIssueAction, createGovernanceProposalAction } from "@/app/actions/create-resources"
+import { castGovernanceVoteAction, createGovernanceIssueAction, createGovernancePollAction, createGovernanceProposalAction } from "@/app/actions/create-resources"
 import { useToast } from "@/components/ui/use-toast"
 
 /** Minimal issue shape derived from group metadata. */
@@ -72,11 +73,14 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
   const [activeTab, setActiveTab] = useState("issues")
   const [issueItems, setIssueItems] = useState(issues)
   const [proposalItems, setProposalItems] = useState(proposals)
+  const [pollItems, setPollItems] = useState(polls)
 
   /** State for the voting modal -- holds the item being voted on and its type, or null when closed */
   const [votingModal, setVotingModal] = useState<{ isOpen: boolean; item: Poll | Proposal; type: "proposal" | "poll" } | null>(null)
   /** Controls visibility of the Create Proposal modal */
   const [createProposalModal, setCreateProposalModal] = useState(false)
+  /** Controls visibility of the Create Poll modal */
+  const [createPollModal, setCreatePollModal] = useState(false)
   const [createIssueModal, setCreateIssueModal] = useState(false)
   const [issueTitle, setIssueTitle] = useState("")
   const [issueDescription, setIssueDescription] = useState("")
@@ -137,6 +141,41 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
     })
   }
 
+  /**
+   * Handles creating a new governance poll.
+   * Persists the poll via the poll creation server action and closes the modal on success.
+   */
+  const handleCreatePoll = (pollData: { question: string; description: string; options: string[]; duration: number }) => {
+    startTransition(async () => {
+      const result = await createGovernancePollAction({ groupId, ...pollData })
+      if (result.success) {
+        setPollItems((current) => [
+          {
+            id: result.resourceId ?? `poll-${Date.now()}`,
+            question: pollData.question,
+            description: pollData.description,
+            options: pollData.options.map((text, idx) => ({
+              id: `${result.resourceId ?? "poll"}-opt-${idx}`,
+              text,
+              votes: 0,
+            })),
+            totalVotes: 0,
+            endDate: new Date(Date.now() + pollData.duration * 24 * 60 * 60 * 1000).toISOString(),
+            creator: { id: "", name: "You", username: "you", avatar: "", followers: 0, following: 0 },
+            createdAt: new Date().toISOString(),
+            groupId,
+          },
+          ...current,
+        ])
+        toast({ title: "Poll created", description: "Your poll has been submitted." })
+        setCreatePollModal(false)
+        router.refresh()
+      } else {
+        toast({ title: "Poll creation failed", description: result.message, variant: "destructive" })
+      }
+    })
+  }
+
   const handleCreateIssue = () => {
     startTransition(async () => {
       const result = await createGovernanceIssueAction({
@@ -176,6 +215,7 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
         <h2 className="text-2xl font-bold">Voice</h2>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setCreateIssueModal(true)}>Create Issue</Button>
+          <Button variant="outline" onClick={() => setCreatePollModal(true)}>Create Poll</Button>
           <Button variant="default" onClick={() => setCreateProposalModal(true)}>
             Create Proposal
           </Button>
@@ -239,7 +279,7 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
             )}
 
             <h3 className="text-xl font-semibold mt-6">Polls</h3>
-            {polls.map((poll) => (
+            {pollItems.map((poll) => (
               <Card key={poll.id}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-lg">{poll.question}</CardTitle>
@@ -283,7 +323,7 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
                 </CardFooter>
               </Card>
             ))}
-            {polls.length === 0 && (
+            {pollItems.length === 0 && (
               <Card>
                 <CardContent className="p-8 text-center text-gray-500">
                   <p>No polls found for this group. Create the first poll to get started!</p>
@@ -394,6 +434,12 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
         isOpen={createProposalModal}
         onClose={() => setCreateProposalModal(false)}
         onSubmit={handleCreateProposal}
+      />
+
+      <CreatePollModal
+        isOpen={createPollModal}
+        onClose={() => setCreatePollModal(false)}
+        onSubmit={handleCreatePoll}
       />
 
       <Dialog open={createIssueModal} onOpenChange={setCreateIssueModal}>
