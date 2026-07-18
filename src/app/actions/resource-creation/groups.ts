@@ -26,6 +26,18 @@ import {
   resolveAuthenticatedUserId,
   hasGroupWriteAccess,
 } from "./helpers";
+import { isGroupMember } from "@/lib/permissions";
+import {
+  DEFAULT_BALLOT_STYLE,
+  ballotFromStored,
+  isBallotStyle,
+  resolveCreditsPerVoter,
+  resolveScoreMax,
+  tallyBallots,
+  validateBallot,
+  type Ballot,
+  type PollBallotConfig,
+} from "@/lib/governance-ballot";
 import type { ActionResult, UpdateGroupResourceInput } from "./types";
 import { desc } from "drizzle-orm";
 
@@ -882,17 +894,33 @@ export async function addGroupRelationshipAction(input: {
   };
 }
 
+/** Resolve a stored poll item's ballot configuration (defaulting legacy polls
+ *  to multiple-choice). Shared by cast + read paths. */
+function pollConfigFromItem(item: Record<string, unknown>): PollBallotConfig {
+  const ballotStyle = isBallotStyle(item.ballotStyle) ? item.ballotStyle : DEFAULT_BALLOT_STYLE;
+  const config: PollBallotConfig = { ballotStyle };
+  if (typeof item.scoreMax === "number") config.scoreMax = item.scoreMax;
+  if (typeof item.creditsPerVoter === "number") config.creditsPerVoter = item.creditsPerVoter;
+  return config;
+}
+
 export async function castGovernanceVoteAction(input: {
   groupId: string;
   targetId: string;
   targetType: "poll" | "proposal";
-  vote: string;
+  /** Proposals: "yes"|"no"|"abstain". Multiple-choice polls: the option id.
+   *  Other poll ballot styles send `ballot` instead. */
+  vote?: string;
+  /** P1 ballot styles (approval/score/ranked/rate-rank/quadratic) send a raw
+   *  ballot payload validated against the poll's style; see `governance-ballot`. */
+  ballot?: unknown;
   comment?: string;
 }): Promise<ActionResult> {
-  if (!input.groupId?.trim() || !input.targetId?.trim() || !input.vote?.trim()) {
+  const hasBallot = input.ballot != null && typeof input.ballot === "object";
+  if (!input.groupId?.trim() || !input.targetId?.trim() || (!input.vote?.trim() && !hasBallot)) {
     return {
       success: false,
-      message: "groupId, targetId, and vote are required",
+      message: "groupId, targetId, and a vote or ballot are required",
       error: { code: "INVALID_INPUT" },
     };
   }
@@ -924,6 +952,62 @@ export async function castGovernanceVoteAction(input: {
   }
 
   try {
+    // P0 (members-only voting): a governance vote is a member act — only active
+    // members of the owning group may vote. Being logged in is NOT sufficient
+    // (parity with global's cast path).
+    const membership = await isGroupMember(userId, input.groupId);
+    if (!membership.isMember) {
+      return {
+        success: false,
+        message: "You must be a group member to vote on this governance item.",
+        error: { code: "FORBIDDEN" },
+      };
+    }
+
+    // Load the group and locate the target item; a vote must reference a
+    // poll/proposal that actually belongs to this group.
+    const [groupRow] = await db
+      .select({ metadata: agents.metadata })
+      .from(agents)
+      .where(and(eq(agents.id, input.groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`))
+      .limit(1);
+
+    if (!groupRow) {
+      return { success: false, message: "Group not found", error: { code: "NOT_FOUND" } };
+    }
+
+    const groupMeta = groupRow.metadata && typeof groupRow.metadata === "object"
+      ? (groupRow.metadata as Record<string, unknown>)
+      : {};
+    const metaKey = input.targetType === "poll" ? "polls" : "proposals";
+    const items = Array.isArray(groupMeta[metaKey]) ? [...(groupMeta[metaKey] as Record<string, unknown>[])] : [];
+    const idx = items.findIndex((item) => String(item.id) === input.targetId);
+    if (idx < 0) {
+      return {
+        success: false,
+        message: "Governance item does not belong to this group.",
+        error: { code: "FORBIDDEN" },
+      };
+    }
+
+    // P1 (ballot styles): for a poll, validate the incoming ballot against the
+    // poll's configured style (multiple-choice is the legacy default and also
+    // accepts the bare `vote` option id). Proposals stay yes/no/abstain.
+    const pollConfig = input.targetType === "poll" ? pollConfigFromItem(items[idx]) : null;
+    const pollOptionIds =
+      input.targetType === "poll"
+        ? (Array.isArray(items[idx].options) ? (items[idx].options as Record<string, unknown>[]) : []).map((o) => String(o.id))
+        : [];
+    let storedBallot: Ballot | null = null;
+    if (input.targetType === "poll" && pollConfig) {
+      const raw = hasBallot ? input.ballot : input.vote;
+      const validated = validateBallot(pollConfig, pollOptionIds, raw);
+      if (!validated.ok) {
+        return { success: false, message: validated.error, error: { code: "INVALID_INPUT" } };
+      }
+      storedBallot = validated.ballot;
+    }
+
     // Deactivate any prior vote by this user on the same governance item before inserting the new one.
     await db.execute(sql`
       UPDATE ledger
@@ -945,12 +1029,77 @@ export async function castGovernanceVoteAction(input: {
         groupId: input.groupId,
         targetId: input.targetId,
         targetType: input.targetType,
-        vote: input.vote,
+        // Proposals + multiple-choice keep the legacy scalar `vote`; richer poll
+        // styles carry a normalized `ballot`.
+        vote: storedBallot?.style === "multiple-choice" ? storedBallot.choice : (input.vote ?? null),
+        ballot: storedBallot ?? null,
         comment: input.comment ?? null,
         interactionType: "governance-vote",
         votedAt: new Date().toISOString(),
       },
     } as NewLedgerEntry);
+
+    // Tally write-back: the Governance tab renders vote counts from the group
+    // agent's metadata, but votes persist ONLY to the ledger. Recompute the
+    // authoritative tally from the ACTIVE governance-vote ledger rows and write
+    // it back onto the item. Recomputing (rather than a per-cast increment) is
+    // what makes a CHANGED vote correct: the prior row was deactivated above but
+    // a naive increment would never decrement it, drifting on every re-vote.
+    const activeVoteRows = await db
+      .select({
+        vote: sql<string>`${ledger.metadata}->>'vote'`,
+        ballot: sql<unknown>`${ledger.metadata}->'ballot'`,
+      })
+      .from(ledger)
+      .where(
+        and(
+          eq(ledger.verb, "vote"),
+          eq(ledger.isActive, true),
+          eq(ledger.objectId, input.groupId),
+          sql`${ledger.metadata}->>'targetId' = ${input.targetId}`,
+          sql`${ledger.metadata}->>'groupId' = ${input.groupId}`,
+          sql`${ledger.metadata}->>'interactionType' = 'governance-vote'`,
+        ),
+      );
+
+    const item = { ...items[idx] };
+    if (input.targetType === "proposal") {
+      const votes = { yes: 0, no: 0, abstain: 0 };
+      for (const row of activeVoteRows) {
+        const key = String(row.vote ?? "").toLowerCase();
+        if (key === "yes" || key === "no" || key === "abstain") votes[key] += 1;
+      }
+      item.votes = votes;
+    } else if (pollConfig) {
+      // Recompute the per-style tally from every active ballot.
+      const ballots: Ballot[] = [];
+      for (const row of activeVoteRows) {
+        const b = ballotFromStored(pollConfig.ballotStyle, row.ballot, row.vote);
+        if (b) ballots.push(b);
+      }
+      const tally = tallyBallots(pollConfig, pollOptionIds, ballots);
+      const byId = new Map(tally.options.map((o) => [o.id, o]));
+      item.options = Array.isArray(item.options)
+        ? (item.options as Record<string, unknown>[]).map((o) => ({
+            ...o,
+            votes: byId.get(String(o.id))?.value ?? 0,
+          }))
+        : [];
+      item.totalVotes = tally.totalVotes;
+      // Render model consumed by the governance tab (bars, labels, winner).
+      item.tally = {
+        style: tally.style,
+        totalVotes: tally.totalVotes,
+        winnerId: tally.winnerId ?? null,
+        options: tally.options.map((o) => ({ id: o.id, value: o.value, fraction: o.fraction, label: o.label, count: o.count })),
+      };
+    }
+    items[idx] = item;
+
+    await db
+      .update(agents)
+      .set({ metadata: { ...groupMeta, [metaKey]: items }, updatedAt: new Date() })
+      .where(and(eq(agents.id, input.groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`));
 
     revalidatePath(`/groups/${input.groupId}`);
 
@@ -1163,10 +1312,17 @@ export async function createGovernancePollAction(input: {
   description?: string;
   options: string[];
   duration: number;
+  /** P1 ballot style (defaults to multiple-choice). */
+  ballotStyle?: string;
+  /** score/rate-rank slider max. */
+  scoreMax?: number;
+  /** quadratic per-voter credit budget. */
+  creditsPerVoter?: number;
 }): Promise<ActionResult> {
   const cleanedOptions = Array.isArray(input.options)
     ? input.options.map((o) => (typeof o === "string" ? o.trim() : "")).filter((o) => o.length > 0)
     : [];
+  const ballotStyle = isBallotStyle(input.ballotStyle) ? input.ballotStyle : DEFAULT_BALLOT_STYLE;
 
   if (!input.groupId?.trim() || !input.question?.trim()) {
     return {
@@ -1248,6 +1404,14 @@ export async function createGovernancePollAction(input: {
     const endDate = new Date(Date.now() + input.duration * 24 * 60 * 60 * 1000);
     const pollId = `poll-${Date.now()}-${userId.slice(0, 8)}`;
 
+    const pollConfig: PollBallotConfig = { ballotStyle };
+    if (ballotStyle === "score" || ballotStyle === "rate-rank") {
+      pollConfig.scoreMax = resolveScoreMax({ ballotStyle, scoreMax: input.scoreMax });
+    }
+    if (ballotStyle === "quadratic") {
+      pollConfig.creditsPerVoter = resolveCreditsPerVoter({ ballotStyle, creditsPerVoter: input.creditsPerVoter });
+    }
+
     const newPoll = {
       id: pollId,
       question: input.question.trim(),
@@ -1260,6 +1424,10 @@ export async function createGovernancePollAction(input: {
       totalVotes: 0,
       duration: input.duration,
       status: "active",
+      // P1 ballot-style config (multiple-choice omits the extra fields).
+      ballotStyle,
+      ...(pollConfig.scoreMax != null ? { scoreMax: pollConfig.scoreMax } : {}),
+      ...(pollConfig.creditsPerVoter != null ? { creditsPerVoter: pollConfig.creditsPerVoter } : {}),
       endDate: endDate.toISOString(),
       createdAt: new Date().toISOString(),
       creatorId: userId,

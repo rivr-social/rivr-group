@@ -490,6 +490,21 @@ export function GroupTabsClient({
       .map((item) => {
         const rec = item as Record<string, unknown>
         const rawOptions = Array.isArray(rec.options) ? (rec.options as Record<string, unknown>[]) : []
+        const rawTally = rec.tally && typeof rec.tally === "object" ? (rec.tally as Record<string, unknown>) : null
+        const tally = rawTally
+          ? {
+              style: String(rawTally.style ?? "multiple-choice"),
+              totalVotes: Number(rawTally.totalVotes ?? 0),
+              winnerId: rawTally.winnerId == null ? null : String(rawTally.winnerId),
+              options: (Array.isArray(rawTally.options) ? (rawTally.options as Record<string, unknown>[]) : []).map((o) => ({
+                id: String(o.id ?? ""),
+                value: Number(o.value ?? 0),
+                fraction: Number(o.fraction ?? 0),
+                label: String(o.label ?? ""),
+                count: Number(o.count ?? 0),
+              })),
+            }
+          : undefined
         return {
           id: String(rec.id ?? ""),
           question: String(rec.question ?? rec.title ?? ""),
@@ -499,6 +514,10 @@ export function GroupTabsClient({
             votes: Number(o.votes ?? 0),
           })),
           totalVotes: Number(rec.totalVotes ?? 0),
+          ballotStyle: typeof rec.ballotStyle === "string" ? rec.ballotStyle : "multiple-choice",
+          scoreMax: typeof rec.scoreMax === "number" ? rec.scoreMax : undefined,
+          creditsPerVoter: typeof rec.creditsPerVoter === "number" ? rec.creditsPerVoter : undefined,
+          tally,
           creator: { id: "", name: String(rec.creatorName ?? "Unknown"), username: "unknown", avatar: "", followers: 0, following: 0 } as User,
           createdAt: String(rec.createdAt ?? ""),
           endDate: String(rec.deadline ?? rec.endDate ?? ""),
