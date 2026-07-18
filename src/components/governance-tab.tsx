@@ -12,7 +12,7 @@
  */
 "use client"
 
-import { useState, useTransition } from "react"
+import { useEffect, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ResponsiveTabsList } from "@/components/responsive-tabs-list"
@@ -75,6 +75,13 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
   const [issueItems, setIssueItems] = useState(issues)
   const [proposalItems, setProposalItems] = useState(proposals)
   const [pollItems, setPollItems] = useState(polls)
+
+  // Re-sync from server props after a router.refresh() (e.g. once a vote's
+  // recomputed tally lands) — the initial useState seed does not update on its
+  // own, so without this the bars stay stale until a full page reload.
+  useEffect(() => { setIssueItems(issues) }, [issues])
+  useEffect(() => { setProposalItems(proposals) }, [proposals])
+  useEffect(() => { setPollItems(polls) }, [polls])
 
   /** State for the voting modal -- holds the item being voted on and its type, or null when closed */
   const [votingModal, setVotingModal] = useState<{ isOpen: boolean; item: Poll | Proposal; type: "proposal" | "poll" } | null>(null)

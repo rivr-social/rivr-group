@@ -190,11 +190,21 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   // "poll"|"issue"`, but the create actions store these objects WITHOUT a type
   // field, so an untagged merge made every proposal/poll/issue invisible in the
   // Governance tab even though they persist in group metadata.
+  // Resolve governance-item creators (stored as `creatorId`) to a display name
+  // so cards don't read "Created by Unknown". Falls back to any existing
+  // creatorName, else "Unknown".
+  const governanceCreatorNames: Record<string, string> = {}
+  for (const m of members) if (m.id && m.name) governanceCreatorNames[m.id] = m.name
   const tagType = (items: unknown, type: string): Record<string, unknown>[] =>
-    (Array.isArray(items) ? items : []).map((it) => ({
-      ...(it as Record<string, unknown>),
-      type,
-    }))
+    (Array.isArray(items) ? items : []).map((it) => {
+      const rec = it as Record<string, unknown>
+      const creatorId = typeof rec.creatorId === "string" ? rec.creatorId : ""
+      return {
+        ...rec,
+        type,
+        creatorName: rec.creatorName ?? governanceCreatorNames[creatorId] ?? "Unknown",
+      }
+    })
   const governanceItems = [
     ...tagType(groupMeta.proposals, "proposal"),
     ...tagType(groupMeta.polls, "poll"),
