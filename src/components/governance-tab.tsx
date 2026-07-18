@@ -24,10 +24,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 
-import { VotingModal } from "./voting-modal"
+import { VotingModal, type VotePayload } from "./voting-modal"
 import { CreateProposalModal } from "./create-proposal-modal"
 import { CreatePollModal } from "./create-poll-modal"
 import type { Poll, Proposal } from "@/lib/types"
+import { BALLOT_STYLE_LABELS, DEFAULT_BALLOT_STYLE, isBallotStyle, type BallotStyle } from "@/lib/governance-ballot"
 import { castGovernanceVoteAction, createGovernanceIssueAction, createGovernancePollAction, createGovernanceProposalAction } from "@/app/actions/create-resources"
 import { useToast } from "@/components/ui/use-toast"
 
@@ -92,15 +93,23 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
    * Handles submitting a vote on a poll or proposal.
    * Persists the vote via the governance vote server action and closes the modal on success.
    */
-  const handleVote = (vote: string, comment?: string) => {
+  const handleVote = (payload: VotePayload, comment?: string) => {
     if (!votingModal) return
     const targetId = votingModal.item.id
     const targetType = votingModal.type
     startTransition(async () => {
-      const result = await castGovernanceVoteAction({ groupId, targetId, targetType, vote, comment })
+      const result = await castGovernanceVoteAction({
+        groupId,
+        targetId,
+        targetType,
+        vote: payload.vote,
+        ballot: payload.ballot,
+        comment,
+      })
       if (result.success) {
         toast({ title: "Vote recorded", description: "Your vote has been submitted." })
         setVotingModal(null)
+        router.refresh()
       } else {
         toast({ title: "Vote failed", description: result.message, variant: "destructive" })
       }
@@ -145,7 +154,15 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
    * Handles creating a new governance poll.
    * Persists the poll via the poll creation server action and closes the modal on success.
    */
-  const handleCreatePoll = (pollData: { question: string; description: string; options: string[]; duration: number }) => {
+  const handleCreatePoll = (pollData: {
+    question: string
+    description: string
+    options: string[]
+    duration: number
+    ballotStyle: BallotStyle
+    scoreMax?: number
+    creditsPerVoter?: number
+  }) => {
     startTransition(async () => {
       const result = await createGovernancePollAction({ groupId, ...pollData })
       if (result.success) {
@@ -160,6 +177,9 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
               votes: 0,
             })),
             totalVotes: 0,
+            ballotStyle: pollData.ballotStyle,
+            scoreMax: pollData.scoreMax,
+            creditsPerVoter: pollData.creditsPerVoter,
             endDate: new Date(Date.now() + pollData.duration * 24 * 60 * 60 * 1000).toISOString(),
             creator: { id: "", name: "You", username: "you", avatar: "", followers: 0, following: 0 },
             createdAt: new Date().toISOString(),
@@ -279,10 +299,19 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
             )}
 
             <h3 className="text-xl font-semibold mt-6">Polls</h3>
-            {pollItems.map((poll) => (
+            {pollItems.map((poll) => {
+              const pollStyle: BallotStyle = isBallotStyle(poll.ballotStyle) ? poll.ballotStyle : DEFAULT_BALLOT_STYLE
+              const tallyById = new Map((poll.tally?.options ?? []).map((o) => [o.id, o]))
+              const winnerId = poll.tally?.winnerId ?? null
+              return (
               <Card key={poll.id}>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-lg">{poll.question}</CardTitle>
+                  <div className="flex justify-between items-start gap-2">
+                    <CardTitle className="text-lg">{poll.question}</CardTitle>
+                    <Badge variant="outline" className="text-xs shrink-0">
+                      {BALLOT_STYLE_LABELS[pollStyle]}
+                    </Badge>
+                  </div>
                   <CardDescription>
                     Created by {poll.creator.name} • Ends {new Date(poll.endDate).toLocaleDateString()}
                   </CardDescription>
@@ -291,19 +320,27 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
                   {poll.description && <p className="text-sm mb-4">{poll.description}</p>}
                   <div className="space-y-3">
                     {poll.options.map((option) => {
-                      const percentage = Math.round((option.votes / poll.totalVotes) * 100) || 0
+                      // Prefer the recomputed per-style tally; fall back to legacy counts.
+                      const t = tallyById.get(option.id)
+                      const fraction = t ? t.fraction : poll.totalVotes > 0 ? option.votes / poll.totalVotes : 0
+                      const percentage = Math.round(fraction * 100)
+                      const label = t ? t.label : `${percentage}% (${option.votes})`
+                      const isWinner = winnerId === option.id
                       return (
                         <div key={option.id} className="space-y-1">
                           <div className="flex justify-between text-sm">
-                            <span>{option.text}</span>
-                            <span>
-                              {percentage}% ({option.votes})
+                            <span className={isWinner ? "font-semibold" : undefined}>
+                              {option.text}
+                              {isWinner && <span className="ml-1 text-green-600">✓</span>}
                             </span>
+                            <span className="text-muted-foreground">{label}</span>
                           </div>
                           <div className="w-full bg-gray-100 rounded-full h-2">
                             <div
-                              className={`h-2 rounded-full ${poll.userVoted === option.id ? "bg-blue-500" : "bg-gray-400"}`}
-                              style={{ width: `${percentage}%` }}
+                              className={`h-2 rounded-full ${
+                                isWinner ? "bg-green-500" : poll.userVoted === option.id ? "bg-blue-500" : "bg-gray-400"
+                              }`}
+                              style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }}
                             ></div>
                           </div>
                         </div>
@@ -322,7 +359,8 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
                   </Button>
                 </CardFooter>
               </Card>
-            ))}
+              )
+            })}
             {pollItems.length === 0 && (
               <Card>
                 <CardContent className="p-8 text-center text-gray-500">

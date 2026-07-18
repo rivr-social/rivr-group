@@ -964,6 +964,23 @@ export type Issue = {
   groupId: string
 }
 
+/** Per-option tally row produced by the governance ballot engine. */
+export type PollTallyOption = {
+  id: string
+  value: number
+  fraction: number
+  label: string
+  count: number
+}
+
+/** Render model for a poll's per-style results (from `lib/governance-ballot`). */
+export type PollTally = {
+  style: string
+  totalVotes: number
+  winnerId?: string | null
+  options: PollTallyOption[]
+}
+
 /** Polling record for group decision-making and member signaling. */
 export type Poll = {
   id: string
@@ -980,6 +997,14 @@ export type Poll = {
   totalVotes: number
   groupId: string
   userVoted?: string // ID of the option the user voted for
+  /** P1 ballot style; defaults to "multiple-choice" when absent. */
+  ballotStyle?: string
+  /** score/rate-rank slider max. */
+  scoreMax?: number
+  /** quadratic per-voter credit budget. */
+  creditsPerVoter?: number
+  /** Recomputed per-style results (bars/labels/winner). */
+  tally?: PollTally
 }
 
 /** Governance proposal record with quorum/threshold voting configuration. */

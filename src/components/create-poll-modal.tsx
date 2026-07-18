@@ -24,12 +24,30 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, X } from "lucide-react"
+import {
+  BALLOT_STYLES,
+  BALLOT_STYLE_DESCRIPTIONS,
+  BALLOT_STYLE_LABELS,
+  DEFAULT_BALLOT_STYLE,
+  DEFAULT_CREDITS_PER_VOTER,
+  DEFAULT_SCORE_MAX,
+  type BallotStyle,
+} from "@/lib/governance-ballot"
 
 interface CreatePollModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (pollData: { question: string; description: string; options: string[]; duration: number }) => void
+  onSubmit: (pollData: {
+    question: string
+    description: string
+    options: string[]
+    duration: number
+    ballotStyle: BallotStyle
+    scoreMax?: number
+    creditsPerVoter?: number
+  }) => void
 }
 
 /** Minimum number of options a poll must have to be valid. */
@@ -52,6 +70,9 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
   const [description, setDescription] = useState("")
   const [options, setOptions] = useState<string[]>(Array(DEFAULT_OPTION_ROWS).fill(""))
   const [duration, setDuration] = useState("7")
+  const [ballotStyle, setBallotStyle] = useState<BallotStyle>(DEFAULT_BALLOT_STYLE)
+  const [scoreMax, setScoreMax] = useState(String(DEFAULT_SCORE_MAX))
+  const [creditsPerVoter, setCreditsPerVoter] = useState(String(DEFAULT_CREDITS_PER_VOTER))
 
   const filledOptions = options.map((o) => o.trim()).filter((o) => o.length > 0)
   const canSubmit = question.trim().length > 0 && filledOptions.length >= MIN_POLL_OPTIONS
@@ -61,6 +82,9 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
     setDescription("")
     setOptions(Array(DEFAULT_OPTION_ROWS).fill(""))
     setDuration("7")
+    setBallotStyle(DEFAULT_BALLOT_STYLE)
+    setScoreMax(String(DEFAULT_SCORE_MAX))
+    setCreditsPerVoter(String(DEFAULT_CREDITS_PER_VOTER))
   }
 
   const handleOptionChange = (index: number, value: string) => {
@@ -82,6 +106,13 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
       description: description.trim(),
       options: filledOptions,
       duration: Number.parseInt(duration) || 1,
+      ballotStyle,
+      scoreMax:
+        ballotStyle === "score" || ballotStyle === "rate-rank"
+          ? Number.parseInt(scoreMax) || DEFAULT_SCORE_MAX
+          : undefined,
+      creditsPerVoter:
+        ballotStyle === "quadratic" ? Number.parseInt(creditsPerVoter) || DEFAULT_CREDITS_PER_VOTER : undefined,
     })
     onClose()
     resetForm()
@@ -152,6 +183,55 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
               </Button>
             )}
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="poll-ballot-style">Ballot style</Label>
+            <Select value={ballotStyle} onValueChange={(v) => setBallotStyle(v as BallotStyle)}>
+              <SelectTrigger id="poll-ballot-style">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BALLOT_STYLES.map((style) => (
+                  <SelectItem key={style} value={style}>
+                    {BALLOT_STYLE_LABELS[style]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{BALLOT_STYLE_DESCRIPTIONS[ballotStyle]}</p>
+          </div>
+
+          {(ballotStyle === "score" || ballotStyle === "rate-rank") && (
+            <div className="space-y-2">
+              <Label htmlFor="poll-score-max">Max score</Label>
+              <Input
+                id="poll-score-max"
+                type="number"
+                min="1"
+                max="10"
+                value={scoreMax}
+                onChange={(e) => setScoreMax(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">Voters rate each option from 0 to this value.</p>
+            </div>
+          )}
+
+          {ballotStyle === "quadratic" && (
+            <div className="space-y-2">
+              <Label htmlFor="poll-credits">Credits per voter</Label>
+              <Input
+                id="poll-credits"
+                type="number"
+                min="1"
+                max="10000"
+                value={creditsPerVoter}
+                onChange={(e) => setCreditsPerVoter(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Each voter spends this many credits across options; voice grows as √credits.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="poll-duration">Duration (days)</Label>
