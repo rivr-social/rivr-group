@@ -612,6 +612,7 @@ export function GovernanceTab({
               onChange={setProposeGateDraft}
               options={gateOptions}
               idPrefix="governance-propose"
+              context="propose"
             />
             <p className="text-xs text-muted-foreground">
               Admins can always create polls, proposals, and issues — this setting widens that authority.

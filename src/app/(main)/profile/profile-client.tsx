@@ -32,6 +32,7 @@ import type { ReactionCountsMap } from "@/app/actions/graph";
 import type { SerializedAgent, SerializedResource } from "@/lib/graph-serializers";
 import {
   getMyTicketPurchasesAction,
+  getMyDuesPaymentsAction,
   getMyWalletAction,
   getMyWalletsAction,
   getTransactionHistoryAction,
@@ -654,6 +655,19 @@ export default function ProfilePage() {
       paymentMethod: "wallet" | "card";
     }>
   >([]);
+  // Group-membership dues payments — purchase-shaped records with NO backing
+  // listing resource (see getMyDuesPaymentsAction), surfaced alongside tickets.
+  const [duesPayments, setDuesPayments] = useState<
+    Array<{
+      transactionId: string;
+      groupId?: string;
+      groupName: string;
+      amountCents: number;
+      feeCents: number;
+      totalDollars: number;
+      paidAt: string;
+    }>
+  >([]);
   const [receipts, setReceipts] = useState<
     Array<{
       id: string;
@@ -782,13 +796,14 @@ export default function ProfilePage() {
         return;
       }
 
-      const [profile, savedIds, myWallet, myWallets, txHistory, ticketPurchaseResult, subscriptionStatus, receiptsResult, postsResult, eventAgents, groupAgents, marketplaceListings, reactionCountsResult, connectionAgents] = await Promise.all([
+      const [profile, savedIds, myWallet, myWallets, txHistory, ticketPurchaseResult, duesPaymentsResult, subscriptionStatus, receiptsResult, postsResult, eventAgents, groupAgents, marketplaceListings, reactionCountsResult, connectionAgents] = await Promise.all([
         fetchProfileData(session.user.id).catch(() => null),
         fetchMySavedListingIds().catch(() => [] as string[]),
         getMyWalletAction().catch(() => ({ success: false as const })),
         getMyWalletsAction().catch(() => ({ success: false as const })),
         getTransactionHistoryAction({ limit: 30 }).catch(() => ({ success: false as const })),
         getMyTicketPurchasesAction().catch(() => ({ success: false as const })),
+        getMyDuesPaymentsAction().catch(() => ({ success: false as const })),
         getAllSubscriptionStatusesAction().catch(() => []),
         fetchMyReceipts().catch(() => ({ receipts: [] })),
         fetchUserPosts(session.user.id, 30, session.user.id).catch(() => ({ posts: [] as SerializedResource[], owner: null })),
@@ -878,6 +893,11 @@ export default function ProfilePage() {
       setTicketPurchases(
         ticketPurchaseResult.success && ticketPurchaseResult.purchases
           ? ticketPurchaseResult.purchases
+          : []
+      );
+      setDuesPayments(
+        duesPaymentsResult.success && duesPaymentsResult.payments
+          ? duesPaymentsResult.payments
           : []
       );
       setActiveTiers(
@@ -1774,14 +1794,44 @@ export default function ProfilePage() {
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      receipts.length === 0 ? (
-                        <div className="text-center py-6">
-                          <Receipt className="h-10 w-10 mx-auto text-muted-foreground mb-2" />
-                          <p className="text-sm text-muted-foreground">No purchases yet.</p>
-                        </div>
-                      ) : null
-                    )}
+                    ) : null}
+                    {duesPayments.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-muted-foreground">Membership dues</p>
+                        {duesPayments.map((payment) => (
+                          <div key={payment.transactionId} className="border rounded-md px-3 py-2 flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium">
+                                {payment.groupId ? (
+                                  <Link
+                                    href={`/groups/${payment.groupId}`}
+                                    className="hover:underline"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {payment.groupName}
+                                  </Link>
+                                ) : (
+                                  payment.groupName
+                                )}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {new Date(payment.paidAt).toLocaleString()}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-medium">${payment.totalDollars.toFixed(2)}</p>
+                              <Badge variant="outline" className="text-xs">Dues</Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {receipts.length === 0 && ticketPurchases.length === 0 && duesPayments.length === 0 ? (
+                      <div className="text-center py-6">
+                        <Receipt className="h-10 w-10 mx-auto text-muted-foreground mb-2" />
+                        <p className="text-sm text-muted-foreground">No purchases yet.</p>
+                      </div>
+                    ) : null}
                   </CardContent>
                 </Card>
               </TabsContent>

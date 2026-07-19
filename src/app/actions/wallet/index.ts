@@ -5,6 +5,7 @@ export {
   getAgentEthAddressAction,
   getTransactionHistoryAction,
   getMyTicketPurchasesAction,
+  getMyDuesPaymentsAction,
 } from './reads';
 
 export {

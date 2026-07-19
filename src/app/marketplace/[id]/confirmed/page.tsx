@@ -10,8 +10,15 @@ import { getPrimaryListingImage } from "@/lib/listing-images"
 import { formatMarketplaceListingTypeLabel } from "@/lib/listing-types"
 import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
 
-export default async function MarketplaceItemConfirmedPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function MarketplaceItemConfirmedPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<{ order?: string; session_id?: string }>
+}) {
   const resolvedParams = await params
+  const resolvedSearch = await searchParams
   const detail = await fetchMarketplaceListingById(resolvedParams.id)
 
   // UM source-routing: a mirror's confirmation page must run on the source
@@ -27,7 +34,12 @@ export default async function MarketplaceItemConfirmedPage({ params }: { params:
 
   const listing = resourceToMarketplaceListing(detail.resource, detail.owner)
   const seller = listing.seller
-  const orderNumber = `ORD-${resolvedParams.id.slice(0, 8).toUpperCase()}`
+  // Prefer the per-purchase order/session id so each purchase gets a DISTINCT
+  // number (the listing-id fallback repeats across purchases). Last 8
+  // alphanumerics: a Stripe session id's unique part is its tail — head-slicing
+  // yielded the constant "ORD-CS_TEST_" on every card order.
+  const orderSource = resolvedSearch.order?.trim() || resolvedSearch.session_id?.trim() || resolvedParams.id
+  const orderNumber = `ORD-${orderSource.replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase()}`
   const ownerHref = listing.ownerPath || `/profile/${seller.username || seller.id}`
   const ownerActionLabel = listing.ownerKind === "group" ? `Contact ${seller.name}` : `Contact ${seller.name}`
 

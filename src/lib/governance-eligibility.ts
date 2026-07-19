@@ -101,6 +101,17 @@ export const ELIGIBILITY_KIND_DESCRIPTIONS: Record<EligibilityKind, string> = {
   abac: "Voters must be allowed by this group's permission policies (verb: vote).",
 };
 
+/** Propose-phrased twins of the vote descriptions, for the admin
+ *  "Who can propose" setting (admins always retain propose authority). */
+export const ELIGIBILITY_KIND_PROPOSE_DESCRIPTIONS: Record<EligibilityKind, string> = {
+  public: "Any signed-in user may create governance items, including non-members.",
+  member: "Active members of this group may create governance items.",
+  "badge-holder": "Only holders of a governance badge may create governance items.",
+  admin: "Only group admins and managers may create governance items.",
+  "share-holder": "Only members holding shares in a share class may create governance items.",
+  abac: "Proposers must be allowed by this group's permission policies (verb: vote).",
+};
+
 export function isEligibilityKind(value: unknown): value is EligibilityKind {
   return typeof value === "string" && (ELIGIBILITY_KINDS as readonly string[]).includes(value);
 }
