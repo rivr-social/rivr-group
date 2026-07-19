@@ -32,6 +32,16 @@ import { getGroupMembersByClass } from "@/app/actions/wallet/net-allocation"
 import { parseNetAllocationTree } from "@/lib/net-allocation"
 import { canPostToGroup } from "@/app/actions/create-resources"
 import { extractStockNeeds, isStockInventoryType } from "@/lib/stock"
+import {
+  DEFAULT_PROPOSE_GATE,
+  DEFAULT_VOTE_GATE,
+  describeEligibilityGate,
+  parseEligibilityGate,
+} from "@/lib/governance-eligibility"
+import {
+  evaluateGovernanceGatesForUser,
+  listGovernanceGateOptions,
+} from "@/lib/governance-eligibility.server"
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -210,6 +220,39 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     ...tagType(groupMeta.polls, "poll"),
     ...tagType(groupMeta.issues, "issue"),
   ]
+
+  // ── Governance P2: eligibility gates ──
+  // Resolve the viewer's per-item vote eligibility + the propose gate in ONE
+  // fact pass, then stamp label/verdict onto each votable item so the client
+  // renders chips and disables Vote with a reason (the action re-enforces).
+  const governanceMeta = groupMeta.governance && typeof groupMeta.governance === "object"
+    ? (groupMeta.governance as Record<string, unknown>)
+    : {}
+  const governanceProposeGate = parseEligibilityGate(governanceMeta.proposeGate, DEFAULT_PROPOSE_GATE)
+  const votableItems = governanceItems.filter((it) => it.type === "proposal" || it.type === "poll")
+  const voteGates = votableItems.map((it) => {
+    const eligibility = it.eligibility && typeof it.eligibility === "object"
+      ? (it.eligibility as Record<string, unknown>)
+      : {}
+    return parseEligibilityGate(eligibility.vote, DEFAULT_VOTE_GATE)
+  })
+  const [gateVerdicts, governanceGateOptions] = await Promise.all([
+    evaluateGovernanceGatesForUser(currentUserId, group.id, [governanceProposeGate, ...voteGates]),
+    listGovernanceGateOptions(group.id).catch(() => ({ badges: [], shareClasses: [] })),
+  ])
+  const governanceCanPropose = isGroupAdmin || (gateVerdicts[0]?.eligible ?? false)
+  const badgeNames = new Map(governanceGateOptions.badges.map((b) => [b.id, b.name]))
+  const shareClassNames = new Map(governanceGateOptions.shareClasses.map((c) => [c.id, c.name]))
+  votableItems.forEach((item, i) => {
+    const gate = voteGates[i]
+    const verdict = gateVerdicts[i + 1]
+    item.eligibilityLabel = describeEligibilityGate(gate, {
+      badgeName: gate.badgeId ? badgeNames.get(gate.badgeId) : undefined,
+      shareClassName: gate.shareClassId ? shareClassNames.get(gate.shareClassId) : undefined,
+    })
+    item.viewerCanVote = verdict?.eligible ?? false
+    if (verdict && !verdict.eligible && verdict.reason) item.viewerVoteReason = verdict.reason
+  })
   const documentResources = detail.resources.filter((r) => {
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     return r.type === "resource" && (String(meta.resourceSubtype ?? "").toLowerCase() === "document" || typeof r.content === "string")
@@ -470,6 +513,9 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         unassignedTasks={unassignedTasks}
         listingResources={listingResources}
         governanceItems={governanceItems}
+        governanceCanPropose={governanceCanPropose}
+        governanceProposeGate={governanceProposeGate}
+        governanceGateOptions={governanceGateOptions}
         badgeResources={badgeResources}
         stakeActivity={stakeActivity}
         serverMemberStakes={serverMemberStakes}

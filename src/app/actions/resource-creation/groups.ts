@@ -26,7 +26,6 @@ import {
   resolveAuthenticatedUserId,
   hasGroupWriteAccess,
 } from "./helpers";
-import { isGroupMember } from "@/lib/permissions";
 import {
   DEFAULT_BALLOT_STYLE,
   ballotFromStored,
@@ -38,6 +37,17 @@ import {
   type Ballot,
   type PollBallotConfig,
 } from "@/lib/governance-ballot";
+import {
+  DEFAULT_PROPOSE_GATE,
+  DEFAULT_VOTE_GATE,
+  parseEligibilityGate,
+  type EligibilityGate,
+} from "@/lib/governance-eligibility";
+import {
+  evaluateGovernanceGateForUser,
+  listGovernanceBadges,
+} from "@/lib/governance-eligibility.server";
+import { getOrgShareClasses } from "@/app/actions/wallet/share-classes";
 import type { ActionResult, UpdateGroupResourceInput } from "./types";
 import { desc } from "drizzle-orm";
 
@@ -894,6 +904,69 @@ export async function addGroupRelationshipAction(input: {
   };
 }
 
+/** Resolve a stored governance item's vote-eligibility gate (legacy items
+ *  default to the P0 members-only baseline). */
+function voteGateFromItem(item: Record<string, unknown>): EligibilityGate {
+  const eligibility =
+    item.eligibility && typeof item.eligibility === "object"
+      ? (item.eligibility as Record<string, unknown>)
+      : {};
+  return parseEligibilityGate(eligibility.vote, DEFAULT_VOTE_GATE);
+}
+
+/**
+ * Normalize a client-supplied eligibility gate and verify any referenced badge
+ * or share class actually belongs to this group, so an item can never be gated
+ * on another group's (or a nonexistent) electorate.
+ */
+async function sanitizeGateInput(
+  groupId: string,
+  raw: unknown,
+  fallback: EligibilityGate,
+): Promise<{ gate: EligibilityGate } | { error: string }> {
+  const gate = parseEligibilityGate(raw, fallback);
+  if (gate.kind === "badge-holder" && gate.badgeId) {
+    const badges = await listGovernanceBadges(groupId);
+    if (!badges.some((b) => b.id === gate.badgeId)) {
+      return { error: "Unknown governance badge for this group." };
+    }
+  }
+  if (gate.kind === "share-holder" && gate.shareClassId) {
+    const classes = await getOrgShareClasses(groupId).catch(() => []);
+    if (!classes.some((c) => c.id === gate.shareClassId)) {
+      return { error: "Unknown share class for this group." };
+    }
+  }
+  return { gate };
+}
+
+/**
+ * PROPOSE authority (P2): admins/managers always may (the legacy
+ * `hasGroupWriteAccess` gate); the org can WIDEN it via
+ * `groupMeta.governance.proposeGate` — evaluated only when the admin gate
+ * fails, so the default costs nothing extra.
+ */
+async function resolveGovernanceProposeAuthority(userId: string, groupId: string): Promise<boolean> {
+  if (await hasGroupWriteAccess(userId, groupId)) return true;
+  const [group] = await db
+    .select({ metadata: agents.metadata })
+    .from(agents)
+    .where(and(eq(agents.id, groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`))
+    .limit(1);
+  if (!group) return false;
+  const meta = group.metadata && typeof group.metadata === "object"
+    ? (group.metadata as Record<string, unknown>)
+    : {};
+  const governance = meta.governance && typeof meta.governance === "object"
+    ? (meta.governance as Record<string, unknown>)
+    : {};
+  const proposeGate = parseEligibilityGate(governance.proposeGate, DEFAULT_PROPOSE_GATE);
+  // Default (admins only) already failed above.
+  if (proposeGate.kind === "admin") return false;
+  const verdict = await evaluateGovernanceGateForUser(userId, groupId, proposeGate);
+  return verdict.eligible;
+}
+
 /** Resolve a stored poll item's ballot configuration (defaulting legacy polls
  *  to multiple-choice). Shared by cast + read paths. */
 function pollConfigFromItem(item: Record<string, unknown>): PollBallotConfig {
@@ -952,18 +1025,6 @@ export async function castGovernanceVoteAction(input: {
   }
 
   try {
-    // P0 (members-only voting): a governance vote is a member act — only active
-    // members of the owning group may vote. Being logged in is NOT sufficient
-    // (parity with global's cast path).
-    const membership = await isGroupMember(userId, input.groupId);
-    if (!membership.isMember) {
-      return {
-        success: false,
-        message: "You must be a group member to vote on this governance item.",
-        error: { code: "FORBIDDEN" },
-      };
-    }
-
     // Load the group and locate the target item; a vote must reference a
     // poll/proposal that actually belongs to this group.
     const [groupRow] = await db
@@ -986,6 +1047,20 @@ export async function castGovernanceVoteAction(input: {
       return {
         success: false,
         message: "Governance item does not belong to this group.",
+        error: { code: "FORBIDDEN" },
+      };
+    }
+
+    // P0→P2 (eligibility gates): voting is gated by the ITEM's vote-eligibility
+    // gate — default members-only, the P0 baseline. The gate defines the
+    // electorate exactly; admins do NOT bypass it (an admin outside a
+    // badge-gated electorate stays outside it).
+    const voteGate = voteGateFromItem(items[idx]);
+    const voteVerdict = await evaluateGovernanceGateForUser(userId, input.groupId, voteGate);
+    if (!voteVerdict.eligible) {
+      return {
+        success: false,
+        message: voteVerdict.reason ?? "You are not eligible to vote on this governance item.",
         error: { code: "FORBIDDEN" },
       };
     }
@@ -1132,6 +1207,13 @@ export async function createGovernanceProposalAction(input: {
   description: string;
   threshold: number;
   duration: number;
+  /** P2: who may vote on this proposal (defaults to group members). */
+  voteEligibility?: {
+    kind?: string;
+    badgeId?: string;
+    shareClassId?: string;
+    minShares?: number;
+  };
 }): Promise<ActionResult> {
   if (!input.groupId?.trim() || !input.title?.trim() || !input.description?.trim()) {
     return {
@@ -1174,8 +1256,9 @@ export async function createGovernanceProposalAction(input: {
       payload: {},
     },
     async () => {
-  const canWrite = await hasGroupWriteAccess(userId, input.groupId);
-  if (!canWrite) {
+  // P2: admins always may; `governance.proposeGate` can widen propose authority.
+  const canPropose = await resolveGovernanceProposeAuthority(userId, input.groupId);
+  if (!canPropose) {
     return {
       success: false,
       message: "You do not have permission to create proposals for this group.",
@@ -1213,6 +1296,12 @@ export async function createGovernanceProposalAction(input: {
     const endDate = new Date(Date.now() + input.duration * 24 * 60 * 60 * 1000);
     const proposalId = `proposal-${Date.now()}-${userId.slice(0, 8)}`;
 
+    // P2: normalize + verify the vote-eligibility gate before storing it.
+    const gateResult = await sanitizeGateInput(input.groupId, input.voteEligibility, DEFAULT_VOTE_GATE);
+    if ("error" in gateResult) {
+      return { success: false, message: gateResult.error, error: { code: "INVALID_INPUT" } };
+    }
+
     const newProposal = {
       id: proposalId,
       title: input.title.trim(),
@@ -1225,6 +1314,7 @@ export async function createGovernanceProposalAction(input: {
       creatorId: userId,
       votes: { yes: 0, no: 0, abstain: 0 },
       comments: 0,
+      eligibility: { vote: gateResult.gate },
     };
 
     const updatedMeta = {
@@ -1318,6 +1408,13 @@ export async function createGovernancePollAction(input: {
   scoreMax?: number;
   /** quadratic per-voter credit budget. */
   creditsPerVoter?: number;
+  /** P2: who may vote on this poll (defaults to group members). */
+  voteEligibility?: {
+    kind?: string;
+    badgeId?: string;
+    shareClassId?: string;
+    minShares?: number;
+  };
 }): Promise<ActionResult> {
   const cleanedOptions = Array.isArray(input.options)
     ? input.options.map((o) => (typeof o === "string" ? o.trim() : "")).filter((o) => o.length > 0)
@@ -1365,8 +1462,9 @@ export async function createGovernancePollAction(input: {
       payload: {},
     },
     async () => {
-  const canWrite = await hasGroupWriteAccess(userId, input.groupId);
-  if (!canWrite) {
+  // P2: admins always may; `governance.proposeGate` can widen propose authority.
+  const canPropose = await resolveGovernanceProposeAuthority(userId, input.groupId);
+  if (!canPropose) {
     return {
       success: false,
       message: "You do not have permission to create polls for this group.",
@@ -1404,6 +1502,12 @@ export async function createGovernancePollAction(input: {
     const endDate = new Date(Date.now() + input.duration * 24 * 60 * 60 * 1000);
     const pollId = `poll-${Date.now()}-${userId.slice(0, 8)}`;
 
+    // P2: normalize + verify the vote-eligibility gate before storing it.
+    const gateResult = await sanitizeGateInput(input.groupId, input.voteEligibility, DEFAULT_VOTE_GATE);
+    if ("error" in gateResult) {
+      return { success: false, message: gateResult.error, error: { code: "INVALID_INPUT" } };
+    }
+
     const pollConfig: PollBallotConfig = { ballotStyle };
     if (ballotStyle === "score" || ballotStyle === "rate-rank") {
       pollConfig.scoreMax = resolveScoreMax({ ballotStyle, scoreMax: input.scoreMax });
@@ -1428,6 +1532,7 @@ export async function createGovernancePollAction(input: {
       ballotStyle,
       ...(pollConfig.scoreMax != null ? { scoreMax: pollConfig.scoreMax } : {}),
       ...(pollConfig.creditsPerVoter != null ? { creditsPerVoter: pollConfig.creditsPerVoter } : {}),
+      eligibility: { vote: gateResult.gate },
       endDate: endDate.toISOString(),
       createdAt: new Date().toISOString(),
       creatorId: userId,
@@ -1532,8 +1637,9 @@ export async function createGovernanceIssueAction(input: {
       payload: {},
     },
     async () => {
-  const canWrite = await hasGroupWriteAccess(userId, input.groupId);
-  if (!canWrite) {
+  // P2: admins always may; `governance.proposeGate` can widen propose authority.
+  const canPropose = await resolveGovernanceProposeAuthority(userId, input.groupId);
+  if (!canPropose) {
     return {
       success: false,
       message: "You do not have permission to create issues for this group.",
@@ -1651,6 +1757,107 @@ export async function createGovernanceIssueAction(input: {
   return {
     success: false,
     message: facadeResult.error ?? "Failed to create issue",
+    error: { code: facadeResult.errorCode ?? "SERVER_ERROR" },
+  };
+}
+
+/**
+ * P2: sets WHO may create governance items (polls/proposals/issues) for a
+ * group, stored at `groupMeta.governance.proposeGate`. Admin-authored (same
+ * authority as badge/share-class authoring); admins ALWAYS retain propose
+ * authority regardless of the gate — this only widens it.
+ */
+export async function setGovernanceProposeGateAction(input: {
+  groupId: string;
+  gate: { kind?: string; badgeId?: string; shareClassId?: string; minShares?: number };
+}): Promise<ActionResult> {
+  if (!input.groupId?.trim()) {
+    return { success: false, message: "groupId is required", error: { code: "INVALID_INPUT" } };
+  }
+
+  const userId = await resolveAuthenticatedUserId();
+  if (!userId) {
+    return { success: false, message: "You must be logged in", error: { code: "UNAUTHENTICATED" } };
+  }
+
+  const facadeResult = await updateFacade.execute(
+    {
+      type: "setGovernanceProposeGate",
+      actorId: userId,
+      targetAgentId: input.groupId,
+      payload: {},
+    },
+    async () => {
+      const canWrite = await hasGroupWriteAccess(userId, input.groupId);
+      if (!canWrite) {
+        return {
+          success: false,
+          message: "Admin access required to change governance settings",
+          error: { code: "FORBIDDEN" },
+        };
+      }
+
+      const check = await rateLimit(`resources:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
+      if (!check.success) {
+        return {
+          success: false,
+          message: "Rate limit exceeded. Please try again later.",
+          error: { code: "RATE_LIMITED" },
+        };
+      }
+
+      try {
+        const gateResult = await sanitizeGateInput(input.groupId, input.gate, DEFAULT_PROPOSE_GATE);
+        if ("error" in gateResult) {
+          return { success: false, message: gateResult.error, error: { code: "INVALID_INPUT" } };
+        }
+
+        const [group] = await db
+          .select({ metadata: agents.metadata })
+          .from(agents)
+          .where(and(eq(agents.id, input.groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`))
+          .limit(1);
+
+        if (!group) {
+          return { success: false, message: "Group not found.", error: { code: "NOT_FOUND" } };
+        }
+
+        const groupMeta = group.metadata && typeof group.metadata === "object"
+          ? (group.metadata as Record<string, unknown>)
+          : {};
+        const governance = groupMeta.governance && typeof groupMeta.governance === "object"
+          ? (groupMeta.governance as Record<string, unknown>)
+          : {};
+
+        await db
+          .update(agents)
+          .set({
+            metadata: { ...groupMeta, governance: { ...governance, proposeGate: gateResult.gate } },
+            updatedAt: new Date(),
+          })
+          .where(and(eq(agents.id, input.groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`));
+
+        revalidatePath(`/groups/${input.groupId}`);
+
+        return { success: true, message: "Governance settings updated" } as ActionResult;
+      } catch (error) {
+        console.error("[setGovernanceProposeGateAction] failed:", error);
+        return {
+          success: false,
+          message: "Failed to update governance settings",
+          error: { code: "SERVER_ERROR" },
+        } as ActionResult;
+      }
+    }
+  );
+
+  if (facadeResult.success && facadeResult.data) {
+    return facadeResult.data as ActionResult;
+  }
+
+  return {
+    success: false,
+    message: facadeResult.error ?? "Failed to update governance settings",
     error: { code: facadeResult.errorCode ?? "SERVER_ERROR" },
   };
 }

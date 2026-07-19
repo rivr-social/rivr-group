@@ -15,6 +15,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   resolveAuthenticatedUserId: vi.fn(),
   hasGroupWriteAccess: vi.fn(),
+  evaluateGate: vi.fn(),
+  listGovernanceBadges: vi.fn(),
+  getOrgShareClasses: vi.fn(),
   rateLimit: vi.fn(),
   updateFacadeExecute: vi.fn(async (_request: unknown, applyLocal: () => Promise<unknown>) => ({
     success: true,
@@ -72,6 +75,19 @@ vi.mock("@/app/actions/resource-creation/helpers", () => ({
   hasGroupWriteAccess: mocks.hasGroupWriteAccess,
 }));
 
+// P2: eligibility-gate resolution + reference validation dependencies.
+vi.mock("@/lib/governance-eligibility.server", () => ({
+  evaluateGovernanceGateForUser: mocks.evaluateGate,
+  evaluateGovernanceGatesForUser: vi.fn(),
+  resolveGovernanceEligibilityFacts: vi.fn(),
+  listGovernanceBadges: mocks.listGovernanceBadges,
+  listGovernanceGateOptions: vi.fn(),
+}));
+vi.mock("@/app/actions/wallet/share-classes", () => ({
+  getOrgShareClasses: mocks.getOrgShareClasses,
+}));
+vi.mock("@/lib/permissions", () => ({ isGroupMember: vi.fn(), check: vi.fn() }));
+
 import { createGovernancePollAction } from "@/app/actions/resource-creation/groups";
 
 function mockSelectRows(rows: unknown[]) {
@@ -103,6 +119,9 @@ describe("createGovernancePollAction", () => {
     vi.clearAllMocks();
     mocks.resolveAuthenticatedUserId.mockResolvedValue(USER_ID);
     mocks.hasGroupWriteAccess.mockResolvedValue(true);
+    mocks.evaluateGate.mockResolvedValue({ eligible: false });
+    mocks.listGovernanceBadges.mockResolvedValue([]);
+    mocks.getOrgShareClasses.mockResolvedValue([]);
     mocks.rateLimit.mockResolvedValue({ success: true });
     mocks.emitDomainEvent.mockResolvedValue(undefined);
     mocks.updateFacadeExecute.mockImplementation(async (_request: unknown, applyLocal: () => Promise<unknown>) => ({
@@ -137,8 +156,11 @@ describe("createGovernancePollAction", () => {
     expect(mocks.dbTransaction).not.toHaveBeenCalled();
   });
 
-  it("rejects a caller without group write access before writing", async () => {
+  it("rejects a caller without group write access before writing (default propose gate)", async () => {
     mocks.hasGroupWriteAccess.mockResolvedValue(false);
+    // The propose-authority fallback loads the group meta: no proposeGate set →
+    // admins only → reject without ever evaluating a widened gate.
+    mockSelectRows([{ metadata: {} }]);
 
     const result = await createGovernancePollAction({
       groupId: GROUP_ID,
@@ -148,6 +170,74 @@ describe("createGovernancePollAction", () => {
     });
 
     expect(result).toMatchObject({ success: false, error: { code: "FORBIDDEN" } });
+    expect(mocks.evaluateGate).not.toHaveBeenCalled();
+    expect(mocks.dbTransaction).not.toHaveBeenCalled();
+  });
+
+  it("lets a non-admin propose when the org widened the propose gate to members", async () => {
+    mocks.hasGroupWriteAccess.mockResolvedValue(false);
+    mocks.evaluateGate.mockResolvedValue({ eligible: true });
+    mockSelectRows([{ metadata: { governance: { proposeGate: { kind: "member" } }, polls: [] } }]);
+
+    const result = await createGovernancePollAction({
+      groupId: GROUP_ID,
+      question: "Meeting time?",
+      options: ["Tue", "Thu"],
+      duration: 7,
+    });
+
+    expect(result.success).toBe(true);
+    expect(mocks.evaluateGate).toHaveBeenCalledWith(USER_ID, GROUP_ID, { kind: "member" });
+    expect(mocks.dbTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("stores the sanitized vote-eligibility gate on the poll (default member)", async () => {
+    mockSelectRows([{ metadata: { polls: [] } }]);
+
+    const result = await createGovernancePollAction({
+      groupId: GROUP_ID,
+      question: "Lunch?",
+      options: ["A", "B"],
+      duration: 7,
+    });
+
+    expect(result.success).toBe(true);
+    const [meta] = mocks.txUpdateSet.mock.calls[0] as [{ metadata: { polls: unknown[] } }];
+    const created = (meta.metadata.polls as Array<Record<string, unknown>>)[0];
+    expect(created.eligibility).toEqual({ vote: { kind: "member" } });
+  });
+
+  it("stores a badge-holder vote gate after verifying the badge belongs to the group", async () => {
+    mocks.listGovernanceBadges.mockResolvedValue([{ id: "badge-1", name: "Steward" }]);
+    mockSelectRows([{ metadata: { polls: [] } }]);
+
+    const result = await createGovernancePollAction({
+      groupId: GROUP_ID,
+      question: "Lunch?",
+      options: ["A", "B"],
+      duration: 7,
+      voteEligibility: { kind: "badge-holder", badgeId: "badge-1" },
+    });
+
+    expect(result.success).toBe(true);
+    const [meta] = mocks.txUpdateSet.mock.calls[0] as [{ metadata: { polls: unknown[] } }];
+    const created = (meta.metadata.polls as Array<Record<string, unknown>>)[0];
+    expect(created.eligibility).toEqual({ vote: { kind: "badge-holder", badgeId: "badge-1" } });
+  });
+
+  it("rejects a vote gate referencing another group's badge", async () => {
+    mocks.listGovernanceBadges.mockResolvedValue([{ id: "badge-1", name: "Steward" }]);
+    mockSelectRows([{ metadata: { polls: [] } }]);
+
+    const result = await createGovernancePollAction({
+      groupId: GROUP_ID,
+      question: "Lunch?",
+      options: ["A", "B"],
+      duration: 7,
+      voteEligibility: { kind: "badge-holder", badgeId: "badge-foreign" },
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: "INVALID_INPUT" } });
     expect(mocks.dbTransaction).not.toHaveBeenCalled();
   });
 

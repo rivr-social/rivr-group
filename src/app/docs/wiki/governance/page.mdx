@@ -23,9 +23,10 @@ the Voice tab:
 - **Create a proposal** — a yes / no / abstain decision with a pass **threshold**
   (%) and a **duration** (days). `createGovernanceProposalAction`.
 - **Create a poll** — a lightweight multi-option question (2+ options) with a
-  **duration**. Members pick one option. `createGovernancePollAction`. Distinct
-  from a proposal: a poll gathers preference across several choices rather than
-  ratifying a single motion.
+  **duration** and a **ballot style**: multiple choice, approval, score,
+  ranked (instant-runoff), rate + rank, or quadratic (per-voter credit budget).
+  `createGovernancePollAction`. Distinct from a proposal: a poll gathers
+  preference across several choices rather than ratifying a single motion.
 - **Create an issue** — a titled discussion item (title + description).
   `createGovernanceIssueAction`.
 - **Vote / decide** — the Vote button opens the voting modal. Proposals take
@@ -35,14 +36,24 @@ the Voice tab:
 - **View items / results** — proposals show yes/no tallies + threshold; polls
   show per-option percentages.
 
-## Permissions / gating
+## Permissions / gating (eligibility gates)
 
-- **Creating** a proposal, poll, or issue requires **group write access**
-  (`hasGroupWriteAccess` — group/subgroup admins, cascading to parent-group
-  admins). This is server-enforced in each create action; the client cannot
-  bypass it.
-- **Voting** requires an authenticated, actively-participating member
-  (`castGovernanceVoteAction`), and is rate-limited.
+- **Creating** a proposal, poll, or issue requires **group write access** by
+  default (`hasGroupWriteAccess` — group/subgroup admins, cascading to
+  parent-group admins). Admins can **widen** propose authority from the
+  Voice tab's Governance Settings (gear icon) — e.g. to all members or badge
+  holders — via `setGovernanceProposeGateAction`; admins always retain it.
+  Server-enforced in each create action; the client cannot bypass it.
+- **Voting** is gated per item by its **eligibility gate**, chosen at creation
+  ("Who can vote"): **group members** (the default), **anyone signed in**,
+  **badge holders** (any or a specific governance badge), **admins only**,
+  **share holders** (any or a specific share class, with a minimum share
+  count), or **custom policy** (the group's permission policies for the
+  `vote` verb). The gate defines the electorate exactly — admins do not
+  bypass it. Each item's card shows its gate as a chip, and the Vote button
+  is disabled (with the reason) for ineligible viewers; the server re-enforces
+  in `castGovernanceVoteAction`, which is also rate-limited (one active vote
+  per voter per item; re-voting supersedes the prior vote).
 
 ## Cross-links
 

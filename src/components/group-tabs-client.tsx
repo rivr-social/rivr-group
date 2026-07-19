@@ -190,6 +190,12 @@ export interface GroupTabsClientProps {
   unassignedTasks: SerializedResource[]
   listingResources: SerializedResource[]
   governanceItems: unknown[]
+  /** P2: whether the viewer may create governance items (server-computed). */
+  governanceCanPropose?: boolean
+  /** P2: the group's stored propose gate (seeds the admin settings dialog). */
+  governanceProposeGate?: import("@/lib/governance-eligibility").EligibilityGate
+  /** P2: badges/share classes the eligibility pickers offer. */
+  governanceGateOptions?: { badges: Array<{ id: string; name: string }>; shareClasses: Array<{ id: string; name: string }> }
   badgeResources: SerializedResource[]
   stakeActivity: ActivityEntry[]
   serverMemberStakes?: MemberStake[]
@@ -265,6 +271,9 @@ export function GroupTabsClient({
   unassignedTasks,
   listingResources,
   governanceItems,
+  governanceCanPropose,
+  governanceProposeGate,
+  governanceGateOptions,
   badgeResources,
   stakeActivity,
   serverMemberStakes,
@@ -477,6 +486,10 @@ export function GroupTabsClient({
           createdAt: String(rec.createdAt ?? ""),
           comments: Number(rec.comments ?? 0),
           groupId,
+          // P2 eligibility (server-stamped on the item by the group page).
+          eligibilityLabel: typeof rec.eligibilityLabel === "string" ? rec.eligibilityLabel : undefined,
+          viewerCanVote: typeof rec.viewerCanVote === "boolean" ? rec.viewerCanVote : undefined,
+          viewerVoteReason: typeof rec.viewerVoteReason === "string" ? rec.viewerVoteReason : undefined,
         }
       })
   }, [governanceItems, groupId])
@@ -522,6 +535,10 @@ export function GroupTabsClient({
           createdAt: String(rec.createdAt ?? ""),
           endDate: String(rec.deadline ?? rec.endDate ?? ""),
           groupId,
+          // P2 eligibility (server-stamped on the item by the group page).
+          eligibilityLabel: typeof rec.eligibilityLabel === "string" ? rec.eligibilityLabel : undefined,
+          viewerCanVote: typeof rec.viewerCanVote === "boolean" ? rec.viewerCanVote : undefined,
+          viewerVoteReason: typeof rec.viewerVoteReason === "string" ? rec.viewerVoteReason : undefined,
         }
       })
   }, [governanceItems, groupId])
@@ -915,6 +932,10 @@ export function GroupTabsClient({
           issues={governanceIssues}
           polls={governancePolls}
           proposals={governanceProposals}
+          canPropose={governanceCanPropose}
+          isAdmin={isGroupAdmin}
+          proposeGate={governanceProposeGate}
+          gateOptions={governanceGateOptions}
         />
       </TabsContent>
 

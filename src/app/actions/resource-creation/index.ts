@@ -56,6 +56,7 @@ export {
   createGovernanceProposalAction,
   createGovernancePollAction,
   createGovernanceIssueAction,
+  setGovernanceProposeGateAction,
   fetchGovernanceBadgesAction,
   checkGovernanceBadgeHolderAction,
   createGovernanceBadgeAction,
