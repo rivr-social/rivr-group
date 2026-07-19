@@ -195,7 +195,13 @@ export interface GroupTabsClientProps {
   /** P2: the group's stored propose gate (seeds the admin settings dialog). */
   governanceProposeGate?: import("@/lib/governance-eligibility").EligibilityGate
   /** P2: badges/share classes the eligibility pickers offer. */
-  governanceGateOptions?: { badges: Array<{ id: string; name: string }>; shareClasses: Array<{ id: string; name: string }> }
+  governanceGateOptions?: { badges: Array<{ id: string; name: string }>; shareClasses: Array<{ id: string; name: string }>; hasVotingShares?: boolean }
+  /** P3: the org's default vote weight (seeds modals + settings). */
+  governanceDefaultWeight?: import("@/lib/governance-weight").WeightConfig
+  /** P4: whether the viewer holds a board role (finalize controls). */
+  governanceViewerIsBoard?: boolean
+  /** P4: current board-role holders (settings display). */
+  governanceBoard?: Array<{ memberId: string; name: string; role: string }>
   badgeResources: SerializedResource[]
   stakeActivity: ActivityEntry[]
   serverMemberStakes?: MemberStake[]
@@ -274,6 +280,9 @@ export function GroupTabsClient({
   governanceCanPropose,
   governanceProposeGate,
   governanceGateOptions,
+  governanceDefaultWeight,
+  governanceViewerIsBoard,
+  governanceBoard,
   badgeResources,
   stakeActivity,
   serverMemberStakes,
@@ -490,6 +499,14 @@ export function GroupTabsClient({
           eligibilityLabel: typeof rec.eligibilityLabel === "string" ? rec.eligibilityLabel : undefined,
           viewerCanVote: typeof rec.viewerCanVote === "boolean" ? rec.viewerCanVote : undefined,
           viewerVoteReason: typeof rec.viewerVoteReason === "string" ? rec.viewerVoteReason : undefined,
+          // P3/P4 (server-stamped): weight chip, viewer weight, phase, outcome, finalize progress.
+          weightLabel: typeof rec.weightLabel === "string" ? rec.weightLabel : undefined,
+          viewerVoteWeight: typeof rec.viewerVoteWeight === "number" ? rec.viewerVoteWeight : undefined,
+          totalVoters: typeof rec.totalVoters === "number" ? rec.totalVoters : undefined,
+          phase: rec.phase === "active" || rec.phase === "closed" || rec.phase === "finalized" ? (rec.phase as "active" | "closed" | "finalized") : undefined,
+          outcome: rec.outcome && typeof rec.outcome === "object" ? (rec.outcome as { kind: string; winnerId?: string | null; passed?: boolean; quorumMet?: boolean }) : undefined,
+          finalizeApprovals: typeof rec.finalizeApprovals === "number" ? rec.finalizeApprovals : undefined,
+          finalizeRequired: typeof rec.finalizeRequired === "number" ? rec.finalizeRequired : undefined,
         }
       })
   }, [governanceItems, groupId])
@@ -539,6 +556,14 @@ export function GroupTabsClient({
           eligibilityLabel: typeof rec.eligibilityLabel === "string" ? rec.eligibilityLabel : undefined,
           viewerCanVote: typeof rec.viewerCanVote === "boolean" ? rec.viewerCanVote : undefined,
           viewerVoteReason: typeof rec.viewerVoteReason === "string" ? rec.viewerVoteReason : undefined,
+          // P3/P4 (server-stamped): weight chip, viewer weight, phase, outcome, finalize progress.
+          weightLabel: typeof rec.weightLabel === "string" ? rec.weightLabel : undefined,
+          viewerVoteWeight: typeof rec.viewerVoteWeight === "number" ? rec.viewerVoteWeight : undefined,
+          totalVoters: typeof rec.totalVoters === "number" ? rec.totalVoters : undefined,
+          phase: rec.phase === "active" || rec.phase === "closed" || rec.phase === "finalized" ? (rec.phase as "active" | "closed" | "finalized") : undefined,
+          outcome: rec.outcome && typeof rec.outcome === "object" ? (rec.outcome as { kind: string; winnerId?: string | null; passed?: boolean; quorumMet?: boolean }) : undefined,
+          finalizeApprovals: typeof rec.finalizeApprovals === "number" ? rec.finalizeApprovals : undefined,
+          finalizeRequired: typeof rec.finalizeRequired === "number" ? rec.finalizeRequired : undefined,
         }
       })
   }, [governanceItems, groupId])
@@ -936,6 +961,10 @@ export function GroupTabsClient({
           isAdmin={isGroupAdmin}
           proposeGate={governanceProposeGate}
           gateOptions={governanceGateOptions}
+          defaultWeight={governanceDefaultWeight}
+          viewerIsBoard={governanceViewerIsBoard}
+          board={governanceBoard}
+          memberOptions={memberInfos.map((m) => ({ id: m.id, name: m.name }))}
         />
       </TabsContent>
 

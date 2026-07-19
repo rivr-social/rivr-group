@@ -31,9 +31,12 @@ export interface EligibilityGateDraft {
 export interface GovernanceGateOptions {
   badges: Array<{ id: string; name: string }>
   shareClasses: Array<{ id: string; name: string }>
+  /** P3: whether any share class carries a positive voteBps (enables the
+   *  voting-shares WEIGHT kind; the share-holder GATE needs only classes). */
+  hasVotingShares?: boolean
 }
 
-export const EMPTY_GATE_OPTIONS: GovernanceGateOptions = { badges: [], shareClasses: [] }
+export const EMPTY_GATE_OPTIONS: GovernanceGateOptions = { badges: [], shareClasses: [], hasVotingShares: false }
 
 export function makeGateDraft(kind: EligibilityKind = "member"): EligibilityGateDraft {
   return { kind, badgeId: "", shareClassId: "", minShares: String(DEFAULT_MIN_SHARES) }

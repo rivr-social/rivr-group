@@ -27,6 +27,12 @@ import {
   makeGateDraft,
   type GovernanceGateOptions,
 } from "@/components/governance-eligibility-picker"
+import {
+  GovernanceWeightPicker,
+  draftToWeightInput,
+  makeWeightDraft,
+} from "@/components/governance-weight-picker"
+import type { WeightConfig } from "@/lib/governance-weight"
 
 interface CreateProposalModalProps {
   isOpen: boolean
@@ -37,9 +43,13 @@ interface CreateProposalModalProps {
     threshold: number
     duration: number
     voteEligibility?: { kind: string; badgeId?: string; shareClassId?: string; minShares?: number }
+    voteWeight?: { kind: string; badgeId?: string }
+    quorum?: number
   }) => void
   /** P2: the group's badges/share classes the eligibility picker offers. */
   gateOptions?: GovernanceGateOptions
+  /** P3: the org's default vote weight (seeds the weight picker). */
+  defaultWeight?: WeightConfig
 }
 
 /**
@@ -50,13 +60,16 @@ interface CreateProposalModalProps {
  * @param props.onClose - Called when the user cancels/closes the modal.
  * @param props.onSubmit - Called with proposal title, description, threshold, and duration.
  */
-export function CreateProposalModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY_GATE_OPTIONS }: CreateProposalModalProps) {
+export function CreateProposalModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY_GATE_OPTIONS, defaultWeight }: CreateProposalModalProps) {
   // Local controlled-input state for proposal form fields.
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [threshold, setThreshold] = useState("66")
   const [duration, setDuration] = useState("7")
   const [voteGate, setVoteGate] = useState(makeGateDraft())
+  const [voteWeight, setVoteWeight] = useState(() => makeWeightDraft(defaultWeight))
+  // P4: minimum raw voter participation for the outcome to stand (0 = none).
+  const [quorum, setQuorum] = useState("0")
 
   // Submit handler validates required fields, normalizes numeric strings, and resets local form state.
   const handleSubmit = () => {
@@ -68,6 +81,8 @@ export function CreateProposalModal({ isOpen, onClose, onSubmit, gateOptions = E
         threshold: Number.parseInt(threshold),
         duration: Number.parseInt(duration),
         voteEligibility: draftToGateInput(voteGate),
+        voteWeight: draftToWeightInput(voteWeight),
+        quorum: Math.max(0, Number.parseInt(quorum, 10) || 0),
       })
       // Side effect: close modal after successful submission.
       onClose()
@@ -77,6 +92,8 @@ export function CreateProposalModal({ isOpen, onClose, onSubmit, gateOptions = E
       setThreshold("66")
       setDuration("7")
       setVoteGate(makeGateDraft())
+      setVoteWeight(makeWeightDraft(defaultWeight))
+      setQuorum("0")
     }
   }
 
@@ -143,6 +160,29 @@ export function CreateProposalModal({ isOpen, onClose, onSubmit, gateOptions = E
             options={gateOptions}
             idPrefix="proposal-eligibility"
           />
+
+          <GovernanceWeightPicker
+            label="Vote weight"
+            value={voteWeight}
+            onChange={setVoteWeight}
+            badges={gateOptions.badges}
+            hasVotingShares={gateOptions.hasVotingShares ?? false}
+            idPrefix="proposal-weight"
+          />
+
+          <div className="space-y-2">
+            <Label htmlFor="proposal-quorum">Quorum (voters, 0 = none)</Label>
+            <Input
+              id="proposal-quorum"
+              type="number"
+              min="0"
+              value={quorum}
+              onChange={(e) => setQuorum(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Minimum number of voters for the outcome to stand when the window closes.
+            </p>
+          </div>
         </div>
 
         <DialogFooter>

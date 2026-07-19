@@ -236,11 +236,19 @@ export interface TallyOption {
 
 export interface PollTally {
   style: BallotStyle;
-  /** Number of distinct ballots cast. */
+  /** Number of distinct ballots cast (raw voter participation — quorum input). */
   totalVotes: number;
+  /** P3: Σ of the ballots' weights (equals totalVotes under 1p1v). */
+  totalWeight: number;
   options: TallyOption[];
   /** Single-winner styles (ranked) resolve a winner. */
   winnerId?: string;
+}
+
+/** A ballot paired with the voter's resolved weight (P3; 1 under 1p1v). */
+export interface WeightedBallot {
+  ballot: Ballot;
+  weight: number;
 }
 
 function pct(n: number): string {
@@ -253,17 +261,27 @@ function pct(n: number): string {
  * until an option holds a majority of active ballots (or one option remains).
  * Deterministic tie-break: lowest option id is eliminated first.
  */
-export function instantRunoffWinner(ballots: string[][], optionIds: string[]): string | undefined {
+export function instantRunoffWinner(
+  ballots: string[][],
+  optionIds: string[],
+  /** P3: per-ballot weights aligned with `ballots` (defaults to 1 each). */
+  weights?: number[],
+): string | undefined {
   let remaining = new Set(optionIds);
-  const active = ballots.map((b) => b.filter((id) => optionIds.includes(id))).filter((b) => b.length > 0);
+  const active: Array<{ ranking: string[]; weight: number }> = [];
+  ballots.forEach((b, i) => {
+    const ranking = b.filter((id) => optionIds.includes(id));
+    const weight = weights?.[i] ?? 1;
+    if (ranking.length > 0 && weight > 0) active.push({ ranking, weight });
+  });
   if (active.length === 0) return undefined;
 
   while (remaining.size > 1) {
     const counts = new Map<string, number>();
     for (const id of remaining) counts.set(id, 0);
-    for (const b of active) {
-      const top = b.find((id) => remaining.has(id));
-      if (top) counts.set(top, (counts.get(top) ?? 0) + 1);
+    for (const { ranking, weight } of active) {
+      const top = ranking.find((id) => remaining.has(id));
+      if (top) counts.set(top, (counts.get(top) ?? 0) + weight);
     }
     const totalActive = [...counts.values()].reduce((a, c) => a + c, 0);
     let leaderId: string | undefined;
@@ -290,52 +308,67 @@ export function instantRunoffWinner(ballots: string[][], optionIds: string[]): s
 /**
  * Aggregate active ballots into a per-style {@link PollTally}. The single source
  * of truth for both the metadata write-back (server) and result rendering.
+ * P3: each ballot carries the voter's resolved weight — counts become weight
+ * sums, averages become weight-weighted, IRV majorities are weight majorities,
+ * quadratic voice is weight-scaled. With every weight = 1 this is exactly the
+ * P1 one-person-one-vote tally. Zero-weight ballots count toward `totalVotes`
+ * (participation/quorum) but contribute nothing to values.
  */
-export function tallyBallots(
+export function tallyWeightedBallots(
   config: PollBallotConfig,
   optionIds: string[],
-  ballots: Ballot[],
+  weighted: WeightedBallot[],
 ): PollTally {
   const style = config.ballotStyle;
-  const totalVotes = ballots.length;
+  const totalVotes = weighted.length;
+  const safeWeight = (w: number): number => (Number.isFinite(w) && w > 0 ? w : 0);
+  const totalWeight = Math.round(weighted.reduce((a, wb) => a + safeWeight(wb.weight), 0) * 100) / 100;
   const base = (): TallyOption[] => optionIds.map((id) => ({ id, value: 0, fraction: 0, label: "", count: 0 }));
   const byId = new Map<string, TallyOption>();
   const opts = base();
   for (const o of opts) byId.set(o.id, o);
+  // Weighted values can be fractional; show one decimal only when needed.
+  const fmt = (v: number): string => (Number.isInteger(v) ? String(v) : v.toFixed(1));
 
   switch (style) {
     case "multiple-choice":
     case "approval": {
-      for (const b of ballots) {
+      for (const { ballot: b, weight } of weighted) {
+        const w = safeWeight(weight);
         const chosen = b.style === "multiple-choice" ? [b.choice] : b.style === "approval" ? b.selections : [];
         for (const id of chosen) {
           const o = byId.get(id);
           if (o) {
-            o.value += 1;
+            o.value += w;
             o.count += 1;
           }
         }
       }
       for (const o of opts) {
-        o.fraction = totalVotes > 0 ? o.value / totalVotes : 0;
-        o.label = `${pct(o.fraction)} (${o.value})`;
+        o.value = Math.round(o.value * 100) / 100;
+        o.fraction = totalWeight > 0 ? o.value / totalWeight : 0;
+        o.label = `${pct(o.fraction)} (${fmt(o.value)})`;
       }
       break;
     }
     case "score": {
       const max = resolveScoreMax(config);
-      const sum = new Map<string, number>();
-      for (const b of ballots) {
+      const num = new Map<string, number>();
+      const den = new Map<string, number>();
+      for (const { ballot: b, weight } of weighted) {
         if (b.style !== "score") continue;
-        for (const [id, s] of Object.entries(b.scores)) {
+        const w = safeWeight(weight);
+        for (const [id, sc] of Object.entries(b.scores)) {
           const o = byId.get(id);
           if (!o) continue;
-          sum.set(id, (sum.get(id) ?? 0) + s);
+          num.set(id, (num.get(id) ?? 0) + sc * w);
+          den.set(id, (den.get(id) ?? 0) + w);
           o.count += 1;
         }
       }
       for (const o of opts) {
-        const avg = o.count > 0 ? (sum.get(o.id) ?? 0) / o.count : 0;
+        const d = den.get(o.id) ?? 0;
+        const avg = d > 0 ? (num.get(o.id) ?? 0) / d : 0;
         o.value = Math.round(avg * 100) / 100;
         o.fraction = max > 0 ? avg / max : 0;
         o.label = `${o.value.toFixed(1)} / ${max} (${o.count})`;
@@ -343,54 +376,62 @@ export function tallyBallots(
       break;
     }
     case "ranked": {
-      const rankings = ballots.filter((b): b is Extract<Ballot, { style: "ranked" }> => b.style === "ranked").map((b) => b.ranking);
-      const winnerId = instantRunoffWinner(rankings, optionIds);
-      for (const r of rankings) {
-        const top = r.find((id) => byId.has(id));
+      const rankedPairs = weighted.filter(
+        (wb): wb is WeightedBallot & { ballot: Extract<Ballot, { style: "ranked" }> } =>
+          wb.ballot.style === "ranked",
+      );
+      const rankings = rankedPairs.map((wb) => wb.ballot.ranking);
+      const weightsArr = rankedPairs.map((wb) => safeWeight(wb.weight));
+      const winnerId = instantRunoffWinner(rankings, optionIds, weightsArr);
+      rankedPairs.forEach((wb, i) => {
+        const top = wb.ballot.ranking.find((id) => byId.has(id));
         if (top) {
           const o = byId.get(top)!;
-          o.value += 1;
+          o.value += weightsArr[i];
           o.count += 1;
         }
-      }
+      });
       for (const o of opts) {
-        o.fraction = totalVotes > 0 ? o.value / totalVotes : 0;
-        o.label = o.id === winnerId ? `Winner · 1st: ${o.value}` : `1st choice: ${o.value}`;
+        o.value = Math.round(o.value * 100) / 100;
+        o.fraction = totalWeight > 0 ? o.value / totalWeight : 0;
+        o.label = o.id === winnerId ? `Winner · 1st: ${fmt(o.value)}` : `1st choice: ${fmt(o.value)}`;
       }
-      return { style, totalVotes, options: opts, winnerId };
+      return { style, totalVotes, totalWeight, options: opts, winnerId };
     }
     case "rate-rank": {
       const max = resolveScoreMax(config);
       const num = new Map<string, number>();
       const den = new Map<string, number>();
-      for (const b of ballots) {
+      for (const { ballot: b, weight } of weighted) {
         if (b.style !== "rate-rank") continue;
+        const w = safeWeight(weight);
         for (const [id, { score, importance }] of Object.entries(b.ratings)) {
           const o = byId.get(id);
           if (!o) continue;
-          num.set(id, (num.get(id) ?? 0) + score * importance);
-          den.set(id, (den.get(id) ?? 0) + importance);
+          num.set(id, (num.get(id) ?? 0) + score * importance * w);
+          den.set(id, (den.get(id) ?? 0) + importance * w);
           o.count += 1;
         }
       }
       for (const o of opts) {
         const d = den.get(o.id) ?? 0;
-        const weighted = d > 0 ? (num.get(o.id) ?? 0) / d : 0;
-        o.value = Math.round(weighted * 100) / 100;
-        o.fraction = max > 0 ? weighted / max : 0;
+        const wavg = d > 0 ? (num.get(o.id) ?? 0) / d : 0;
+        o.value = Math.round(wavg * 100) / 100;
+        o.fraction = max > 0 ? wavg / max : 0;
         o.label = `${o.value.toFixed(1)} / ${max} (${o.count})`;
       }
       break;
     }
     case "quadratic": {
-      // Voice per option = Σ_voters √(credits spent on it).
+      // Voice per option = Σ_voters weight × √(credits spent on it).
       const voice = new Map<string, number>();
-      for (const b of ballots) {
+      for (const { ballot: b, weight } of weighted) {
         if (b.style !== "quadratic") continue;
+        const w = safeWeight(weight);
         for (const [id, c] of Object.entries(b.credits)) {
           const o = byId.get(id);
           if (!o || c <= 0) continue;
-          voice.set(id, (voice.get(id) ?? 0) + Math.sqrt(c));
+          voice.set(id, (voice.get(id) ?? 0) + w * Math.sqrt(c));
           o.count += 1;
         }
       }
@@ -405,5 +446,14 @@ export function tallyBallots(
     }
   }
 
-  return { style, totalVotes, options: opts };
+  return { style, totalVotes, totalWeight, options: opts };
+}
+
+/** 1p1v tally — every ballot weighted 1 (the P1 behavior, kept for callers/tests). */
+export function tallyBallots(
+  config: PollBallotConfig,
+  optionIds: string[],
+  ballots: Ballot[],
+): PollTally {
+  return tallyWeightedBallots(config, optionIds, ballots.map((ballot) => ({ ballot, weight: 1 })));
 }

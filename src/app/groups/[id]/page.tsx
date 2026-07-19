@@ -42,6 +42,10 @@ import {
   evaluateGovernanceGatesForUser,
   listGovernanceGateOptions,
 } from "@/lib/governance-eligibility.server"
+import { DEFAULT_WEIGHT_CONFIG, describeWeightConfig, parseWeightConfig } from "@/lib/governance-weight"
+import { resolveVoterWeight } from "@/lib/governance-weight.server"
+import { decisionPhase, requiredFinalizeApprovals } from "@/lib/governance-resolution"
+import { boardRoleHolders, finalizeApprovalsByTarget } from "@/lib/governance-resolution.server"
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -243,7 +247,34 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   const governanceCanPropose = isGroupAdmin || (gateVerdicts[0]?.eligible ?? false)
   const badgeNames = new Map(governanceGateOptions.badges.map((b) => [b.id, b.name]))
   const shareClassNames = new Map(governanceGateOptions.shareClasses.map((c) => [c.id, c.name]))
-  votableItems.forEach((item, i) => {
+
+  // ── Governance P3/P4: weights, phases, board + finalization progress ──
+  const governanceDefaultWeight = parseWeightConfig(governanceMeta.defaultWeight, DEFAULT_WEIGHT_CONFIG)
+  const boardHolders = await boardRoleHolders(group.id).catch(() => new Map<string, string>())
+  const finalizeApprovals = await finalizeApprovalsByTarget(group.id, boardHolders).catch(
+    () => new Map<string, number>(),
+  )
+  const finalizeRequired = requiredFinalizeApprovals(boardHolders.size)
+  const governanceViewerIsBoard = !!(currentUserId && boardHolders.has(currentUserId))
+  const governanceBoard = [...boardHolders.entries()].map(([memberId, role]) => ({
+    memberId,
+    name: governanceCreatorNames[memberId] ?? "Member",
+    role,
+  }))
+  // Resolve the viewer's weight ONCE per distinct non-equal weight config.
+  const viewerWeightCache = new Map<string, number>()
+  const viewerWeightFor = async (raw: unknown): Promise<number | undefined> => {
+    if (!currentUserId) return undefined
+    const config = parseWeightConfig(raw, DEFAULT_WEIGHT_CONFIG)
+    if (config.kind === "equal") return undefined
+    const key = JSON.stringify(config)
+    if (!viewerWeightCache.has(key)) {
+      viewerWeightCache.set(key, await resolveVoterWeight(currentUserId, group.id, config).catch(() => 0))
+    }
+    return viewerWeightCache.get(key)
+  }
+
+  for (const [i, item] of votableItems.entries()) {
     const gate = voteGates[i]
     const verdict = gateVerdicts[i + 1]
     item.eligibilityLabel = describeEligibilityGate(gate, {
@@ -252,7 +283,25 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
     })
     item.viewerCanVote = verdict?.eligible ?? false
     if (verdict && !verdict.eligible && verdict.reason) item.viewerVoteReason = verdict.reason
-  })
+
+    // P3: weight chip + the viewer's own resolved weight (non-equal only).
+    const weightConfig = parseWeightConfig(item.weight, DEFAULT_WEIGHT_CONFIG)
+    if (weightConfig.kind !== "equal") {
+      item.weightLabel = describeWeightConfig(weightConfig, {
+        badgeName: weightConfig.badgeId ? badgeNames.get(weightConfig.badgeId) : undefined,
+      })
+      const vw = await viewerWeightFor(item.weight)
+      if (vw !== undefined) item.viewerVoteWeight = vw
+    }
+
+    // P4: lifecycle phase + finalization progress on closed items.
+    const phase = decisionPhase(item)
+    item.phase = phase
+    if (phase === "closed") {
+      item.finalizeApprovals = finalizeApprovals.get(String(item.id)) ?? 0
+      item.finalizeRequired = Number.isFinite(finalizeRequired) ? finalizeRequired : 0
+    }
+  }
   const documentResources = detail.resources.filter((r) => {
     const meta = (r.metadata ?? {}) as Record<string, unknown>
     return r.type === "resource" && (String(meta.resourceSubtype ?? "").toLowerCase() === "document" || typeof r.content === "string")
@@ -516,6 +565,9 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         governanceCanPropose={governanceCanPropose}
         governanceProposeGate={governanceProposeGate}
         governanceGateOptions={governanceGateOptions}
+        governanceDefaultWeight={governanceDefaultWeight}
+        governanceViewerIsBoard={governanceViewerIsBoard}
+        governanceBoard={governanceBoard}
         badgeResources={badgeResources}
         stakeActivity={stakeActivity}
         serverMemberStakes={serverMemberStakes}

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   evaluateGate: vi.fn(),
   listGovernanceBadges: vi.fn(),
   getOrgShareClasses: vi.fn(),
+  resolveVoterWeight: vi.fn(),
   rateLimit: vi.fn(),
   updateFacadeExecute: vi.fn(async (_request: unknown, applyLocal: () => Promise<unknown>) => ({
     success: true,
@@ -99,6 +100,11 @@ vi.mock("@/lib/governance-eligibility.server", () => ({
 vi.mock("@/app/actions/wallet/share-classes", () => ({
   getOrgShareClasses: mocks.getOrgShareClasses,
 }));
+// P3: the cast path resolves + freezes the voter's weight; tests control it.
+vi.mock("@/lib/governance-weight.server", () => ({
+  resolveVoterWeight: mocks.resolveVoterWeight,
+  listVotingShareClasses: vi.fn(async () => []),
+}));
 
 import { castGovernanceVoteAction } from "@/app/actions/resource-creation/groups";
 
@@ -140,6 +146,7 @@ describe("castGovernanceVoteAction", () => {
     mocks.evaluateGate.mockResolvedValue({ eligible: true });
     mocks.listGovernanceBadges.mockResolvedValue([]);
     mocks.getOrgShareClasses.mockResolvedValue([]);
+    mocks.resolveVoterWeight.mockResolvedValue(1);
     mocks.updateFacadeExecute.mockImplementation(async (_request: unknown, applyLocal: () => Promise<unknown>) => ({
       success: true,
       data: await applyLocal(),
@@ -337,6 +344,35 @@ describe("castGovernanceVoteAction", () => {
     expect(result).toMatchObject({ success: false, error: { code: "INVALID_INPUT" } });
     expect(mocks.dbExecute).not.toHaveBeenCalled();
     expect(mocks.dbInsert).not.toHaveBeenCalled();
+  });
+
+  it("recomputes a stake-weighted proposal tally from stored frozen weights (P3)", async () => {
+    queueSelect(
+      [{ metadata: { proposals: [{ id: "proposal-1", weight: { kind: "stake" }, votes: { yes: 0, no: 0, abstain: 0 } }] } }],
+      // Active rows carry the weights FROZEN at cast time; legacy row (no
+      // voteWeight) weighs 1.
+      [
+        { vote: "yes", voteWeight: "3" },
+        { vote: "no", voteWeight: "0.5" },
+        { vote: "yes", voteWeight: null },
+      ],
+    );
+    mocks.resolveVoterWeight.mockResolvedValue(3);
+
+    const result = await castGovernanceVoteAction({
+      groupId: GROUP_ID,
+      targetId: "proposal-1",
+      targetType: "proposal",
+      vote: "yes",
+    });
+
+    expect(result).toMatchObject({ success: true });
+    // The caster's weight was resolved under the item's stake config.
+    expect(mocks.resolveVoterWeight).toHaveBeenCalledWith(USER_ID, GROUP_ID, { kind: "stake" });
+    const meta = lastWriteBackMetadata();
+    const proposal = (meta?.proposals as Record<string, unknown>[])[0];
+    expect(proposal.votes).toEqual({ yes: 4, no: 0.5, abstain: 0 });
+    expect(proposal.totalVoters).toBe(3);
   });
 
   it("does not double-count a changed vote (re-vote recompute)", async () => {

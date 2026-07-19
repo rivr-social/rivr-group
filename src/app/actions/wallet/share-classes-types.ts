@@ -21,6 +21,8 @@ export interface ShareClassRow {
   name: string;
   shareCount: number;
   netBps: number;
+  /** Governance P3 (decision #1): the class's VOTING pie share, independent of netBps. */
+  voteBps: number;
   hidden: boolean;
   tierKey: string | null;
 }

@@ -60,6 +60,7 @@ export async function listGovernanceBadges(
 export async function listGovernanceGateOptions(groupId: string): Promise<{
   badges: Array<{ id: string; name: string }>;
   shareClasses: Array<{ id: string; name: string }>;
+  hasVotingShares: boolean;
 }> {
   const [badges, classes] = await Promise.all([
     listGovernanceBadges(groupId),
@@ -68,6 +69,9 @@ export async function listGovernanceGateOptions(groupId: string): Promise<{
   return {
     badges,
     shareClasses: classes.map((c) => ({ id: c.id, name: c.name ?? "Share class" })),
+    // P3: the voting-shares weight kind is only offerable when a class
+    // actually carries governance voteBps.
+    hasVotingShares: classes.some((c) => c.voteBps > 0),
   };
 }
 

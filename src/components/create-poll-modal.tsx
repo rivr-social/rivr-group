@@ -42,6 +42,12 @@ import {
   makeGateDraft,
   type GovernanceGateOptions,
 } from "@/components/governance-eligibility-picker"
+import {
+  GovernanceWeightPicker,
+  draftToWeightInput,
+  makeWeightDraft,
+} from "@/components/governance-weight-picker"
+import type { WeightConfig } from "@/lib/governance-weight"
 
 interface CreatePollModalProps {
   isOpen: boolean
@@ -55,9 +61,12 @@ interface CreatePollModalProps {
     scoreMax?: number
     creditsPerVoter?: number
     voteEligibility?: { kind: string; badgeId?: string; shareClassId?: string; minShares?: number }
+    voteWeight?: { kind: string; badgeId?: string }
   }) => void
   /** P2: the group's badges/share classes the eligibility picker offers. */
   gateOptions?: GovernanceGateOptions
+  /** P3: the org's default vote weight (seeds the weight picker). */
+  defaultWeight?: WeightConfig
 }
 
 /** Minimum number of options a poll must have to be valid. */
@@ -75,7 +84,7 @@ const DEFAULT_OPTION_ROWS = 2
  * @param props.onClose - Called when the user cancels/closes the modal.
  * @param props.onSubmit - Called with poll question, description, options, and duration.
  */
-export function CreatePollModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY_GATE_OPTIONS }: CreatePollModalProps) {
+export function CreatePollModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY_GATE_OPTIONS, defaultWeight }: CreatePollModalProps) {
   const [question, setQuestion] = useState("")
   const [description, setDescription] = useState("")
   const [options, setOptions] = useState<string[]>(Array(DEFAULT_OPTION_ROWS).fill(""))
@@ -84,6 +93,7 @@ export function CreatePollModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY
   const [scoreMax, setScoreMax] = useState(String(DEFAULT_SCORE_MAX))
   const [creditsPerVoter, setCreditsPerVoter] = useState(String(DEFAULT_CREDITS_PER_VOTER))
   const [voteGate, setVoteGate] = useState(makeGateDraft())
+  const [voteWeight, setVoteWeight] = useState(() => makeWeightDraft(defaultWeight))
 
   const filledOptions = options.map((o) => o.trim()).filter((o) => o.length > 0)
   const canSubmit = question.trim().length > 0 && filledOptions.length >= MIN_POLL_OPTIONS
@@ -97,6 +107,7 @@ export function CreatePollModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY
     setScoreMax(String(DEFAULT_SCORE_MAX))
     setCreditsPerVoter(String(DEFAULT_CREDITS_PER_VOTER))
     setVoteGate(makeGateDraft())
+    setVoteWeight(makeWeightDraft(defaultWeight))
   }
 
   const handleOptionChange = (index: number, value: string) => {
@@ -126,6 +137,7 @@ export function CreatePollModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY
       creditsPerVoter:
         ballotStyle === "quadratic" ? Number.parseInt(creditsPerVoter) || DEFAULT_CREDITS_PER_VOTER : undefined,
       voteEligibility: draftToGateInput(voteGate),
+      voteWeight: draftToWeightInput(voteWeight),
     })
     onClose()
     resetForm()
@@ -252,6 +264,15 @@ export function CreatePollModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY
             onChange={setVoteGate}
             options={gateOptions}
             idPrefix="poll-eligibility"
+          />
+
+          <GovernanceWeightPicker
+            label="Vote weight"
+            value={voteWeight}
+            onChange={setVoteWeight}
+            badges={gateOptions.badges}
+            hasVotingShares={gateOptions.hasVotingShares ?? false}
+            idPrefix="poll-weight"
           />
 
           <div className="space-y-2">
