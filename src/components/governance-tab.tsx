@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 import { Settings } from "lucide-react"
 
@@ -40,6 +41,10 @@ import {
 import type { Poll, Proposal } from "@/lib/types"
 import { BALLOT_STYLE_LABELS, DEFAULT_BALLOT_STYLE, isBallotStyle, type BallotStyle } from "@/lib/governance-ballot"
 import { DEFAULT_MIN_SHARES, isEligibilityKind, type EligibilityGate } from "@/lib/governance-eligibility"
+import { GovernanceWeightPicker, draftToWeightInput, makeWeightDraft } from "./governance-weight-picker"
+import type { WeightConfig } from "@/lib/governance-weight"
+import { BOARD_ROLES, BOARD_ROLE_LABELS } from "@/lib/governance-resolution"
+import { approveDecisionFinalizationAction, setBoardRoleAction } from "@/app/actions/governance-resolution"
 import { castGovernanceVoteAction, createGovernanceIssueAction, createGovernancePollAction, createGovernanceProposalAction, setGovernanceProposeGateAction } from "@/app/actions/create-resources"
 import { useToast } from "@/components/ui/use-toast"
 
@@ -75,6 +80,14 @@ interface GovernanceTabProps {
   proposeGate?: EligibilityGate
   /** P2: badges/share classes offered by the eligibility pickers. */
   gateOptions?: GovernanceGateOptions
+  /** P3: the org's default vote weight (seeds modals + settings dialog). */
+  defaultWeight?: WeightConfig
+  /** P4: whether the viewer holds a board role (shows finalize controls). */
+  viewerIsBoard?: boolean
+  /** P4: current board-role holders (settings display). */
+  board?: Array<{ memberId: string; name: string; role: string }>
+  /** P4: group members for the board-role picker (admins). */
+  memberOptions?: Array<{ id: string; name: string }>
 }
 
 /** Seed the settings dialog's draft from the stored propose gate. */
@@ -109,6 +122,10 @@ export function GovernanceTab({
   isAdmin = false,
   proposeGate,
   gateOptions = EMPTY_GATE_OPTIONS,
+  defaultWeight,
+  viewerIsBoard = false,
+  board = [],
+  memberOptions = [],
 }: GovernanceTabProps) {
   const router = useRouter()
   /** Tracks which governance sub-tab is active: "issues" (issues & polls) or "proposals" */
@@ -136,6 +153,7 @@ export function GovernanceTab({
   /** P2 admin governance settings (who can propose). */
   const [settingsModal, setSettingsModal] = useState(false)
   const [proposeGateDraft, setProposeGateDraft] = useState<EligibilityGateDraft>(() => draftFromGate(proposeGate))
+  const [defaultWeightDraft, setDefaultWeightDraft] = useState(() => makeWeightDraft(defaultWeight))
 
   const [, startTransition] = useTransition()
   const { toast } = useToast()
@@ -293,6 +311,7 @@ export function GovernanceTab({
       const result = await setGovernanceProposeGateAction({
         groupId,
         gate: draftToGateInput(proposeGateDraft),
+        defaultWeight: draftToWeightInput(defaultWeightDraft),
       })
       if (result.success) {
         toast({ title: "Governance settings saved", description: "Propose authority updated." })
@@ -300,6 +319,35 @@ export function GovernanceTab({
         router.refresh()
       } else {
         toast({ title: "Save failed", description: result.message, variant: "destructive" })
+      }
+    })
+  }
+
+  /** P4: a board holder's approval to finalize a closed decision. */
+  const handleApproveFinalization = (targetId: string, targetType: "poll" | "proposal") => {
+    startTransition(async () => {
+      const result = await approveDecisionFinalizationAction({ groupId, targetId, targetType })
+      if (result.success) {
+        toast({
+          title: result.finalized ? "Decision finalized" : "Approval recorded",
+          description: result.message,
+        })
+        router.refresh()
+      } else {
+        toast({ title: "Finalization failed", description: result.message, variant: "destructive" })
+      }
+    })
+  }
+
+  /** P4: admin assigns/clears a member's board role from the settings dialog. */
+  const handleSetBoardRole = (memberId: string, role: string) => {
+    startTransition(async () => {
+      const result = await setBoardRoleAction({ groupId, memberId, role: role === "none" ? null : role })
+      if (result.success) {
+        toast({ title: "Board updated", description: result.message })
+        router.refresh()
+      } else {
+        toast({ title: "Board update failed", description: result.message, variant: "destructive" })
       }
     })
   }
@@ -325,6 +373,7 @@ export function GovernanceTab({
               aria-label="Governance settings"
               onClick={() => {
                 setProposeGateDraft(draftFromGate(proposeGate))
+                setDefaultWeightDraft(makeWeightDraft(defaultWeight))
                 setSettingsModal(true)
               }}
             >
@@ -400,7 +449,18 @@ export function GovernanceTab({
                 <CardHeader className="pb-2">
                   <div className="flex justify-between items-start gap-2">
                     <CardTitle className="text-lg">{poll.question}</CardTitle>
-                    <div className="flex gap-1 shrink-0">
+    <div className="flex gap-1 shrink-0 flex-wrap justify-end">
+                      {poll.phase === "closed" && (
+                        <Badge variant="outline" className="text-xs">Closed</Badge>
+                      )}
+                      {poll.phase === "finalized" && (
+                        <Badge className="text-xs">Finalized</Badge>
+                      )}
+                      {poll.weightLabel && (
+                        <Badge variant="secondary" className="text-xs">
+                          {poll.weightLabel}
+                        </Badge>
+                      )}
                       {poll.eligibilityLabel && (
                         <Badge variant="secondary" className="text-xs">
                           {poll.eligibilityLabel}
@@ -448,19 +508,47 @@ export function GovernanceTab({
                   </div>
                 </CardContent>
                 <CardFooter className="flex justify-between pt-2">
-                  <div className="text-sm text-gray-500">{poll.totalVotes} votes</div>
-                  <div className="flex items-center gap-2">
-                    {poll.viewerCanVote === false && poll.viewerVoteReason && (
-                      <span className="text-xs text-muted-foreground">{poll.viewerVoteReason}</span>
+                  <div className="text-sm text-gray-500">
+                    {poll.totalVotes} votes
+                    {poll.viewerVoteWeight != null && poll.phase !== "finalized" && (
+                      <span className="ml-2 text-xs">· your weight: {poll.viewerVoteWeight}</span>
                     )}
-                    <Button
-                      variant={poll.userVoted ? "outline" : "default"}
-                      size="sm"
-                      disabled={poll.viewerCanVote === false}
-                      onClick={() => setVotingModal({ isOpen: true, item: poll, type: "poll" })}
-                    >
-                      {poll.userVoted ? "Change Vote" : "Vote"}
-                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {poll.phase === "finalized" ? (
+                      <span className="text-xs text-muted-foreground">
+                        {poll.outcome?.winnerId
+                          ? `Recorded winner: ${poll.options.find((o) => o.id === poll.outcome?.winnerId)?.text ?? poll.outcome.winnerId}`
+                          : "Recorded outcome: no winner"}{" "}
+                        · enact manually
+                      </span>
+                    ) : poll.phase === "closed" ? (
+                      <>
+                        <span className="text-xs text-muted-foreground">
+                          Voting closed · finalization {poll.finalizeApprovals ?? 0}/
+                          {poll.finalizeRequired && Number.isFinite(poll.finalizeRequired) ? poll.finalizeRequired : "—"}
+                        </span>
+                        {viewerIsBoard && (
+                          <Button size="sm" onClick={() => handleApproveFinalization(poll.id, "poll")}>
+                            Approve finalization
+                          </Button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {poll.viewerCanVote === false && poll.viewerVoteReason && (
+                          <span className="text-xs text-muted-foreground">{poll.viewerVoteReason}</span>
+                        )}
+                        <Button
+                          variant={poll.userVoted ? "outline" : "default"}
+                          size="sm"
+                          disabled={poll.viewerCanVote === false}
+                          onClick={() => setVotingModal({ isOpen: true, item: poll, type: "poll" })}
+                        >
+                          {poll.userVoted ? "Change Vote" : "Vote"}
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </CardFooter>
               </Card>
@@ -484,15 +572,30 @@ export function GovernanceTab({
                 <CardHeader className="pb-2">
                   <div className="flex justify-between items-start gap-2">
                     <CardTitle className="text-lg">{proposal.title}</CardTitle>
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                      {proposal.weightLabel && (
+                        <Badge variant="secondary" className="text-xs">
+                          {proposal.weightLabel}
+                        </Badge>
+                      )}
                       {proposal.eligibilityLabel && (
                         <Badge variant="secondary" className="text-xs">
                           {proposal.eligibilityLabel}
                         </Badge>
                       )}
-                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        {proposal.status}
-                      </span>
+                      {proposal.phase === "finalized" && proposal.outcome ? (
+                        <span
+                          className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            proposal.outcome.passed ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                          }`}
+                        >
+                          {proposal.outcome.passed ? "Passed" : "Failed"}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {proposal.phase === "closed" ? "closed" : proposal.status}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <CardDescription>
@@ -551,17 +654,38 @@ export function GovernanceTab({
                     {proposal.comments} comments • Threshold: {proposal.threshold}%
                   </div>
                   <div className="flex items-center gap-2">
-                    {proposal.viewerCanVote === false && proposal.viewerVoteReason && (
-                      <span className="text-xs text-muted-foreground">{proposal.viewerVoteReason}</span>
+                    {proposal.phase === "finalized" ? (
+                      <span className="text-xs text-muted-foreground">
+                        Recorded {proposal.outcome?.passed ? "PASSED" : "FAILED"}
+                        {proposal.outcome?.quorumMet === false ? " (quorum not met)" : ""} · enact manually
+                      </span>
+                    ) : proposal.phase === "closed" ? (
+                      <>
+                        <span className="text-xs text-muted-foreground">
+                          Voting closed · finalization {proposal.finalizeApprovals ?? 0}/
+                          {proposal.finalizeRequired && Number.isFinite(proposal.finalizeRequired) ? proposal.finalizeRequired : "—"}
+                        </span>
+                        {viewerIsBoard && (
+                          <Button size="sm" onClick={() => handleApproveFinalization(proposal.id, "proposal")}>
+                            Approve finalization
+                          </Button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {proposal.viewerCanVote === false && proposal.viewerVoteReason && (
+                          <span className="text-xs text-muted-foreground">{proposal.viewerVoteReason}</span>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={proposal.viewerCanVote === false}
+                          onClick={() => setVotingModal({ isOpen: true, item: proposal, type: "proposal" })}
+                        >
+                          Vote
+                        </Button>
+                      </>
                     )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={proposal.viewerCanVote === false}
-                      onClick={() => setVotingModal({ isOpen: true, item: proposal, type: "proposal" })}
-                    >
-                      Vote
-                    </Button>
                   </div>
                 </CardFooter>
               </Card>
@@ -591,6 +715,7 @@ export function GovernanceTab({
         onClose={() => setCreateProposalModal(false)}
         onSubmit={handleCreateProposal}
         gateOptions={gateOptions}
+        defaultWeight={defaultWeight}
       />
 
       <CreatePollModal
@@ -598,6 +723,7 @@ export function GovernanceTab({
         onClose={() => setCreatePollModal(false)}
         onSubmit={handleCreatePoll}
         gateOptions={gateOptions}
+        defaultWeight={defaultWeight}
       />
 
       <Dialog open={settingsModal} onOpenChange={setSettingsModal}>
@@ -617,7 +743,51 @@ export function GovernanceTab({
             <p className="text-xs text-muted-foreground">
               Admins can always create polls, proposals, and issues — this setting widens that authority.
             </p>
+            <GovernanceWeightPicker
+              label="Default vote weight"
+              value={defaultWeightDraft}
+              onChange={setDefaultWeightDraft}
+              badges={gateOptions.badges}
+              hasVotingShares={gateOptions.hasVotingShares ?? false}
+              idPrefix="governance-default-weight"
+            />
+            <p className="text-xs text-muted-foreground">
+              New polls and proposals start from this weight; the creator may override it per item.
+            </p>
             <Button onClick={handleSaveGovernanceSettings}>Save</Button>
+
+            <div className="space-y-2 border-t pt-4">
+              <Label>Board roles</Label>
+              <p className="text-xs text-muted-foreground">
+                Finalizing a closed decision takes approval from 2/3 of board-role holders. Outcomes are
+                recorded only — nothing executes automatically.
+              </p>
+              {memberOptions.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No members to assign.</p>
+              ) : (
+                memberOptions.map((member) => {
+                  const held = board.find((b) => b.memberId === member.id)?.role ?? "none"
+                  return (
+                    <div key={member.id} className="flex items-center justify-between gap-2">
+                      <span className="text-sm">{member.name}</span>
+                      <Select value={held} onValueChange={(role) => handleSetBoardRole(member.id, role)}>
+                        <SelectTrigger className="h-8 w-36">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No board role</SelectItem>
+                          {BOARD_ROLES.map((role) => (
+                            <SelectItem key={role} value={role}>
+                              {BOARD_ROLE_LABELS[role]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )
+                })
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>

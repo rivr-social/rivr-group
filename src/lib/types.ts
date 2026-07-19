@@ -1017,6 +1017,17 @@ export type Poll = {
   viewerCanVote?: boolean
   /** P2: human reason when the viewer may not vote. */
   viewerVoteReason?: string
+  /** P3 weight chip label (absent under the equal default). */
+  weightLabel?: string
+  /** P3: the VIEWER's resolved weight under this item's weight config (non-equal only). */
+  viewerVoteWeight?: number
+  /** P4 lifecycle phase (server-derived from endDate/status). */
+  phase?: "active" | "closed" | "finalized"
+  /** P4 recorded outcome once finalized. */
+  outcome?: { kind: string; winnerId?: string | null; passed?: boolean; quorumMet?: boolean }
+  /** P4 finalization progress on a closed item. */
+  finalizeApprovals?: number
+  finalizeRequired?: number
 }
 
 /** Governance proposal record with quorum/threshold voting configuration. */
@@ -1045,6 +1056,19 @@ export type Proposal = {
   viewerCanVote?: boolean
   /** P2: human reason when the viewer may not vote. */
   viewerVoteReason?: string
+  /** P3 weight chip label (absent under the equal default). */
+  weightLabel?: string
+  /** P3: the VIEWER's resolved weight under this item's weight config (non-equal only). */
+  viewerVoteWeight?: number
+  /** P4: raw voter participation (quorum input; weights never inflate it). */
+  totalVoters?: number
+  /** P4 lifecycle phase (server-derived from endDate/status). */
+  phase?: "active" | "closed" | "finalized"
+  /** P4 recorded outcome once finalized. */
+  outcome?: { kind: string; winnerId?: string | null; passed?: boolean; quorumMet?: boolean }
+  /** P4 finalization progress on a closed item. */
+  finalizeApprovals?: number
+  finalizeRequired?: number
 }
 
 /** Member stake and contribution metrics used for group profit-share calculations. */

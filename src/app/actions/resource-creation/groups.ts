@@ -32,10 +32,11 @@ import {
   isBallotStyle,
   resolveCreditsPerVoter,
   resolveScoreMax,
-  tallyBallots,
+  tallyWeightedBallots,
   validateBallot,
   type Ballot,
   type PollBallotConfig,
+  type WeightedBallot,
 } from "@/lib/governance-ballot";
 import {
   DEFAULT_PROPOSE_GATE,
@@ -47,6 +48,13 @@ import {
   evaluateGovernanceGateForUser,
   listGovernanceBadges,
 } from "@/lib/governance-eligibility.server";
+import {
+  DEFAULT_WEIGHT_CONFIG,
+  normalizeWeight,
+  parseWeightConfig,
+  type WeightConfig,
+} from "@/lib/governance-weight";
+import { resolveVoterWeight } from "@/lib/governance-weight.server";
 import { getOrgShareClasses } from "@/app/actions/wallet/share-classes";
 import type { ActionResult, UpdateGroupResourceInput } from "./types";
 import { desc } from "drizzle-orm";
@@ -914,6 +922,38 @@ function voteGateFromItem(item: Record<string, unknown>): EligibilityGate {
   return parseEligibilityGate(eligibility.vote, DEFAULT_VOTE_GATE);
 }
 
+/** Resolve a stored governance item's weight config (legacy items → 1p1v). */
+function weightConfigFromItem(item: Record<string, unknown>): WeightConfig {
+  return parseWeightConfig(item.weight, DEFAULT_WEIGHT_CONFIG);
+}
+
+/**
+ * Normalize a client-supplied weight config and verify a referenced badge
+ * belongs to this group (mirrors {@link sanitizeGateInput}).
+ */
+async function sanitizeWeightInput(
+  groupId: string,
+  raw: unknown,
+  fallback: WeightConfig,
+): Promise<{ weight: WeightConfig } | { error: string }> {
+  const weight = parseWeightConfig(raw, fallback);
+  if (weight.kind === "badge-weight" && weight.badgeId) {
+    const badges = await listGovernanceBadges(groupId);
+    if (!badges.some((b) => b.id === weight.badgeId)) {
+      return { error: "Unknown governance badge for this group." };
+    }
+  }
+  return { weight };
+}
+
+/** The org's default weight config from group metadata (decision #2). */
+function orgDefaultWeight(groupMeta: Record<string, unknown>): WeightConfig {
+  const governance = groupMeta.governance && typeof groupMeta.governance === "object"
+    ? (groupMeta.governance as Record<string, unknown>)
+    : {};
+  return parseWeightConfig(governance.defaultWeight, DEFAULT_WEIGHT_CONFIG);
+}
+
 /**
  * Normalize a client-supplied eligibility gate and verify any referenced badge
  * or share class actually belongs to this group, so an item can never be gated
@@ -1065,6 +1105,14 @@ export async function castGovernanceVoteAction(input: {
       };
     }
 
+    // P3 (weight functions): resolve the voter's weight under the ITEM's
+    // weight config and FREEZE it onto the vote row — tallies recompute from
+    // stored weights, so a later stake/share change never rewrites history
+    // (a re-vote refreshes this voter's weight). Zero-weight votes count
+    // toward participation but move no bars.
+    const weightConfig = weightConfigFromItem(items[idx]);
+    const voteWeight = await resolveVoterWeight(userId, input.groupId, weightConfig);
+
     // P1 (ballot styles): for a poll, validate the incoming ballot against the
     // poll's configured style (multiple-choice is the legacy default and also
     // accepts the bare `vote` option id). Proposals stay yes/no/abstain.
@@ -1110,6 +1158,7 @@ export async function castGovernanceVoteAction(input: {
         ballot: storedBallot ?? null,
         comment: input.comment ?? null,
         interactionType: "governance-vote",
+        voteWeight,
         votedAt: new Date().toISOString(),
       },
     } as NewLedgerEntry);
@@ -1124,6 +1173,7 @@ export async function castGovernanceVoteAction(input: {
       .select({
         vote: sql<string>`${ledger.metadata}->>'vote'`,
         ballot: sql<unknown>`${ledger.metadata}->'ballot'`,
+        voteWeight: sql<string>`${ledger.metadata}->>'voteWeight'`,
       })
       .from(ledger)
       .where(
@@ -1137,22 +1187,35 @@ export async function castGovernanceVoteAction(input: {
         ),
       );
 
+    // Legacy (pre-P3) rows carry no voteWeight — they weigh 1 (the 1p1v they
+    // were cast under).
+    const rowWeight = (row: { voteWeight: string | null }): number => {
+      if (row.voteWeight == null) return 1;
+      return normalizeWeight(Number(row.voteWeight));
+    };
+
     const item = { ...items[idx] };
     if (input.targetType === "proposal") {
       const votes = { yes: 0, no: 0, abstain: 0 };
+      let participation = 0;
       for (const row of activeVoteRows) {
         const key = String(row.vote ?? "").toLowerCase();
-        if (key === "yes" || key === "no" || key === "abstain") votes[key] += 1;
+        if (key === "yes" || key === "no" || key === "abstain") {
+          votes[key] = Math.round((votes[key] + rowWeight(row)) * 100) / 100;
+          participation += 1;
+        }
       }
       item.votes = votes;
+      // Raw voter participation (quorum input, P4) — weights don't inflate it.
+      item.totalVoters = participation;
     } else if (pollConfig) {
-      // Recompute the per-style tally from every active ballot.
-      const ballots: Ballot[] = [];
+      // Recompute the per-style WEIGHTED tally from every active ballot.
+      const weightedBallots: WeightedBallot[] = [];
       for (const row of activeVoteRows) {
         const b = ballotFromStored(pollConfig.ballotStyle, row.ballot, row.vote);
-        if (b) ballots.push(b);
+        if (b) weightedBallots.push({ ballot: b, weight: rowWeight(row) });
       }
-      const tally = tallyBallots(pollConfig, pollOptionIds, ballots);
+      const tally = tallyWeightedBallots(pollConfig, pollOptionIds, weightedBallots);
       const byId = new Map(tally.options.map((o) => [o.id, o]));
       item.options = Array.isArray(item.options)
         ? (item.options as Record<string, unknown>[]).map((o) => ({
@@ -1165,6 +1228,7 @@ export async function castGovernanceVoteAction(input: {
       item.tally = {
         style: tally.style,
         totalVotes: tally.totalVotes,
+        totalWeight: tally.totalWeight,
         winnerId: tally.winnerId ?? null,
         options: tally.options.map((o) => ({ id: o.id, value: o.value, fraction: o.fraction, label: o.label, count: o.count })),
       };
@@ -1214,6 +1278,10 @@ export async function createGovernanceProposalAction(input: {
     shareClassId?: string;
     minShares?: number;
   };
+  /** P3: how votes are weighted (defaults to the org's governance default). */
+  voteWeight?: { kind?: string; badgeId?: string };
+  /** P4: minimum voter participation for the outcome to stand (0 = none). */
+  quorum?: number;
 }): Promise<ActionResult> {
   if (!input.groupId?.trim() || !input.title?.trim() || !input.description?.trim()) {
     return {
@@ -1302,6 +1370,14 @@ export async function createGovernanceProposalAction(input: {
       return { success: false, message: gateResult.error, error: { code: "INVALID_INPUT" } };
     }
 
+    // P3: weight config — the org default unless this proposal overrides it.
+    const weightResult = await sanitizeWeightInput(input.groupId, input.voteWeight, orgDefaultWeight(groupMeta));
+    if ("error" in weightResult) {
+      return { success: false, message: weightResult.error, error: { code: "INVALID_INPUT" } };
+    }
+    // P4: quorum = minimum raw voter participation (0 disables the check).
+    const quorum = Number.isInteger(input.quorum) && (input.quorum as number) >= 0 ? (input.quorum as number) : 0;
+
     const newProposal = {
       id: proposalId,
       title: input.title.trim(),
@@ -1315,6 +1391,8 @@ export async function createGovernanceProposalAction(input: {
       votes: { yes: 0, no: 0, abstain: 0 },
       comments: 0,
       eligibility: { vote: gateResult.gate },
+      weight: weightResult.weight,
+      quorum,
     };
 
     const updatedMeta = {
@@ -1415,6 +1493,8 @@ export async function createGovernancePollAction(input: {
     shareClassId?: string;
     minShares?: number;
   };
+  /** P3: how votes are weighted (defaults to the org's governance default). */
+  voteWeight?: { kind?: string; badgeId?: string };
 }): Promise<ActionResult> {
   const cleanedOptions = Array.isArray(input.options)
     ? input.options.map((o) => (typeof o === "string" ? o.trim() : "")).filter((o) => o.length > 0)
@@ -1508,6 +1588,12 @@ export async function createGovernancePollAction(input: {
       return { success: false, message: gateResult.error, error: { code: "INVALID_INPUT" } };
     }
 
+    // P3: weight config — the org default unless this poll overrides it.
+    const weightResult = await sanitizeWeightInput(input.groupId, input.voteWeight, orgDefaultWeight(groupMeta));
+    if ("error" in weightResult) {
+      return { success: false, message: weightResult.error, error: { code: "INVALID_INPUT" } };
+    }
+
     const pollConfig: PollBallotConfig = { ballotStyle };
     if (ballotStyle === "score" || ballotStyle === "rate-rank") {
       pollConfig.scoreMax = resolveScoreMax({ ballotStyle, scoreMax: input.scoreMax });
@@ -1533,6 +1619,7 @@ export async function createGovernancePollAction(input: {
       ...(pollConfig.scoreMax != null ? { scoreMax: pollConfig.scoreMax } : {}),
       ...(pollConfig.creditsPerVoter != null ? { creditsPerVoter: pollConfig.creditsPerVoter } : {}),
       eligibility: { vote: gateResult.gate },
+      weight: weightResult.weight,
       endDate: endDate.toISOString(),
       createdAt: new Date().toISOString(),
       creatorId: userId,
@@ -1769,10 +1856,15 @@ export async function createGovernanceIssueAction(input: {
  */
 export async function setGovernanceProposeGateAction(input: {
   groupId: string;
-  gate: { kind?: string; badgeId?: string; shareClassId?: string; minShares?: number };
+  gate?: { kind?: string; badgeId?: string; shareClassId?: string; minShares?: number };
+  /** P3 (decision #2): the org's DEFAULT vote weight for new items. */
+  defaultWeight?: { kind?: string; badgeId?: string };
 }): Promise<ActionResult> {
   if (!input.groupId?.trim()) {
     return { success: false, message: "groupId is required", error: { code: "INVALID_INPUT" } };
+  }
+  if (input.gate == null && input.defaultWeight == null) {
+    return { success: false, message: "Nothing to update", error: { code: "INVALID_INPUT" } };
   }
 
   const userId = await resolveAuthenticatedUserId();
@@ -1807,9 +1899,17 @@ export async function setGovernanceProposeGateAction(input: {
       }
 
       try {
-        const gateResult = await sanitizeGateInput(input.groupId, input.gate, DEFAULT_PROPOSE_GATE);
-        if ("error" in gateResult) {
+        const gateResult = input.gate != null
+          ? await sanitizeGateInput(input.groupId, input.gate, DEFAULT_PROPOSE_GATE)
+          : null;
+        if (gateResult && "error" in gateResult) {
           return { success: false, message: gateResult.error, error: { code: "INVALID_INPUT" } };
+        }
+        const weightResult = input.defaultWeight != null
+          ? await sanitizeWeightInput(input.groupId, input.defaultWeight, DEFAULT_WEIGHT_CONFIG)
+          : null;
+        if (weightResult && "error" in weightResult) {
+          return { success: false, message: weightResult.error, error: { code: "INVALID_INPUT" } };
         }
 
         const [group] = await db
@@ -1829,10 +1929,14 @@ export async function setGovernanceProposeGateAction(input: {
           ? (groupMeta.governance as Record<string, unknown>)
           : {};
 
+        const nextGovernance: Record<string, unknown> = { ...governance };
+        if (gateResult && "gate" in gateResult) nextGovernance.proposeGate = gateResult.gate;
+        if (weightResult && "weight" in weightResult) nextGovernance.defaultWeight = weightResult.weight;
+
         await db
           .update(agents)
           .set({
-            metadata: { ...groupMeta, governance: { ...governance, proposeGate: gateResult.gate } },
+            metadata: { ...groupMeta, governance: nextGovernance },
             updatedAt: new Date(),
           })
           .where(and(eq(agents.id, input.groupId), eq(agents.type, "organization"), sql`${agents.deletedAt} IS NULL`));

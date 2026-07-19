@@ -9,6 +9,7 @@ import {
   resolveCreditsPerVoter,
   resolveScoreMax,
   tallyBallots,
+  tallyWeightedBallots,
   validateBallot,
   type Ballot,
   type PollBallotConfig,
@@ -230,5 +231,68 @@ describe("tallyBallots — empty", () => {
       expect(t.options).toHaveLength(3);
       expect(t.options.every((o) => o.value === 0 && o.fraction === 0)).toBe(true);
     }
+  });
+});
+
+describe("tallyWeightedBallots (P3)", () => {
+  const cfg = (style: string, extra: Record<string, unknown> = {}) =>
+    ({ ballotStyle: style, ...extra }) as Parameters<typeof tallyWeightedBallots>[0];
+
+  it("weights multiple-choice counts and fractions by voter weight", () => {
+    const tally = tallyWeightedBallots(cfg("multiple-choice"), ["a", "b"], [
+      { ballot: { style: "multiple-choice", choice: "a" }, weight: 3 },
+      { ballot: { style: "multiple-choice", choice: "b" }, weight: 1 },
+    ]);
+    expect(tally.totalVotes).toBe(2);
+    expect(tally.totalWeight).toBe(4);
+    expect(tally.options.find((o) => o.id === "a")!.value).toBe(3);
+    expect(tally.options.find((o) => o.id === "a")!.fraction).toBeCloseTo(0.75, 5);
+  });
+
+  it("zero-weight ballots participate but move nothing", () => {
+    const tally = tallyWeightedBallots(cfg("multiple-choice"), ["a", "b"], [
+      { ballot: { style: "multiple-choice", choice: "a" }, weight: 0 },
+      { ballot: { style: "multiple-choice", choice: "b" }, weight: 2 },
+    ]);
+    expect(tally.totalVotes).toBe(2);
+    expect(tally.options.find((o) => o.id === "a")!.value).toBe(0);
+    expect(tally.options.find((o) => o.id === "b")!.fraction).toBe(1);
+  });
+
+  it("score becomes a weight-weighted average", () => {
+    const tally = tallyWeightedBallots(cfg("score", { scoreMax: 5 }), ["a"], [
+      { ballot: { style: "score", scores: { a: 5 } }, weight: 3 },
+      { ballot: { style: "score", scores: { a: 1 } }, weight: 1 },
+    ]);
+    // (5×3 + 1×1) / 4 = 4
+    expect(tally.options[0].value).toBe(4);
+  });
+
+  it("ranked IRV majorities are weight majorities", () => {
+    // Two light voters prefer a; one heavy voter prefers b → b wins outright.
+    const tally = tallyWeightedBallots(cfg("ranked"), ["a", "b"], [
+      { ballot: { style: "ranked", ranking: ["a", "b"] }, weight: 1 },
+      { ballot: { style: "ranked", ranking: ["a", "b"] }, weight: 1 },
+      { ballot: { style: "ranked", ranking: ["b", "a"] }, weight: 5 },
+    ]);
+    expect(tally.winnerId).toBe("b");
+  });
+
+  it("quadratic voice scales by weight on top of √credits", () => {
+    const tally = tallyWeightedBallots(cfg("quadratic", { creditsPerVoter: 100 }), ["a"], [
+      { ballot: { style: "quadratic", credits: { a: 100 } }, weight: 2 },
+    ]);
+    // 2 × √100 = 20
+    expect(tally.options[0].value).toBe(20);
+  });
+
+  it("tallyBallots is exactly the all-weights-1 case", () => {
+    const ballots = [
+      { style: "approval", selections: ["a", "b"] },
+      { style: "approval", selections: ["a"] },
+    ] as Parameters<typeof tallyBallots>[2];
+    const unweighted = tallyBallots(cfg("approval"), ["a", "b"], ballots);
+    const weighted = tallyWeightedBallots(cfg("approval"), ["a", "b"], ballots.map((ballot) => ({ ballot, weight: 1 })));
+    expect(unweighted).toEqual(weighted);
   });
 });

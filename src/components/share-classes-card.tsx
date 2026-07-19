@@ -64,6 +64,8 @@ interface ShareClass {
   name: string
   shareCount: number
   netBps: number
+  /** Governance P3: the class's VOTING pie share (independent of netBps). */
+  voteBps: number
   hidden: boolean
   tierKey: string | null
   holders: Holder[]
@@ -177,6 +179,18 @@ export function ShareClassesCard({ groupId, canManage = false }: ShareClassesCar
     void load()
   }
 
+  // Governance P3 (decision #1): the class's voting dimension, authored
+  // independently of the profit netBps.
+  const handleSetVote = async (classId: string, votePct: number) => {
+    if (!Number.isFinite(votePct) || votePct < 0 || votePct > 100) return
+    const res = await setShareClassAllocationAction(groupId, classId, { voteBps: Math.round(votePct * 100) })
+    if (!res.success) {
+      toast({ title: "Could not update vote %", description: res.error, variant: "destructive" })
+      return
+    }
+    void load()
+  }
+
   const hasAnything = myHoldings.length > 0 || (canManage && classes.length > 0)
 
   return (
@@ -270,6 +284,19 @@ export function ShareClassesCard({ groupId, canManage = false }: ShareClassesCar
                             onBlur={(e) => {
                               const v = Number.parseFloat(e.target.value)
                               if (Math.round(v * 100) !== c.netBps) void handleSetNet(c.id, v)
+                            }}
+                          />
+                          <Label className="text-xs text-muted-foreground">vote %</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step="0.01"
+                            defaultValue={(c.voteBps / 100).toString()}
+                            className="h-8 w-24"
+                            onBlur={(e) => {
+                              const v = Number.parseFloat(e.target.value)
+                              if (Math.round(v * 100) !== c.voteBps) void handleSetVote(c.id, v)
                             }}
                           />
                         </div>

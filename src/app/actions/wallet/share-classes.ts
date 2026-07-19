@@ -80,6 +80,7 @@ export async function getOrgShareClasses(orgId: string): Promise<ShareClassRow[]
       name: r.name,
       shareCount: isIntInRange(m.shareCount, 0, Number.MAX_SAFE_INTEGER) ? (m.shareCount as number) : 0,
       netBps: isIntInRange(m.netBps, 0, FULL_PIE_BPS) ? (m.netBps as number) : 0,
+      voteBps: isIntInRange(m.voteBps, 0, FULL_PIE_BPS) ? (m.voteBps as number) : 0,
       hidden: m.hidden === true,
       tierKey: typeof m.tierKey === 'string' ? (m.tierKey as string) : null,
     };
@@ -120,6 +121,14 @@ async function sumShareClassBps(orgId: string, excludeClassId?: string): Promise
   return classes
     .filter((c) => c.id !== excludeClassId)
     .reduce((sum, c) => sum + c.netBps, 0);
+}
+
+/** Σ voteBps across the org's OTHER classes (P3 pie guard, mirrors netBps). */
+async function sumShareClassVoteBps(orgId: string, excludeClassId?: string): Promise<number> {
+  const classes = await getOrgShareClasses(orgId);
+  return classes
+    .filter((c) => c.id !== excludeClassId)
+    .reduce((sum, c) => sum + c.voteBps, 0);
 }
 
 /**
@@ -272,13 +281,19 @@ export async function createShareClassAction(
 export async function setShareClassAllocationAction(
   orgId: string,
   classId: string,
-  updates: { shareCount?: number; netBps?: number },
+  updates: { shareCount?: number; netBps?: number; voteBps?: number },
 ): Promise<{ success: boolean; error?: string }> {
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, error: 'You must be logged in.' };
   if (!isUuid(orgId) || !isUuid(classId)) return { success: false, error: 'Invalid ids.' };
-  if (updates.shareCount === undefined && updates.netBps === undefined) {
+  if (updates.shareCount === undefined && updates.netBps === undefined && updates.voteBps === undefined) {
     return { success: false, error: 'Nothing to update.' };
+  }
+  // Governance P3 (decision #1): voteBps is the class's VOTING dimension,
+  // independent of the profit netBps — a class may carry economic cut,
+  // governance weight, or both. Same 0..100% pie constraint across classes.
+  if (updates.voteBps !== undefined && !isIntInRange(updates.voteBps, 0, FULL_PIE_BPS)) {
+    return { success: false, error: 'Vote % must be between 0 and 100.' };
   }
   if (updates.shareCount !== undefined && !isIntInRange(updates.shareCount, 0, Number.MAX_SAFE_INTEGER)) {
     return { success: false, error: 'Share count must be a non-negative whole number.' };
@@ -311,10 +326,21 @@ export async function setShareClassAllocationAction(
     }
   }
 
+  if (updates.voteBps !== undefined) {
+    const otherVoteBps = await sumShareClassVoteBps(orgId, classId);
+    if (otherVoteBps + updates.voteBps > FULL_PIE_BPS) {
+      return {
+        success: false,
+        error: `Vote % over-allocates: other share classes hold ${(otherVoteBps / 100).toFixed(2)}%, leaving ${((FULL_PIE_BPS - otherVoteBps) / 100).toFixed(2)}%.`,
+      };
+    }
+  }
+
   const nextMeta = {
     ...m,
     ...(updates.shareCount !== undefined ? { shareCount: updates.shareCount } : {}),
     ...(updates.netBps !== undefined ? { netBps: updates.netBps } : {}),
+    ...(updates.voteBps !== undefined ? { voteBps: updates.voteBps } : {}),
   };
   await db.update(agents).set({ metadata: nextMeta, updatedAt: new Date() }).where(eq(agents.id, classId));
   revalidatePath(`/groups/${orgId}`);

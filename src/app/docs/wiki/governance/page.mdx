@@ -55,6 +55,29 @@ the Voice tab:
   in `castGovernanceVoteAction`, which is also rate-limited (one active vote
   per voter per item; re-voting supersedes the prior vote).
 
+## Weights, resolution & the board (P3/P4)
+
+- **Vote weight** — each poll/proposal carries a weight function chosen at
+  creation (org default in Governance Settings, ships as **equal** 1p1v):
+  **stake** (task points earned across the org subtree — the same weights
+  net-distribution pays by), **voting shares** (share-class `vote %`, a
+  governance dimension authored independently of the profit `net %` in the
+  Shares card), or **badge weight** (the governance badge's voting weight).
+  A voter's weight is resolved server-side when they cast and FROZEN onto the
+  vote, so later stake/share changes never rewrite past tallies; re-voting
+  refreshes it. Zero-weight votes count toward participation (quorum) but
+  move no bars. Cards show a weight chip and "your weight".
+- **Quorum & phases** — proposals may set a quorum (minimum RAW voters —
+  weights never inflate it). When an item's window closes it becomes
+  **Closed**; voting locks and finalization opens.
+- **Board & finalization (record-only)** — admins seat a board
+  (Chair/Treasurer/Secretary/Director) in Governance Settings. A closed
+  decision is **finalized when 2/3 of current board-role holders approve**;
+  the outcome (passed/failed over the weighted yes/(yes+no) pool with
+  abstains excluded, or the poll winner) is then RECORDED on the card.
+  Nothing executes automatically — people enact the decided change by hand
+  via the existing treasury/capability rails.
+
 ## Cross-links
 
 - Wiki: [Groups & subgroups](/docs/wiki/groups) · [Badges & stake](/docs/wiki/badges-stake) · [Projects & jobs](/docs/wiki/projects-jobs)
