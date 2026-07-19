@@ -21,7 +21,7 @@ export async function boardRoleHolders(groupId: string): Promise<Map<string, str
       AND verb IN ('join', 'belong')
       AND is_active = true
       AND metadata->>'boardRole' IS NOT NULL
-    ORDER BY subject_id, created_at DESC
+    ORDER BY subject_id, timestamp DESC
   `)) as Array<Record<string, unknown>>;
   const holders = new Map<string, string>();
   for (const row of rows) {
