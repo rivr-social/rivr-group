@@ -35,6 +35,13 @@ import {
   DEFAULT_SCORE_MAX,
   type BallotStyle,
 } from "@/lib/governance-ballot"
+import {
+  EMPTY_GATE_OPTIONS,
+  GovernanceEligibilityPicker,
+  draftToGateInput,
+  makeGateDraft,
+  type GovernanceGateOptions,
+} from "@/components/governance-eligibility-picker"
 
 interface CreatePollModalProps {
   isOpen: boolean
@@ -47,7 +54,10 @@ interface CreatePollModalProps {
     ballotStyle: BallotStyle
     scoreMax?: number
     creditsPerVoter?: number
+    voteEligibility?: { kind: string; badgeId?: string; shareClassId?: string; minShares?: number }
   }) => void
+  /** P2: the group's badges/share classes the eligibility picker offers. */
+  gateOptions?: GovernanceGateOptions
 }
 
 /** Minimum number of options a poll must have to be valid. */
@@ -65,7 +75,7 @@ const DEFAULT_OPTION_ROWS = 2
  * @param props.onClose - Called when the user cancels/closes the modal.
  * @param props.onSubmit - Called with poll question, description, options, and duration.
  */
-export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalProps) {
+export function CreatePollModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY_GATE_OPTIONS }: CreatePollModalProps) {
   const [question, setQuestion] = useState("")
   const [description, setDescription] = useState("")
   const [options, setOptions] = useState<string[]>(Array(DEFAULT_OPTION_ROWS).fill(""))
@@ -73,6 +83,7 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
   const [ballotStyle, setBallotStyle] = useState<BallotStyle>(DEFAULT_BALLOT_STYLE)
   const [scoreMax, setScoreMax] = useState(String(DEFAULT_SCORE_MAX))
   const [creditsPerVoter, setCreditsPerVoter] = useState(String(DEFAULT_CREDITS_PER_VOTER))
+  const [voteGate, setVoteGate] = useState(makeGateDraft())
 
   const filledOptions = options.map((o) => o.trim()).filter((o) => o.length > 0)
   const canSubmit = question.trim().length > 0 && filledOptions.length >= MIN_POLL_OPTIONS
@@ -85,6 +96,7 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
     setBallotStyle(DEFAULT_BALLOT_STYLE)
     setScoreMax(String(DEFAULT_SCORE_MAX))
     setCreditsPerVoter(String(DEFAULT_CREDITS_PER_VOTER))
+    setVoteGate(makeGateDraft())
   }
 
   const handleOptionChange = (index: number, value: string) => {
@@ -113,6 +125,7 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
           : undefined,
       creditsPerVoter:
         ballotStyle === "quadratic" ? Number.parseInt(creditsPerVoter) || DEFAULT_CREDITS_PER_VOTER : undefined,
+      voteEligibility: draftToGateInput(voteGate),
     })
     onClose()
     resetForm()
@@ -232,6 +245,14 @@ export function CreatePollModal({ isOpen, onClose, onSubmit }: CreatePollModalPr
               </p>
             </div>
           )}
+
+          <GovernanceEligibilityPicker
+            label="Who can vote"
+            value={voteGate}
+            onChange={setVoteGate}
+            options={gateOptions}
+            idPrefix="poll-eligibility"
+          />
 
           <div className="space-y-2">
             <Label htmlFor="poll-duration">Duration (days)</Label>

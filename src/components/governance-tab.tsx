@@ -24,12 +24,23 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 
+import { Settings } from "lucide-react"
+
 import { VotingModal, type VotePayload } from "./voting-modal"
 import { CreateProposalModal } from "./create-proposal-modal"
 import { CreatePollModal } from "./create-poll-modal"
+import {
+  EMPTY_GATE_OPTIONS,
+  GovernanceEligibilityPicker,
+  draftToGateInput,
+  makeGateDraft,
+  type EligibilityGateDraft,
+  type GovernanceGateOptions,
+} from "./governance-eligibility-picker"
 import type { Poll, Proposal } from "@/lib/types"
 import { BALLOT_STYLE_LABELS, DEFAULT_BALLOT_STYLE, isBallotStyle, type BallotStyle } from "@/lib/governance-ballot"
-import { castGovernanceVoteAction, createGovernanceIssueAction, createGovernancePollAction, createGovernanceProposalAction } from "@/app/actions/create-resources"
+import { DEFAULT_MIN_SHARES, isEligibilityKind, type EligibilityGate } from "@/lib/governance-eligibility"
+import { castGovernanceVoteAction, createGovernanceIssueAction, createGovernancePollAction, createGovernanceProposalAction, setGovernanceProposeGateAction } from "@/app/actions/create-resources"
 import { useToast } from "@/components/ui/use-toast"
 
 /** Minimal issue shape derived from group metadata. */
@@ -54,6 +65,27 @@ interface GovernanceTabProps {
   polls?: Poll[]
   /** Proposals extracted from group metadata, defaults to empty */
   proposals?: Proposal[]
+  /** P2: whether the viewer may create governance items (server-computed;
+   *  defaults to true so legacy call sites keep the buttons — the server
+   *  still enforces). */
+  canPropose?: boolean
+  /** P2: whether the viewer is a group admin (shows the settings gear). */
+  isAdmin?: boolean
+  /** P2: the group's current propose gate (seeds the settings dialog). */
+  proposeGate?: EligibilityGate
+  /** P2: badges/share classes offered by the eligibility pickers. */
+  gateOptions?: GovernanceGateOptions
+}
+
+/** Seed the settings dialog's draft from the stored propose gate. */
+function draftFromGate(gate?: EligibilityGate): EligibilityGateDraft {
+  if (!gate || !isEligibilityKind(gate.kind)) return makeGateDraft("admin")
+  return {
+    kind: gate.kind,
+    badgeId: gate.badgeId ?? "",
+    shareClassId: gate.shareClassId ?? "",
+    minShares: String(gate.minShares ?? DEFAULT_MIN_SHARES),
+  }
 }
 
 /**
@@ -68,7 +100,16 @@ interface GovernanceTabProps {
  * @param {Poll[]} props.polls - Polls from group metadata
  * @param {Proposal[]} props.proposals - Proposals from group metadata
  */
-export function GovernanceTab({ groupId, issues = [], polls = [], proposals = [] }: GovernanceTabProps) {
+export function GovernanceTab({
+  groupId,
+  issues = [],
+  polls = [],
+  proposals = [],
+  canPropose = true,
+  isAdmin = false,
+  proposeGate,
+  gateOptions = EMPTY_GATE_OPTIONS,
+}: GovernanceTabProps) {
   const router = useRouter()
   /** Tracks which governance sub-tab is active: "issues" (issues & polls) or "proposals" */
   const [activeTab, setActiveTab] = useState("issues")
@@ -92,6 +133,9 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
   const [createIssueModal, setCreateIssueModal] = useState(false)
   const [issueTitle, setIssueTitle] = useState("")
   const [issueDescription, setIssueDescription] = useState("")
+  /** P2 admin governance settings (who can propose). */
+  const [settingsModal, setSettingsModal] = useState(false)
+  const [proposeGateDraft, setProposeGateDraft] = useState<EligibilityGateDraft>(() => draftFromGate(proposeGate))
 
   const [, startTransition] = useTransition()
   const { toast } = useToast()
@@ -127,7 +171,13 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
    * Handles creating a new governance proposal.
    * Persists the proposal via the proposal creation server action and closes the modal on success.
    */
-  const handleCreateProposal = (proposalData: { title: string; description: string; threshold: number; duration: number }) => {
+  const handleCreateProposal = (proposalData: {
+    title: string
+    description: string
+    threshold: number
+    duration: number
+    voteEligibility?: { kind: string; badgeId?: string; shareClassId?: string; minShares?: number }
+  }) => {
     startTransition(async () => {
       const result = await createGovernanceProposalAction({ groupId, ...proposalData })
       if (result.success) {
@@ -169,6 +219,7 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
     ballotStyle: BallotStyle
     scoreMax?: number
     creditsPerVoter?: number
+    voteEligibility?: { kind: string; badgeId?: string; shareClassId?: string; minShares?: number }
   }) => {
     startTransition(async () => {
       const result = await createGovernancePollAction({ groupId, ...pollData })
@@ -236,16 +287,50 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
     })
   }
 
+  /** P2: persist the admin-authored propose gate. */
+  const handleSaveGovernanceSettings = () => {
+    startTransition(async () => {
+      const result = await setGovernanceProposeGateAction({
+        groupId,
+        gate: draftToGateInput(proposeGateDraft),
+      })
+      if (result.success) {
+        toast({ title: "Governance settings saved", description: "Propose authority updated." })
+        setSettingsModal(false)
+        router.refresh()
+      } else {
+        toast({ title: "Save failed", description: result.message, variant: "destructive" })
+      }
+    })
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold">Voice</h2>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setCreateIssueModal(true)}>Create Issue</Button>
-          <Button variant="outline" onClick={() => setCreatePollModal(true)}>Create Poll</Button>
-          <Button variant="default" onClick={() => setCreateProposalModal(true)}>
-            Create Proposal
-          </Button>
+          {canPropose && (
+            <>
+              <Button variant="outline" onClick={() => setCreateIssueModal(true)}>Create Issue</Button>
+              <Button variant="outline" onClick={() => setCreatePollModal(true)}>Create Poll</Button>
+              <Button variant="default" onClick={() => setCreateProposalModal(true)}>
+                Create Proposal
+              </Button>
+            </>
+          )}
+          {isAdmin && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Governance settings"
+              onClick={() => {
+                setProposeGateDraft(draftFromGate(proposeGate))
+                setSettingsModal(true)
+              }}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -315,9 +400,16 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
                 <CardHeader className="pb-2">
                   <div className="flex justify-between items-start gap-2">
                     <CardTitle className="text-lg">{poll.question}</CardTitle>
-                    <Badge variant="outline" className="text-xs shrink-0">
-                      {BALLOT_STYLE_LABELS[pollStyle]}
-                    </Badge>
+                    <div className="flex gap-1 shrink-0">
+                      {poll.eligibilityLabel && (
+                        <Badge variant="secondary" className="text-xs">
+                          {poll.eligibilityLabel}
+                        </Badge>
+                      )}
+                      <Badge variant="outline" className="text-xs">
+                        {BALLOT_STYLE_LABELS[pollStyle]}
+                      </Badge>
+                    </div>
                   </div>
                   <CardDescription>
                     Created by {poll.creator.name} • Ends {new Date(poll.endDate).toLocaleDateString()}
@@ -357,13 +449,19 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
                 </CardContent>
                 <CardFooter className="flex justify-between pt-2">
                   <div className="text-sm text-gray-500">{poll.totalVotes} votes</div>
-                  <Button
-                    variant={poll.userVoted ? "outline" : "default"}
-                    size="sm"
-                    onClick={() => setVotingModal({ isOpen: true, item: poll, type: "poll" })}
-                  >
-                    {poll.userVoted ? "Change Vote" : "Vote"}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {poll.viewerCanVote === false && poll.viewerVoteReason && (
+                      <span className="text-xs text-muted-foreground">{poll.viewerVoteReason}</span>
+                    )}
+                    <Button
+                      variant={poll.userVoted ? "outline" : "default"}
+                      size="sm"
+                      disabled={poll.viewerCanVote === false}
+                      onClick={() => setVotingModal({ isOpen: true, item: poll, type: "poll" })}
+                    >
+                      {poll.userVoted ? "Change Vote" : "Vote"}
+                    </Button>
+                  </div>
                 </CardFooter>
               </Card>
               )
@@ -384,11 +482,18 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
             {proposalItems.map((proposal) => (
               <Card key={proposal.id}>
                 <CardHeader className="pb-2">
-                  <div className="flex justify-between items-start">
+                  <div className="flex justify-between items-start gap-2">
                     <CardTitle className="text-lg">{proposal.title}</CardTitle>
-                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                      {proposal.status}
-                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {proposal.eligibilityLabel && (
+                        <Badge variant="secondary" className="text-xs">
+                          {proposal.eligibilityLabel}
+                        </Badge>
+                      )}
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        {proposal.status}
+                      </span>
+                    </div>
                   </div>
                   <CardDescription>
                     Created by {proposal.creator.name} • Ends {new Date(proposal.endDate).toLocaleDateString()}
@@ -445,13 +550,19 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
                   <div className="text-sm text-gray-500">
                     {proposal.comments} comments • Threshold: {proposal.threshold}%
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setVotingModal({ isOpen: true, item: proposal, type: "proposal" })}
-                  >
-                    Vote
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {proposal.viewerCanVote === false && proposal.viewerVoteReason && (
+                      <span className="text-xs text-muted-foreground">{proposal.viewerVoteReason}</span>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={proposal.viewerCanVote === false}
+                      onClick={() => setVotingModal({ isOpen: true, item: proposal, type: "proposal" })}
+                    >
+                      Vote
+                    </Button>
+                  </div>
                 </CardFooter>
               </Card>
             ))}
@@ -479,13 +590,36 @@ export function GovernanceTab({ groupId, issues = [], polls = [], proposals = []
         isOpen={createProposalModal}
         onClose={() => setCreateProposalModal(false)}
         onSubmit={handleCreateProposal}
+        gateOptions={gateOptions}
       />
 
       <CreatePollModal
         isOpen={createPollModal}
         onClose={() => setCreatePollModal(false)}
         onSubmit={handleCreatePoll}
+        gateOptions={gateOptions}
       />
+
+      <Dialog open={settingsModal} onOpenChange={setSettingsModal}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Governance Settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <GovernanceEligibilityPicker
+              label="Who can propose"
+              value={proposeGateDraft}
+              onChange={setProposeGateDraft}
+              options={gateOptions}
+              idPrefix="governance-propose"
+            />
+            <p className="text-xs text-muted-foreground">
+              Admins can always create polls, proposals, and issues — this setting widens that authority.
+            </p>
+            <Button onClick={handleSaveGovernanceSettings}>Save</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={createIssueModal} onOpenChange={setCreateIssueModal}>
         <DialogContent>

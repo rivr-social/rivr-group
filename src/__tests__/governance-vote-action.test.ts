@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   resolveAuthenticatedUserId: vi.fn(),
   hasGroupWriteAccess: vi.fn(),
   isGroupMember: vi.fn(),
+  evaluateGate: vi.fn(),
+  listGovernanceBadges: vi.fn(),
+  getOrgShareClasses: vi.fn(),
   rateLimit: vi.fn(),
   updateFacadeExecute: vi.fn(async (_request: unknown, applyLocal: () => Promise<unknown>) => ({
     success: true,
@@ -84,6 +87,19 @@ vi.mock("@/app/actions/resource-creation/helpers", () => ({
   hasGroupWriteAccess: mocks.hasGroupWriteAccess,
 }));
 
+// P2: the vote path enforces the item's eligibility gate through the server
+// resolver; tests control the verdict directly.
+vi.mock("@/lib/governance-eligibility.server", () => ({
+  evaluateGovernanceGateForUser: mocks.evaluateGate,
+  evaluateGovernanceGatesForUser: vi.fn(),
+  resolveGovernanceEligibilityFacts: vi.fn(),
+  listGovernanceBadges: mocks.listGovernanceBadges,
+  listGovernanceGateOptions: vi.fn(),
+}));
+vi.mock("@/app/actions/wallet/share-classes", () => ({
+  getOrgShareClasses: mocks.getOrgShareClasses,
+}));
+
 import { castGovernanceVoteAction } from "@/app/actions/resource-creation/groups";
 
 const GROUP_ID = "11111111-1111-1111-1111-111111111111";
@@ -120,6 +136,10 @@ describe("castGovernanceVoteAction", () => {
     vi.clearAllMocks();
     mocks.resolveAuthenticatedUserId.mockResolvedValue(USER_ID);
     mocks.rateLimit.mockResolvedValue({ success: true });
+    // P2 default: the viewer passes the item's vote gate.
+    mocks.evaluateGate.mockResolvedValue({ eligible: true });
+    mocks.listGovernanceBadges.mockResolvedValue([]);
+    mocks.getOrgShareClasses.mockResolvedValue([]);
     mocks.updateFacadeExecute.mockImplementation(async (_request: unknown, applyLocal: () => Promise<unknown>) => ({
       success: true,
       data: await applyLocal(),
@@ -130,8 +150,12 @@ describe("castGovernanceVoteAction", () => {
     mocks.dbUpdate.mockReturnValue({ set: mocks.updateSet });
   });
 
-  it("rejects non-members before writing a governance vote", async () => {
-    mocks.isGroupMember.mockResolvedValue({ isMember: false });
+  it("rejects an ineligible voter before writing (default members-only gate)", async () => {
+    queueSelect([{ metadata: { proposals: [{ id: "proposal-1", votes: { yes: 0, no: 0, abstain: 0 } }] } }]);
+    mocks.evaluateGate.mockResolvedValue({
+      eligible: false,
+      reason: "Only group members can vote on this item.",
+    });
 
     const result = await castGovernanceVoteAction({
       groupId: GROUP_ID,
@@ -141,12 +165,50 @@ describe("castGovernanceVoteAction", () => {
     });
 
     expect(result).toMatchObject({ success: false, error: { code: "FORBIDDEN" } });
+    expect(result.message).toBe("Only group members can vote on this item.");
+    // A legacy item (no eligibility field) evaluates the DEFAULT member gate.
+    expect(mocks.evaluateGate).toHaveBeenCalledWith(USER_ID, GROUP_ID, { kind: "member" });
     expect(mocks.dbExecute).not.toHaveBeenCalled();
     expect(mocks.dbInsert).not.toHaveBeenCalled();
   });
 
+  it("enforces a stored badge-holder gate and surfaces its reason", async () => {
+    queueSelect([
+      {
+        metadata: {
+          polls: [
+            {
+              id: "poll-1",
+              options: [{ id: "opt-a", votes: 0 }, { id: "opt-b", votes: 0 }],
+              totalVotes: 0,
+              eligibility: { vote: { kind: "badge-holder", badgeId: "badge-9" } },
+            },
+          ],
+        },
+      },
+    ]);
+    mocks.evaluateGate.mockResolvedValue({
+      eligible: false,
+      reason: "Only governance badge holders can vote on this item.",
+    });
+
+    const result = await castGovernanceVoteAction({
+      groupId: GROUP_ID,
+      targetId: "poll-1",
+      targetType: "poll",
+      vote: "opt-a",
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: "FORBIDDEN" } });
+    expect(result.message).toBe("Only governance badge holders can vote on this item.");
+    expect(mocks.evaluateGate).toHaveBeenCalledWith(USER_ID, GROUP_ID, {
+      kind: "badge-holder",
+      badgeId: "badge-9",
+    });
+    expect(mocks.dbInsert).not.toHaveBeenCalled();
+  });
+
   it("rejects governance target ids that are not attached to the group", async () => {
-    mocks.isGroupMember.mockResolvedValue({ isMember: true });
     queueSelect([{ metadata: { proposals: [{ id: "proposal-other" }] } }]);
 
     const result = await castGovernanceVoteAction({
@@ -162,7 +224,6 @@ describe("castGovernanceVoteAction", () => {
   });
 
   it("recomputes a proposal's yes/no/abstain tally from active ledger rows", async () => {
-    mocks.isGroupMember.mockResolvedValue({ isMember: true });
     queueSelect(
       // group lookup
       [{ metadata: { proposals: [{ id: "proposal-1", title: "Adopt", votes: { yes: 0, no: 0, abstain: 0 } }] } }],
@@ -185,7 +246,6 @@ describe("castGovernanceVoteAction", () => {
   });
 
   it("recomputes a poll's per-option votes and totalVotes by option id", async () => {
-    mocks.isGroupMember.mockResolvedValue({ isMember: true });
     queueSelect(
       [{ metadata: { polls: [{ id: "poll-1", question: "Lunch?", options: [{ id: "opt-a", votes: 0 }, { id: "opt-b", votes: 0 }], totalVotes: 0 }] } }],
       // active rows: 3 for opt-a, 1 for opt-b
@@ -210,7 +270,6 @@ describe("castGovernanceVoteAction", () => {
   });
 
   it("validates + tallies a P1 approval-ballot poll and writes back poll.tally", async () => {
-    mocks.isGroupMember.mockResolvedValue({ isMember: true });
     queueSelect(
       // group lookup: an approval-style poll with two options
       [
@@ -252,7 +311,6 @@ describe("castGovernanceVoteAction", () => {
   });
 
   it("rejects an over-budget quadratic ballot before writing", async () => {
-    mocks.isGroupMember.mockResolvedValue({ isMember: true });
     queueSelect([
       {
         metadata: {
@@ -284,7 +342,6 @@ describe("castGovernanceVoteAction", () => {
   it("does not double-count a changed vote (re-vote recompute)", async () => {
     // The user previously voted yes; they now vote no. The prior row is
     // deactivated, so the active-rows recompute sees only the single 'no'.
-    mocks.isGroupMember.mockResolvedValue({ isMember: true });
     queueSelect(
       [{ metadata: { proposals: [{ id: "proposal-1", votes: { yes: 1, no: 0, abstain: 0 } }] } }],
       [{ vote: "no" }],

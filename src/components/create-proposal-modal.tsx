@@ -20,11 +20,26 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import {
+  EMPTY_GATE_OPTIONS,
+  GovernanceEligibilityPicker,
+  draftToGateInput,
+  makeGateDraft,
+  type GovernanceGateOptions,
+} from "@/components/governance-eligibility-picker"
 
 interface CreateProposalModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (proposalData: { title: string; description: string; threshold: number; duration: number }) => void
+  onSubmit: (proposalData: {
+    title: string
+    description: string
+    threshold: number
+    duration: number
+    voteEligibility?: { kind: string; badgeId?: string; shareClassId?: string; minShares?: number }
+  }) => void
+  /** P2: the group's badges/share classes the eligibility picker offers. */
+  gateOptions?: GovernanceGateOptions
 }
 
 /**
@@ -35,12 +50,13 @@ interface CreateProposalModalProps {
  * @param props.onClose - Called when the user cancels/closes the modal.
  * @param props.onSubmit - Called with proposal title, description, threshold, and duration.
  */
-export function CreateProposalModal({ isOpen, onClose, onSubmit }: CreateProposalModalProps) {
+export function CreateProposalModal({ isOpen, onClose, onSubmit, gateOptions = EMPTY_GATE_OPTIONS }: CreateProposalModalProps) {
   // Local controlled-input state for proposal form fields.
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [threshold, setThreshold] = useState("66")
   const [duration, setDuration] = useState("7")
+  const [voteGate, setVoteGate] = useState(makeGateDraft())
 
   // Submit handler validates required fields, normalizes numeric strings, and resets local form state.
   const handleSubmit = () => {
@@ -51,6 +67,7 @@ export function CreateProposalModal({ isOpen, onClose, onSubmit }: CreateProposa
         description,
         threshold: Number.parseInt(threshold),
         duration: Number.parseInt(duration),
+        voteEligibility: draftToGateInput(voteGate),
       })
       // Side effect: close modal after successful submission.
       onClose()
@@ -59,6 +76,7 @@ export function CreateProposalModal({ isOpen, onClose, onSubmit }: CreateProposa
       setDescription("")
       setThreshold("66")
       setDuration("7")
+      setVoteGate(makeGateDraft())
     }
   }
 
@@ -117,6 +135,14 @@ export function CreateProposalModal({ isOpen, onClose, onSubmit }: CreateProposa
               />
             </div>
           </div>
+
+          <GovernanceEligibilityPicker
+            label="Who can vote"
+            value={voteGate}
+            onChange={setVoteGate}
+            options={gateOptions}
+            idPrefix="proposal-eligibility"
+          />
         </div>
 
         <DialogFooter>

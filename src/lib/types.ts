@@ -1005,6 +1005,12 @@ export type Poll = {
   creditsPerVoter?: number
   /** Recomputed per-style results (bars/labels/winner). */
   tally?: PollTally
+  /** P2 eligibility chip label (server-resolved, e.g. "Badge holders — Land Steward"). */
+  eligibilityLabel?: string
+  /** P2: whether the VIEWER may vote (server-computed; undefined = unknown → allow the attempt). */
+  viewerCanVote?: boolean
+  /** P2: human reason when the viewer may not vote. */
+  viewerVoteReason?: string
 }
 
 /** Governance proposal record with quorum/threshold voting configuration. */
@@ -1027,6 +1033,12 @@ export type Proposal = {
   tags?: string[]
   groupId: string
   userVote?: VoteType
+  /** P2 eligibility chip label (server-resolved). */
+  eligibilityLabel?: string
+  /** P2: whether the VIEWER may vote (server-computed; undefined = unknown → allow the attempt). */
+  viewerCanVote?: boolean
+  /** P2: human reason when the viewer may not vote. */
+  viewerVoteReason?: string
 }
 
 /** Member stake and contribution metrics used for group profit-share calculations. */
