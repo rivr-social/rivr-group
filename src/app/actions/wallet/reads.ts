@@ -474,3 +474,65 @@ export async function getMyTicketPurchasesAction(): Promise<{
     return { success: false, error: 'Unable to load ticket purchases.' };
   }
 }
+
+/**
+ * The viewer's group-membership dues payments — the member's own record of
+ * each dues charge, written by the subscription webhook as a wallet
+ * transaction (`metadata.source = 'group_membership_dues'`; one per billing
+ * cycle). Surfaces them under profile Purchases alongside tickets — dues are
+ * a purchase-shaped record with NO backing listing resource, so they can't
+ * ride the marketplace ReceiptCard rail.
+ */
+export async function getMyDuesPaymentsAction(): Promise<{
+  success: boolean;
+  payments?: Array<{
+    transactionId: string;
+    groupId?: string;
+    groupName: string;
+    amountCents: number;
+    feeCents: number;
+    totalDollars: number;
+    paidAt: string;
+  }>;
+  error?: string;
+}> {
+  const agentId = await getCurrentUserId();
+  if (!agentId) {
+    return { success: false, error: 'You must be logged in to view dues payments.' };
+  }
+
+  try {
+    const rows = await db.execute(sql`
+      SELECT
+        wt.id AS transaction_id,
+        wt.reference_id AS group_id,
+        coalesce(grp.name, wt.description, 'Membership dues') AS group_name,
+        wt.amount_cents,
+        wt.fee_cents,
+        wt.created_at
+      FROM wallet_transactions wt
+      JOIN wallets w ON w.id = wt.from_wallet_id AND w.owner_id = ${agentId}::uuid
+      LEFT JOIN agents grp ON grp.id = wt.reference_id
+      WHERE wt.status = 'completed'
+        AND wt.metadata->>'source' = 'group_membership_dues'
+      ORDER BY wt.created_at DESC
+      LIMIT 200
+    `);
+
+    const payments = (rows as Array<Record<string, unknown>>).map((row) => ({
+      transactionId: String(row.transaction_id),
+      groupId: typeof row.group_id === 'string' && row.group_id ? String(row.group_id) : undefined,
+      groupName: String(row.group_name ?? 'Membership dues'),
+      amountCents: Number(row.amount_cents ?? 0),
+      feeCents: Number(row.fee_cents ?? 0),
+      totalDollars: Number(row.amount_cents ?? 0) / 100,
+      paidAt: new Date(String(row.created_at)).toISOString(),
+    }));
+
+    return { success: true, payments };
+  } catch (error) {
+    console.error('getMyDuesPaymentsAction failed:', error);
+    return { success: false, error: 'Unable to load dues payments.' };
+  }
+}
+

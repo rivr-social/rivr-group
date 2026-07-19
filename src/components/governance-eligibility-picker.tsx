@@ -14,6 +14,7 @@ import {
   DEFAULT_MIN_SHARES,
   ELIGIBILITY_KINDS,
   ELIGIBILITY_KIND_DESCRIPTIONS,
+  ELIGIBILITY_KIND_PROPOSE_DESCRIPTIONS,
   ELIGIBILITY_KIND_LABELS,
   type EligibilityKind,
 } from "@/lib/governance-eligibility"
@@ -68,6 +69,8 @@ interface GovernanceEligibilityPickerProps {
   options: GovernanceGateOptions
   /** Stable id prefix for the form controls. */
   idPrefix: string
+  /** Phrases the helper text: "vote" (default) or "propose". */
+  context?: "vote" | "propose"
 }
 
 export function GovernanceEligibilityPicker({
@@ -76,7 +79,10 @@ export function GovernanceEligibilityPicker({
   onChange,
   options,
   idPrefix,
+  context = "vote",
 }: GovernanceEligibilityPickerProps) {
+  const descriptions =
+    context === "propose" ? ELIGIBILITY_KIND_PROPOSE_DESCRIPTIONS : ELIGIBILITY_KIND_DESCRIPTIONS
   return (
     <div className="space-y-2">
       <Label htmlFor={`${idPrefix}-kind`}>{label}</Label>
@@ -102,7 +108,7 @@ export function GovernanceEligibilityPicker({
           ))}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">{ELIGIBILITY_KIND_DESCRIPTIONS[value.kind]}</p>
+      <p className="text-xs text-muted-foreground">{descriptions[value.kind]}</p>
 
       {value.kind === "badge-holder" && options.badges.length > 0 && (
         <div className="space-y-1">

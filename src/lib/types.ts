@@ -384,6 +384,12 @@ export type GroupTabKey = (typeof GROUP_TAB_KEYS)[number]
  * About, Feed, Events, Members, and Press publicly; every other tab is
  * admin-only until an admin opts to expose it.
  */
+// Org-grade tabs default to MEMBERS visibility (2026-07-19): their surfaces
+// are member acts with server-side enforcement behind them (members-only
+// voting, membership-gated job claims, member share/stake views), so an
+// admin-only default silently hid members' own surfaces on every group
+// whose admin never touched tab settings. Explicit per-group tabVisibility
+// always overrides; admins can still tighten any tab to admin/hidden.
 export const DEFAULT_TAB_VISIBILITY: Record<GroupTabKey, TabVisibilityLevel> = {
   about: "public",
   feed: "public",
@@ -392,14 +398,14 @@ export const DEFAULT_TAB_VISIBILITY: Record<GroupTabKey, TabVisibilityLevel> = {
   press: "public",
   gallery: "public",
   stock: "public",
-  groups: "admin",
-  documents: "admin",
-  jobs: "admin",
-  marketplace: "admin",
-  governance: "admin",
-  badges: "admin",
-  stake: "admin",
-  treasury: "admin",
+  groups: "members",
+  documents: "members",
+  jobs: "members",
+  marketplace: "members",
+  governance: "members",
+  badges: "members",
+  stake: "members",
+  treasury: "members",
 }
 
 /**

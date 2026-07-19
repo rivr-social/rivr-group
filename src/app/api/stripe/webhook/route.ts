@@ -35,6 +35,7 @@ import { grantGroupMembership, revokeGroupMembership } from '@/lib/group-subscri
 import {
   confirmDeposit,
   failDeposit,
+  getOrCreateWallet,
   getPlatformWallet,
   getPlatformWalletOrNull,
   getSettlementWalletForAgent,
@@ -1382,9 +1383,115 @@ async function handleGroupSubscriptionUpsert(stripeSub: Stripe.Subscription) {
         periodStartUnix,
       });
     }
+
+    // The paying member's own record of the dues charge. Rail-independent (a
+    // member pays dues whether the group settles via connect or platform
+    // capital). Non-fatal + idempotent: a bookkeeping failure here must not
+    // 500 the webhook and unwind the already-committed membership grant and
+    // group-side settlement, and Stripe retries re-run it safely.
+    try {
+      await recordMemberDuesReceipt({
+        stripeSub,
+        memberAgentId,
+        groupId,
+        planId,
+        applicationFeeCents,
+        periodStartUnix,
+      });
+    } catch (error) {
+      console.error(
+        `[stripe-webhook] member dues receipt failed for ${memberAgentId} (subscription ${stripeSub.id}):`,
+        error,
+      );
+    }
   } else {
     await revokeGroupMembership({ memberAgentId, groupId });
   }
+}
+
+/**
+ * Writes the paying member's own record of a group-membership dues charge.
+ *
+ * Group subscriptions previously wrote only GROUP-side rows
+ * ({@link settleGroupSubscriptionCapital} credits the group + platform
+ * wallets), so a member who paid dues saw NOTHING in their personal wallet
+ * history (persona finding, 2026-07-07). This mirrors the marketplace-purchase
+ * shape — a completed `marketplace_purchase` `walletTransactions` row on the
+ * member's PERSONAL wallet — so the charge appears as an outgoing line in the
+ * member's Transaction History. A marketplace `receipt` resource is
+ * deliberately NOT written: `ReceiptCard` / `/marketplace/<id>/receipt` are
+ * hard-coupled to a marketplace listing and would render a broken card for a
+ * subscription with no listing.
+ *
+ * Idempotent per billing cycle via `duesReceiptCycleKey` (`subId:periodStart`),
+ * so the `created`/`updated` webhooks and Stripe retries within one period write
+ * exactly one receipt, while each renewal (new period → new key) writes one
+ * more. The member's wallet BALANCE is intentionally NOT touched: dues are
+ * card-funded, so this is a history/receipt log row, never an internal debit.
+ */
+async function recordMemberDuesReceipt(params: {
+  stripeSub: Stripe.Subscription;
+  memberAgentId: string;
+  groupId: string;
+  planId: string;
+  applicationFeeCents: number;
+  periodStartUnix: number;
+}): Promise<void> {
+  const { stripeSub, memberAgentId, groupId, planId, applicationFeeCents, periodStartUnix } =
+    params;
+
+  // Only a genuinely paid, active cycle produces a dues receipt; a `trialing`
+  // subscription has not charged the member yet, so it writes nothing.
+  if (stripeSub.status !== 'active') return;
+
+  const grossCents = stripeSub.items.data[0]?.price?.unit_amount ?? 0;
+  if (grossCents <= 0) return;
+
+  const cycleKey = `${stripeSub.id}:${periodStartUnix}`;
+
+  // Idempotency: one member receipt per billing cycle, tolerant of webhook
+  // retries and repeated `customer.subscription.updated` events within a period.
+  const [existing] = await db
+    .select({ id: walletTransactions.id })
+    .from(walletTransactions)
+    .where(sql`${walletTransactions.metadata}->>'duesReceiptCycleKey' = ${cycleKey}`)
+    .limit(1);
+  if (existing) return;
+
+  const memberWallet = await getOrCreateWallet(memberAgentId, 'personal');
+
+  const [group] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(eq(agents.id, groupId))
+    .limit(1);
+  const groupLabel = group?.name ?? 'group';
+
+  const invoiceId =
+    typeof stripeSub.latest_invoice === 'string'
+      ? stripeSub.latest_invoice
+      : stripeSub.latest_invoice?.id ?? null;
+
+  await db.insert(walletTransactions).values({
+    type: 'marketplace_purchase',
+    fromWalletId: memberWallet.id,
+    amountCents: grossCents,
+    feeCents: applicationFeeCents,
+    currency: stripeSub.currency ?? 'usd',
+    description: `Membership dues — ${groupLabel}`,
+    referenceType: 'agent',
+    referenceId: groupId,
+    status: 'completed',
+    metadata: {
+      source: 'group_membership_dues',
+      duesReceiptCycleKey: cycleKey,
+      stripeSubscriptionId: stripeSub.id,
+      stripeInvoiceId: invoiceId,
+      groupId,
+      planId,
+      memberAgentId,
+    },
+  });
 }
 
 /**
