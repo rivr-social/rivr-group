@@ -1,4 +1,7 @@
+import { and, eq, inArray } from "drizzle-orm";
 import { auth } from "@/auth";
+import { db } from "@/db";
+import { authorityEventCache, AUTHORITY_STATUS } from "@/db/schema";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
 import { isPersonaOf } from "@/lib/persona";
 import { isGroupAdmin } from "@/app/actions/group-admin";
@@ -11,6 +14,37 @@ import {
 } from "@/lib/federation/mcp-tools";
 import { logMcpProvenance } from "@/lib/federation/mcp-provenance";
 import { timingSafeEqual } from "crypto";
+
+/**
+ * A scoped token must not keep working once the acting principal's HOME
+ * authority has been revoked or superseded. Group's tokens are instance-signed
+ * packed payloads with no per-token `jti`, so revocation propagates at the
+ * PRINCIPAL level via `authority_event_cache` (the same signed-authority feed
+ * that gates federated sessions). Best-effort/fail-open on a DB error — a cache
+ * read failure must not lock out every token — but a cached revoked/superseded
+ * status is a hard reject.
+ */
+async function isPrincipalAuthorityRevoked(agentId: string): Promise<boolean> {
+  if (!agentId) return false;
+  try {
+    const [row] = await db
+      .select({ status: authorityEventCache.authorityStatus })
+      .from(authorityEventCache)
+      .where(
+        and(
+          eq(authorityEventCache.agentId, agentId),
+          inArray(authorityEventCache.authorityStatus, [
+            AUTHORITY_STATUS.REVOKED,
+            AUTHORITY_STATUS.SUPERSEDED,
+          ]),
+        ),
+      )
+      .limit(1);
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 
@@ -159,6 +193,11 @@ async function authorizeMcpRequest(
   if (scoped && scoped.type === "rivr_mcp_token" && !isScopedTokenExpired(scoped.expiresAt)) {
     const controllerId = (scoped.controllerId || scoped.actorId || "").trim();
     if (!controllerId) return null;
+
+    // Home-authority revocation propagation: a token whose controlling
+    // principal has had its home authority revoked/superseded must stop
+    // working even though the signature and lifetime still check out.
+    if (await isPrincipalAuthorityRevoked(controllerId)) return null;
 
     if (requestedActorId && requestedActorId !== controllerId) {
       const ownsPersona = await isPersonaOf(requestedActorId, controllerId);

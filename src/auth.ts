@@ -101,9 +101,10 @@ export const authConfig: NextAuthConfig = {
         // universal identity authority. This is the architectural rule —
         // global is the credential register that survives the user losing
         // their sovereign instance (recoverable via seed-phrase).
-        const verified = await verifyWithGlobalIdentityAuthority({ email, password });
+        const verification = await verifyWithGlobalIdentityAuthority({ email, password });
 
-        if (verified) {
+        if (verification.status === "verified") {
+          const verified = verification.actor;
           const [agent] = await db
             .select()
             .from(agents)
@@ -131,8 +132,17 @@ export const authConfig: NextAuthConfig = {
           };
         }
 
-        // Fallback: local bcrypt for legacy/local-only accounts and for
-        // resilience if global is temporarily unreachable.
+        // F12: fail closed on an EXPLICIT rejection. When global evaluated the
+        // credential and said no (wrong password / revoked authority status),
+        // we must NOT fall through to the local bcrypt hash — that would let a
+        // stale or revoked password keep working. Local bcrypt is only
+        // reachable when global is genuinely unreachable (below).
+        if (verification.status === "rejected") {
+          return null;
+        }
+
+        // Fallback (global UNREACHABLE only): local bcrypt for legacy/local-only
+        // accounts and for resilience during a temporary global outage.
         const [agent] = await db
           .select()
           .from(agents)

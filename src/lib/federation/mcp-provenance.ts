@@ -11,7 +11,26 @@ const DEFAULT_QUERY_LIMIT = 50;
 const MAX_QUERY_LIMIT = 200;
 
 /** Keys stripped from args before persisting to avoid storing large payloads. */
-const REDACTED_ARG_KEYS = new Set(["token", "password", "secret"]);
+/**
+ * Substrings that mark an arg key as sensitive. Matched case-insensitively as
+ * SUBSTRINGS (not exact keys) so camelCase variants (apiToken, accessToken) and
+ * opaque-connector fields (apiKey, authorization) are caught — the old
+ * exact-key set (token/password/secret) logged `apiToken`/`api_key`/nested
+ * connector credential maps in the clear.
+ */
+const REDACTED_ARG_KEY_PARTS = [
+  "token",
+  "password",
+  "secret",
+  "apikey",
+  "credential",
+  "authorization",
+];
+
+function isSensitiveArgKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return REDACTED_ARG_KEY_PARTS.some((part) => normalized.includes(part));
+}
 
 // ---------------------------------------------------------------------------
 // Write
@@ -29,10 +48,14 @@ export interface LogMcpProvenanceParams {
 function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
-    if (REDACTED_ARG_KEYS.has(key)) {
+    if (isSensitiveArgKey(key)) {
       sanitized[key] = "[REDACTED]";
     } else if (typeof value === "string" && value.length > 500) {
       sanitized[key] = value.slice(0, 500) + "\u2026";
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      // Recurse into nested maps (e.g. opaque-credential `fields`) so a secret
+      // nested one level down is still redacted rather than logged in the clear.
+      sanitized[key] = sanitizeArgs(value as Record<string, unknown>);
     } else {
       sanitized[key] = value;
     }

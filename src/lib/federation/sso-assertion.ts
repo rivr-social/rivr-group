@@ -503,7 +503,15 @@ export async function verifySsoAssertion(
   //     that issuer, so an unregistered issuer dies as `issuer-unknown` and a
   //     key mismatch as `signature-invalid`; a registered peer can never
   //     vouch for a FOREIGN-homed actor (issuer != home != global rejects).
-  if (input.expectedGlobalIssuerBaseUrl) {
+  // Fail CLOSED — the issuer check ALWAYS runs (F2). Previously it was skipped
+  // entirely when `expectedGlobalIssuerBaseUrl` was unset, so an instance not
+  // yet told its trust authority accepted ANY issuer. Now: an issuer is
+  // acceptable only if it is the configured global authority OR the asserted
+  // actor's own home. When no global authority is configured, only actor-home
+  // issuers pass; an unrelated issuer (and a claim with no issuer/home) is
+  // rejected. The signature check below still verifies against the REGISTERED
+  // key, so an unregistered issuer dies as `issuer-unknown`.
+  {
     const expectedIssuer = normalizeBaseUrl(input.expectedGlobalIssuerBaseUrl);
     const claimsIssuer = normalizeBaseUrl(claims.globalIssuerBaseUrl);
     const claimsHome = normalizeBaseUrl(claims.homeBaseUrl);

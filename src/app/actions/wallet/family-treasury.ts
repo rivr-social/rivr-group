@@ -8,6 +8,7 @@ import type { NewLedgerEntry } from '@/db/schema';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { getCurrentUserId } from './helpers';
+import { isGroupMember } from '@/lib/permissions';
 import { isUuid, isPositiveInteger } from './types';
 
 // =============================================================================
@@ -156,6 +157,18 @@ export async function getFamilyContributionsAction(familyId: string): Promise<{
 }> {
   if (!isUuid(familyId)) {
     return { success: false, error: 'Invalid family ID.', contributions: {} };
+  }
+
+  // Per-member contribution amounts are member-private — gate the read on
+  // membership (parity with global). Without this any caller could enumerate a
+  // family/group's per-member contribution totals.
+  const viewerId = await getCurrentUserId();
+  if (!viewerId) {
+    return { success: false, error: 'You must be logged in to view contributions.', contributions: {} };
+  }
+  const viewerIsMember = await isGroupMember(viewerId, familyId);
+  if (!viewerIsMember) {
+    return { success: false, error: 'You must be a family member to view contributions.', contributions: {} };
   }
 
   try {

@@ -31,6 +31,22 @@ export interface VerifiedGlobalActor {
   globalIssuerBaseUrl: string;
 }
 
+/**
+ * Outcome of a credential check against the global identity authority.
+ *
+ * The distinction is security-critical (F12): the caller must NOT fall through
+ * to local bcrypt on an explicit `rejected` (global evaluated the credential and
+ * said no — e.g. wrong password or a revoked/migrating authority status), or a
+ * blackholed/misconfigured global would silently re-enable a stale or revoked
+ * local password hash. Local bcrypt fallback is only legitimate when global is
+ * genuinely `unreachable` (network failure, timeout, 5xx, rate limit) — pure
+ * outage resilience, not an authority decision.
+ */
+export type GlobalCredentialVerification =
+  | { status: "verified"; actor: VerifiedGlobalActor }
+  | { status: "rejected" }
+  | { status: "unreachable" };
+
 interface VerifyParams {
   email: string;
   password: string;
@@ -45,10 +61,34 @@ interface SsoIssueResponse {
   globalIssuerBaseUrl?: string;
 }
 
+/**
+ * Resolve the global identity authority URL. Precedence:
+ *   1. explicit, valid `GLOBAL_IDENTITY_AUTHORITY_URL` env var (origin)
+ *   2. in production: NONE — fail closed (throw)
+ *   3. outside production: {@link DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL}
+ *
+ * Credential verification is delegated to this authority, so silently
+ * defaulting under an env omission/misconfig could route a sovereign instance's
+ * password checks at the wrong (e.g. non-prod) authority (AUTH-SEC-006a). In
+ * production we therefore require it to be explicitly configured and valid, and
+ * throw otherwise; non-prod still uses the default for local/dev.
+ */
 function resolveGlobalAuthorityUrl(): string {
-  const raw = process.env.GLOBAL_IDENTITY_AUTHORITY_URL?.trim();
-  const base = raw && raw.length > 0 ? raw : DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL;
-  return base.replace(/\/+$/, "");
+  const envUrl = process.env.GLOBAL_IDENTITY_AUTHORITY_URL?.trim();
+  if (envUrl) {
+    try {
+      return new URL(envUrl).origin;
+    } catch {
+      // Configured-but-malformed falls through to the not-configured handling.
+    }
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "GLOBAL_IDENTITY_AUTHORITY_URL must be set to a valid URL in production; " +
+        "refusing to fall back to a default credential authority.",
+    );
+  }
+  return DEFAULT_GLOBAL_IDENTITY_AUTHORITY_URL.replace(/\/+$/, "");
 }
 
 function resolveTargetBaseUrl(): string | null {
@@ -72,13 +112,16 @@ function resolveTargetBaseUrl(): string | null {
 
 export async function verifyWithGlobalIdentityAuthority(
   params: VerifyParams,
-): Promise<VerifiedGlobalActor | null> {
+): Promise<GlobalCredentialVerification> {
   const targetBaseUrl = resolveTargetBaseUrl();
   if (!targetBaseUrl) {
+    // We can't even form the request — a local misconfiguration, NOT an
+    // authority rejection. Treat as unreachable so a misconfigured instance
+    // degrades to local bcrypt rather than locking everyone out.
     console.warn(
       "[auth/global-credential-authority] NEXTAUTH_URL/BASE_URL not configured; cannot bind SSO assertion to a target",
     );
-    return null;
+    return { status: "unreachable" };
   }
 
   const globalUrl = resolveGlobalAuthorityUrl();
@@ -100,43 +143,57 @@ export async function verifyWithGlobalIdentityAuthority(
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
+    // Network failure / timeout / DNS — global is unreachable, not rejecting.
     console.warn(
       `[auth/global-credential-authority] fetch to ${issueUrl} failed:`,
       error,
     );
-    return null;
+    return { status: "unreachable" };
   }
 
   if (!response.ok) {
-    return null;
+    // 401 (identity-not-found OR wrong password) and 403 (revoked/migrating
+    // authority status) are EXPLICIT credential rejections by the authority —
+    // fail closed, never fall through to a stale local hash. Every other status
+    // (400/415/429/5xx) is a transport/availability problem, not an authority
+    // decision, so it degrades to the local bcrypt resilience path.
+    if (response.status === 401 || response.status === 403) {
+      return { status: "rejected" };
+    }
+    return { status: "unreachable" };
   }
 
   let data: SsoIssueResponse | null;
   try {
     data = (await response.json()) as SsoIssueResponse;
   } catch {
-    return null;
+    // A 200 we can't parse is a broken authority response, not a verified
+    // success and not an explicit reject — treat as unreachable.
+    return { status: "unreachable" };
   }
 
   if (!data || typeof data.actorId !== "string" || data.actorId.length === 0) {
-    return null;
+    return { status: "unreachable" };
   }
 
   return {
-    id: data.actorId,
-    email: typeof data.email === "string" && data.email.length > 0 ? data.email : null,
-    name: typeof data.name === "string" && data.name.length > 0 ? data.name : null,
-    image:
-      typeof data.avatarUrl === "string" && data.avatarUrl.length > 0
-        ? data.avatarUrl
-        : null,
-    homeBaseUrl:
-      typeof data.homeBaseUrl === "string" && data.homeBaseUrl.length > 0
-        ? data.homeBaseUrl
-        : globalUrl,
-    globalIssuerBaseUrl:
-      typeof data.globalIssuerBaseUrl === "string" && data.globalIssuerBaseUrl.length > 0
-        ? data.globalIssuerBaseUrl
-        : globalUrl,
+    status: "verified",
+    actor: {
+      id: data.actorId,
+      email: typeof data.email === "string" && data.email.length > 0 ? data.email : null,
+      name: typeof data.name === "string" && data.name.length > 0 ? data.name : null,
+      image:
+        typeof data.avatarUrl === "string" && data.avatarUrl.length > 0
+          ? data.avatarUrl
+          : null,
+      homeBaseUrl:
+        typeof data.homeBaseUrl === "string" && data.homeBaseUrl.length > 0
+          ? data.homeBaseUrl
+          : globalUrl,
+      globalIssuerBaseUrl:
+        typeof data.globalIssuerBaseUrl === "string" && data.globalIssuerBaseUrl.length > 0
+          ? data.globalIssuerBaseUrl
+          : globalUrl,
+    },
   };
 }

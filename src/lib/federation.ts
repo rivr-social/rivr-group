@@ -258,6 +258,22 @@ export async function ensureLocalNode(ownerAgentId?: string) {
   const slug = getNodeSlug();
   const configuredInstanceId = getInstanceConfig().instanceId;
 
+  // NODE IDENTITY PIN (2026-07-14 login outage): instances that SHARE a
+  // database share this one private-keyed row. The old reconcile below stamped
+  // base_url/slug/role from THIS process's env, so a second process sharing the
+  // row rewrote the shared signing identity and every assertion the authority
+  // signed was rejected fleet-wide (issuer-mismatch) — all logins broke.
+  // NODE_BASE_URL_PIN fixes the canonical identity for every process sharing
+  // the row.
+  const basePin = process.env.NODE_BASE_URL_PIN?.trim().replace(/\/+$/, "") || null;
+  const canonicalBaseUrl = basePin ?? getBaseUrl();
+  if (basePin && basePin !== getBaseUrl()) {
+    console.warn(
+      `[federation] NODE_BASE_URL_PIN=${basePin} overrides this process's base URL ` +
+        `(${getBaseUrl()}) for the shared local-node identity — assertions sign as the pin.`,
+    );
+  }
+
   // Resolve the local self-node row. Prefer the slug match, but fall back to
   // the row anchored on the configured instance id. A self-node bootstrapped
   // before NODE_SLUG/INSTANCE_SLUG agreed (e.g. under the legacy "global-host"
@@ -288,38 +304,39 @@ export async function ensureLocalNode(ownerAgentId?: string) {
       );
     }
 
-    // Reconcile the id-anchored self-node's external identity to the configured
-    // values when it has drifted (stale slug/role/displayName/baseUrl from an
-    // earlier bootstrap). Only the row that already owns the configured id is
-    // safe to relabel this way; a slug-only match with a foreign id is left
-    // for the operator (logged above).
-    const needsIdentityReconcile =
+    // FEDERATION IDENTITY IS RUNTIME-IMMUTABLE (2026-07-14, after the
+    // beta→prod signing-identity clobber broke every sovereign login):
+    // ensureLocalNode NEVER rewrites slug/role/baseUrl on an existing keyed
+    // row. Two processes sharing a DB share this row; letting a boot
+    // "reconcile" it means whichever process ran last redefines who the node
+    // IS, and every assertion the authority signs is rejected fleet-wide.
+    // Identity changes are explicit operator migrations — a mismatch here is
+    // logged as a critical operator alert, not repaired as a side effect.
+    const identityDrifted =
       existing.id === configuredInstanceId &&
       (existing.slug !== slug ||
         existing.role !== getNodeRole() ||
-        existing.baseUrl !== getBaseUrl());
+        existing.baseUrl !== canonicalBaseUrl);
+    if (identityDrifted) {
+      console.error(
+        `[federation] CRITICAL: local node identity mismatch — row has ` +
+          `slug=${existing.slug} role=${existing.role} baseUrl=${existing.baseUrl}, ` +
+          `this process expects slug=${slug} role=${getNodeRole()} baseUrl=${canonicalBaseUrl}. ` +
+          `NOT auto-repairing (runtime identity is immutable). If the ROW is wrong, ` +
+          `run the operator migration; if THIS process is wrong, fix its env ` +
+          `(NODE_BASE_URL_PIN / INSTANCE_*). Assertions sign as the ROW's identity.`,
+      );
+    }
     // Backfill keys for legacy nodes so all exported events can be signed.
     const needsKeys = !existing.privateKey || !existing.publicKey;
 
-    if (needsIdentityReconcile || needsKeys) {
-      const keyPair = needsKeys ? generateNodeKeyPair() : null;
+    if (needsKeys) {
+      const keyPair = generateNodeKeyPair();
       const [updated] = await db
         .update(nodes)
         .set({
-          ...(needsIdentityReconcile
-            ? {
-                slug,
-                role: getNodeRole(),
-                displayName: getNodeDisplayName(),
-                baseUrl: getBaseUrl(),
-              }
-            : {}),
-          ...(keyPair
-            ? {
-                publicKey: keyPair.publicKey,
-                privateKey: keyPair.privateKey,
-              }
-            : {}),
+          publicKey: keyPair.publicKey,
+          privateKey: keyPair.privateKey,
           updatedAt: new Date(),
         })
         .where(eq(nodes.id, existing.id))
@@ -338,7 +355,7 @@ export async function ensureLocalNode(ownerAgentId?: string) {
     slug,
     displayName: getNodeDisplayName(),
     role: getNodeRole(),
-    baseUrl: getBaseUrl(),
+    baseUrl: canonicalBaseUrl,
     publicKey: keyPair.publicKey,
     privateKey: keyPair.privateKey,
     isHosted: true,
