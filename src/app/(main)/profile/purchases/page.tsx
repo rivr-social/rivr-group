@@ -81,8 +81,12 @@ export default async function ProfilePurchasesPage() {
   // Marketplace receipts are federated-aware (fetchMyReceipts resolves a
   // remote-viewer's local projected agent), which is exactly why this page —
   // NOT the sovereign-redirecting /profile — is the buy-instance purchases
-  // surface a federated buyer lands on.
-  const receipts = receiptsResult.receipts ?? [];
+  // surface a federated buyer lands on. Job-payout payment stubs are also
+  // `type: 'receipt'` rows owned by the payee, but they are money IN (already
+  // listed under wallet transactions), not purchases — keep them out.
+  const receipts = (receiptsResult.receipts ?? []).filter(
+    (receipt) => (receipt.metadata as Record<string, unknown>).receiptKind !== "job-payout",
+  );
 
   return (
     <div className="container max-w-4xl mx-auto px-4 py-6 space-y-4">
