@@ -15,6 +15,9 @@ import {
   parseStockNeed,
   toStockInventory,
   toStockInventoryItem,
+  composeNeedLists,
+  extractStockNeedLists,
+  GENERAL_NEEDS_LIST_ID,
 } from "@/lib/stock";
 
 describe("isStockInventoryType", () => {
@@ -186,5 +189,39 @@ describe("buildNeedRequestText", () => {
 
   it("normalizes an invalid quantity to the minimum (no prefix)", () => {
     expect(buildNeedRequestText({ name: "Rope", quantity: 0, note: "" })).toBe("Need: Rope");
+  });
+});
+
+describe("need lists (multi-list model)", () => {
+  const legacyNeed = { id: "n1", name: "Folding tables", quantity: 2, note: "", fulfilled: false };
+  const listNeed = { id: "n2", name: "Lumber", quantity: 10, note: "2x4s", fulfilled: true, inventoryResourceId: "res-9" };
+
+  it("composeNeedLists puts the synthetic General list first (even when empty)", () => {
+    const lists = composeNeedLists({});
+    expect(lists).toHaveLength(1);
+    expect(lists[0]).toMatchObject({ id: GENERAL_NEEDS_LIST_ID, name: "General", needs: [] });
+  });
+
+  it("surfaces legacy flat stockNeeds as the General list and named lists after", () => {
+    const lists = composeNeedLists({
+      stockNeeds: [legacyNeed],
+      stockNeedLists: [{ id: "l1", name: "Fall build", projectId: "p1", needs: [listNeed] }],
+    });
+    expect(lists).toHaveLength(2);
+    expect(lists[0].needs[0].name).toBe("Folding tables");
+    expect(lists[1]).toMatchObject({ id: "l1", name: "Fall build", projectId: "p1" });
+    expect(lists[1].needs[0].inventoryResourceId).toBe("res-9");
+  });
+
+  it("drops malformed lists and needs", () => {
+    const lists = extractStockNeedLists({
+      stockNeedLists: [
+        { id: "", name: "no id", needs: [] },
+        { id: "ok", name: "OK", needs: [{ id: "", name: "" }, legacyNeed] },
+        "garbage",
+      ],
+    });
+    expect(lists).toHaveLength(1);
+    expect(lists[0].needs).toHaveLength(1);
   });
 });

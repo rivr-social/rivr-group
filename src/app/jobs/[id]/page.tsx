@@ -23,7 +23,7 @@ import { getJobClaimPanelData } from "@/app/actions/interactions/project-team"
 import { getJobShareData } from "@/app/actions/job-peer-allocation"
 import { hasGroupWriteAccess } from "@/app/actions/create-resources"
 import { fetchGroupLineage, fetchPublicAgentById } from "@/app/actions/graph"
-import { extractStockNeeds, toStockInventory } from "@/lib/stock"
+import { composeNeedLists, toStockInventory } from "@/lib/stock"
 import { buildContainmentChain, type BreadcrumbNode } from "@/lib/breadcrumbs"
 import { JobDetailClient } from "./job-detail"
 
@@ -55,7 +55,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
   // editable Needs list on the job's own resource metadata, and whether the
   // viewer may manage it (job owner OR content-write on the owning group).
   const stockInventory = toStockInventory(stockResources)
-  const stockNeeds = extractStockNeeds((jobResource?.metadata ?? {}) as Record<string, unknown>)
+  const stockNeedLists = composeNeedLists((jobResource?.metadata ?? {}) as Record<string, unknown>)
   // Authoritative owning agent = the job RESOURCE's owner_id — the exact node
   // the server actions (markJobDoneAction / updateTaskStatus / job-management)
   // enforce against. The domain `job.groupId` reads `metadata.groupId`, which
@@ -155,7 +155,7 @@ export default async function JobPage(props: { params: Promise<{ id: string }> }
       currentUserId={currentUserId}
       claimPanel={claimPanel}
       stockInventory={stockInventory}
-      stockNeeds={stockNeeds}
+      stockNeedLists={stockNeedLists}
       stockCanManage={stockCanManage}
       canManage={canManage}
       canAttest={canAttest}

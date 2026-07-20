@@ -39,7 +39,7 @@ import type { User, MemberStake, Post, TabVisibilitySettings, TabVisibilityLevel
 import type { MemberSubgroupPoints } from "@/lib/queries/stakes"
 import { ProposalStatus, GROUP_TAB_KEYS, DEFAULT_TAB_VISIBILITY } from "@/lib/types"
 import type { SerializedResource } from "@/lib/graph-serializers"
-import { toStockInventory, type StockNeed } from "@/lib/stock"
+import { toStockInventory } from "@/lib/stock"
 import dynamic from "next/dynamic"
 
 // Per-tab code splitting: each non-default tab panel loads as its own chunk
@@ -233,7 +233,9 @@ export interface GroupTabsClientProps {
   /** Tangible-stock resources (type resource/asset) for the Stock → Inventory subtab. */
   stockResources: SerializedResource[]
   /** Persisted Needs shopping list for the Stock → Needs subtab. */
-  stockNeeds: StockNeed[]
+  stockNeedLists: import("@/lib/stock").StockNeedList[]
+  stockNeedsRollup?: import("@/app/actions/stock").OrgNeedsRollupEntry[]
+  stockProjectOptions?: Array<{ id: string; name: string }>
   /** Whether the viewer may edit stock needs (admin or group content-write). */
   stockCanManage: boolean
   documentResources: Document[]
@@ -294,7 +296,9 @@ export function GroupTabsClient({
   netAllocationMembers = [],
   pressResources,
   stockResources,
-  stockNeeds,
+  stockNeedLists,
+  stockNeedsRollup,
+  stockProjectOptions,
   stockCanManage,
   documentResources,
   projectResources,
@@ -1005,7 +1009,9 @@ export function GroupTabsClient({
           parentType="org"
           parentId={groupId}
           inventory={toStockInventory(stockResources)}
-          initialNeeds={stockNeeds}
+          initialLists={stockNeedLists}
+          needsRollup={stockNeedsRollup}
+          projectOptions={stockProjectOptions}
           canManage={stockCanManage}
         />
       </TabsContent>

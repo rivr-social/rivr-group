@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { format } from "date-fns";
-import { getMyTicketPurchasesAction, getTransactionHistoryAction } from "@/app/actions/wallet";
+import { getMyDuesPaymentsAction, getMyTicketPurchasesAction, getTransactionHistoryAction } from "@/app/actions/wallet";
+import { fetchMyReceipts } from "@/app/actions/graph/content";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { WalletTransactionView } from "@/types";
@@ -66,14 +67,22 @@ function getTransactionTitle(transaction: WalletTransactionView): string {
  */
 export default async function ProfilePurchasesPage() {
   // Fetch purchases + general transactions on the server; failures are represented by `success: false`.
-  const [purchasesResult, transactionsResult] = await Promise.all([
+  const [purchasesResult, transactionsResult, duesResult, receiptsResult] = await Promise.all([
     getMyTicketPurchasesAction(),
     getTransactionHistoryAction({ limit: 30, offset: 0 }),
+    getMyDuesPaymentsAction().catch(() => ({ success: false as const })),
+    fetchMyReceipts().catch(() => ({ receipts: [] })),
   ]);
   // Normalize to an empty list so rendering logic stays simple.
   const purchases = purchasesResult.success && purchasesResult.purchases ? purchasesResult.purchases : [];
   const transactions =
     transactionsResult.success && transactionsResult.transactions ? transactionsResult.transactions : [];
+  const duesPayments = duesResult.success && duesResult.payments ? duesResult.payments : [];
+  // Marketplace receipts are federated-aware (fetchMyReceipts resolves a
+  // remote-viewer's local projected agent), which is exactly why this page —
+  // NOT the sovereign-redirecting /profile — is the buy-instance purchases
+  // surface a federated buyer lands on.
+  const receipts = receiptsResult.receipts ?? [];
 
   return (
     <div className="container max-w-4xl mx-auto px-4 py-6 space-y-4">
@@ -81,6 +90,67 @@ export default async function ProfilePurchasesPage() {
         <ArrowLeft className="h-4 w-4" />
         Back to profile
       </Link>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Marketplace Purchases</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {receipts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No marketplace purchases yet. When you buy a listing, its receipt will appear here.
+            </p>
+          ) : null}
+          {receipts.map((receipt) => {
+            const meta = receipt.metadata as Record<string, unknown>;
+            const priceCents = Number(meta.totalCents ?? meta.priceCents ?? 0);
+            const listingId = typeof meta.originalListingId === "string" ? meta.originalListingId : null;
+            return (
+              <div key={receipt.id} className="rounded-md border p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="font-medium">{receipt.listing?.name ?? "Marketplace purchase"}</p>
+                  <Badge variant={getStatusBadgeVariant(String(meta.status ?? "completed"))}>
+                    {String(meta.status ?? "completed")}
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {receipt.seller?.name ? `${receipt.seller.name} · ` : ""}
+                  {formatHistoryDate(String(meta.purchasedAt ?? receipt.createdAt))}
+                </p>
+                <p className="text-sm text-muted-foreground">Total: ${(priceCents / 100).toFixed(2)}</p>
+                {listingId ? (
+                  <Link href={`/marketplace/${listingId}/receipt/${receipt.id}`} className="text-sm text-primary hover:underline">
+                    View receipt
+                  </Link>
+                ) : null}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Membership Dues</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {duesPayments.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No dues payments yet. When a group membership charge settles, it will appear here.
+            </p>
+          ) : null}
+          {duesPayments.map((payment) => (
+            <div key={payment.transactionId} className="rounded-md border p-3">
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-medium">{payment.groupName}</p>
+                <Badge variant="outline">Dues</Badge>
+              </div>
+              <p className="text-sm text-muted-foreground">{formatHistoryDate(payment.paidAt)}</p>
+              <p className="text-sm text-muted-foreground">Total: ${payment.totalDollars.toFixed(2)}</p>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

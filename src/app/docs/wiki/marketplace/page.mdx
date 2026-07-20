@@ -43,6 +43,22 @@ posture is **Base Sepolia (testnet)**, matching the Stripe test-keys posture.
   membership tier.
 - Checkout buyer metadata is set server-side (security-hardened, issue #101).
 
+## Booking & availability
+
+Bookable offerings (services, skills, vouchers, products, resources) declare a
+**Bookable Schedule** at creation — week-view blocks the seller can be booked
+for ("Add booking times" in the composer). Buyers then pick one block in the
+purchase flow before checkout; the chosen slot is consumed on booking. A
+listing with no declared blocks stays non-bookable and checkout skips the
+picker.
+
+## Fees on small purchases
+
+The buyer-paid gross-up covers Stripe processing, the platform margin, and a
+Connect-account overhead that now SCALES with the cart (capped at $2), so
+micro-purchases no longer carry a ~50% fee; carts ≥ $40 price exactly as
+before. The seller always nets the listed price.
+
 ## Cross-links
 
 - API/MCP: [Offerings tools](/docs/api) · [Mutual Economy tools](/docs/api) (thanks, points) · [`rivr.thanks.send`](/docs/api) · [`/api/stripe` REST](/docs/api) · [`/api/billing` REST](/docs/api)
