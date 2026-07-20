@@ -524,10 +524,16 @@ export function resourceToMarketplaceListing(
         ? meta.cardCheckoutUnavailableReason
         : undefined,
     serviceDetails:
-      (typeof meta.availability === "string" || Array.isArray(meta.bookingDates) || meta.estimatedDuration) &&
-      ((meta.listingType as string) === "service" ||
-        (meta.listingType as string) === "resource" ||
-        (meta.listingType as string) === "voucher")
+      // The slot-picker gate must MIRROR the server's requirement
+      // (`createBookingAction` demands a slot whenever `meta.bookingDates` is
+      // non-empty, regardless of listingType) — a listing with declared booking
+      // dates but a different/unset listingType otherwise renders NO picker and
+      // dead-ends at "Booking date and time slot are required."
+      (Array.isArray(meta.bookingDates) && meta.bookingDates.length > 0) ||
+      ((typeof meta.availability === "string" || Array.isArray(meta.bookingDates) || meta.estimatedDuration) &&
+        ((meta.listingType as string) === "service" ||
+          (meta.listingType as string) === "resource" ||
+          (meta.listingType as string) === "voucher"))
         ? {
             availability:
               typeof meta.availability === "string" && meta.availability.length > 0

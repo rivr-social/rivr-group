@@ -31,7 +31,8 @@ import { getRecordedContributions } from "@/app/actions/interactions"
 import { getGroupMembersByClass } from "@/app/actions/wallet/net-allocation"
 import { parseNetAllocationTree } from "@/lib/net-allocation"
 import { canPostToGroup } from "@/app/actions/create-resources"
-import { extractStockNeeds, isStockInventoryType } from "@/lib/stock"
+import { composeNeedLists, isStockInventoryType } from "@/lib/stock"
+import { fetchOrgNeedsRollupAction } from "@/app/actions/stock"
 import {
   DEFAULT_PROPOSE_GATE,
   DEFAULT_VOTE_GATE,
@@ -390,7 +391,14 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   // read-only Inventory subtab, plus the editable Needs list persisted on the
   // org's own metadata. Managing needs requires admin or group content-write.
   const stockResources = detail.resources.filter((r) => isStockInventoryType(r.type))
-  const stockNeeds = extractStockNeeds(groupMeta)
+  const stockNeedLists = composeNeedLists(groupMeta)
+  // Subgroup + project needs rollup (read-only) and the project options the
+  // list-connect picker offers (own + subgroup projects).
+  const needsRollupResult = await fetchOrgNeedsRollupAction(group.id).catch(() => null)
+  const stockNeedsRollup = needsRollupResult?.success && needsRollupResult.rollup ? needsRollupResult.rollup : []
+  const stockProjectOptions = stockNeedsRollup.flatMap((entry) =>
+    entry.projects.map((project) => ({ id: project.projectId, name: project.projectName })),
+  )
   const stockCanManage = currentUserId ? isGroupAdmin || memberCanCreate : false
 
   // ── Activity filters ──
@@ -579,7 +587,9 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
         netAllocationMembers={netAllocationMembers}
         pressResources={pressResources}
         stockResources={stockResources}
-        stockNeeds={stockNeeds}
+        stockNeedLists={stockNeedLists}
+        stockNeedsRollup={stockNeedsRollup}
+        stockProjectOptions={stockProjectOptions}
         stockCanManage={stockCanManage}
         documentResources={documentResources.map((r) => {
           const meta = (r.metadata ?? {}) as Record<string, unknown>

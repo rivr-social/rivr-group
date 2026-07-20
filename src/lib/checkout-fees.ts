@@ -12,6 +12,14 @@ import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from "@/lib/wallet-constants";
 const STRIPE_CARD_PERCENT_BPS = 290;
 const STRIPE_CARD_FIXED_CENTS = 30;
 const STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS = 200;
+/**
+ * Connect-account overhead recovery rate for SMALL carts. Stripe's ~$2/month
+ * active-account cost was previously folded in as a FLAT $2 per purchase,
+ * which made micro-transactions absurd (a $6 item carried a $2.86 buyer fee —
+ * ~48%). The overhead now scales at this rate and CAPS at the flat amount, so
+ * a $6 cart recovers 30¢ while every cart ≥ $40 is priced exactly as before.
+ */
+const CONNECT_OVERHEAD_RECOVERY_BPS = 500;
 
 export interface CheckoutFeeResult {
   sellerPriceCents: number;
@@ -89,7 +97,10 @@ export function calculateCheckoutFees(
     Number.isInteger(options.connectOverheadCents) &&
     options.connectOverheadCents >= 0
       ? options.connectOverheadCents
-      : STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS;
+      : Math.min(
+          STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS,
+          Math.ceil((sellerPriceCents * CONNECT_OVERHEAD_RECOVERY_BPS) / BPS_DIVISOR),
+        );
 
   const targetPlatformNetCents =
     platformFeeCents + orgCommissionCents + connectOverheadCents;

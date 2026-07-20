@@ -67,6 +67,24 @@ export interface StockNeed {
   requested?: boolean;
   /** Resource id of the request post created for this need, if any. */
   requestedPostId?: string;
+  /** Inventory resource created when this need was fulfilled (fulfilled items
+   *  become tangible stock; the row survives un-fulfilling). */
+  inventoryResourceId?: string;
+}
+
+/**
+ * A NAMED needs list. An org/project/job may hold several (e.g. "Fall build",
+ * "Kitchen restock"), each optionally CONNECTED to a project. The legacy flat
+ * `stockNeeds` array is surfaced as the synthetic "General" list
+ * ({@link GENERAL_NEEDS_LIST_ID}) and keeps living under its legacy key, so
+ * pre-lists data needs no migration.
+ */
+export interface StockNeedList {
+  id: string;
+  name: string;
+  /** Project this list is connected to (org-level lists only). */
+  projectId?: string;
+  needs: StockNeed[];
 }
 
 /** Normalized, display-ready inventory row derived from a stock resource. */
@@ -87,8 +105,16 @@ export interface StockResourceLike {
   metadata?: Record<string, unknown> | null;
 }
 
-/** The `metadata` key under which the Needs list is persisted. */
+/** The `metadata` key under which the LEGACY flat Needs list is persisted. */
 export const STOCK_NEEDS_METADATA_KEY = "stockNeeds";
+/** The `metadata` key under which named need LISTS are persisted. */
+export const STOCK_NEED_LISTS_METADATA_KEY = "stockNeedLists";
+/** The synthetic list id for the legacy flat `stockNeeds` array. */
+export const GENERAL_NEEDS_LIST_ID = "general";
+/** Display name of the synthetic legacy list. */
+export const GENERAL_NEEDS_LIST_NAME = "General";
+/** Maximum characters allowed for a need-list name. */
+export const MAX_STOCK_LIST_NAME_LENGTH = 120;
 
 /** Maximum characters allowed for a need name. */
 export const MAX_STOCK_NEED_NAME_LENGTH = 200;
@@ -141,7 +167,55 @@ export function parseStockNeed(raw: unknown): StockNeed | null {
   if (typeof record.requestedPostId === "string" && record.requestedPostId) {
     need.requestedPostId = record.requestedPostId;
   }
+  if (typeof record.inventoryResourceId === "string" && record.inventoryResourceId) {
+    need.inventoryResourceId = record.inventoryResourceId;
+  }
   return need;
+}
+
+/** Parse a raw stored need LIST, or null when it lacks id/name. */
+export function parseStockNeedList(raw: unknown): StockNeedList | null {
+  const record = asRecord(raw);
+  const id = typeof record.id === "string" ? record.id : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (!id || !name) return null;
+  const needsRaw = Array.isArray(record.needs) ? record.needs : [];
+  const list: StockNeedList = {
+    id,
+    name,
+    needs: needsRaw
+      .map((entry) => parseStockNeed(entry))
+      .filter((entry): entry is StockNeed => entry !== null),
+  };
+  if (typeof record.projectId === "string" && record.projectId) {
+    list.projectId = record.projectId;
+  }
+  return list;
+}
+
+/** Extract the CUSTOM (named) need lists from metadata. */
+export function extractStockNeedLists(
+  metadata: Record<string, unknown> | null | undefined,
+): StockNeedList[] {
+  const raw = asRecord(metadata)[STOCK_NEED_LISTS_METADATA_KEY];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => parseStockNeedList(entry))
+    .filter((entry): entry is StockNeedList => entry !== null);
+}
+
+/**
+ * All of a parent's need lists for display: the synthetic legacy "General"
+ * list first (ALWAYS present, even when empty — it is the default add target),
+ * then the custom named lists in stored order.
+ */
+export function composeNeedLists(
+  metadata: Record<string, unknown> | null | undefined,
+): StockNeedList[] {
+  return [
+    { id: GENERAL_NEEDS_LIST_ID, name: GENERAL_NEEDS_LIST_NAME, needs: extractStockNeeds(metadata) },
+    ...extractStockNeedLists(metadata),
+  ];
 }
 
 /**

@@ -37,7 +37,7 @@ interface JobDetailClientProps {
   /** Read-only stock inventory linked to this job (Stock → Inventory subtab). */
   stockInventory: StockInventoryItem[]
   /** Persisted Needs list for the Stock → Needs subtab. */
-  stockNeeds: StockNeed[]
+  stockNeedLists: import("@/lib/stock").StockNeedList[]
   /** Whether the viewer may edit stock needs (job owner or group content-write). */
   stockCanManage: boolean
   /** Server-computed: viewer may manage the job (owner or group write access). */
@@ -67,7 +67,7 @@ interface JobDetailClientProps {
   breadcrumbItems?: BreadcrumbNode[]
 }
 
-export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeeds, stockCanManage, canManage, canAttest, assigneeNames, share, reviewData, payoutReleased = false, breadcrumbItems = [] }: JobDetailClientProps) {
+export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, projects, userBadgeIds, currentUserId, claimPanel, stockInventory, stockNeedLists, stockCanManage, canManage, canAttest, assigneeNames, share, reviewData, payoutReleased = false, breadcrumbItems = [] }: JobDetailClientProps) {
   const router = useRouter()
   const effectiveUserId = currentUserId ?? ""
 
@@ -312,7 +312,7 @@ export function JobDetailClient({ jobId, initialJob: serverJob, jobShifts, proje
             parentType="job"
             parentId={jobId}
             inventory={stockInventory}
-            initialNeeds={stockNeeds}
+            initialLists={stockNeedLists}
             canManage={stockCanManage}
           />
         </TabsContent>

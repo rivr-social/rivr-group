@@ -606,52 +606,54 @@ export function GovernanceTab({
                   <p className="text-sm line-clamp-2 mb-3">{proposal.description}</p>
 
                   <div className="space-y-3">
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-sm">
-                        <span>Yes</span>
-                        <span>
-                          {Math.round(
-                            (proposal.votes.yes / (proposal.votes.yes + proposal.votes.no + proposal.votes.abstain)) *
-                              100,
-                          )}
-                          % ({proposal.votes.yes})
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-2">
-                        <div
-                          className="h-2 rounded-full bg-green-500"
-                          style={{
-                            width: `${Math.round((proposal.votes.yes / (proposal.votes.yes + proposal.votes.no + proposal.votes.abstain)) * 100)}%`,
-                          }}
-                        ></div>
-                      </div>
-                    </div>
+                    {(() => {
+                      // Weighted totals (P3) can be fractional; a zero-vote
+                      // proposal has an empty pool — render 0%, never NaN%.
+                      const pool = proposal.votes.yes + proposal.votes.no + proposal.votes.abstain
+                      const pct = (n: number) => (pool > 0 ? Math.round((n / pool) * 100) : 0)
+                      const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+                      return (
+                        <>
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-sm">
+                              <span>Yes</span>
+                              <span>
+                                {pct(proposal.votes.yes)}% ({fmt(proposal.votes.yes)})
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2">
+                              <div
+                                className="h-2 rounded-full bg-green-500"
+                                style={{ width: `${pct(proposal.votes.yes)}%` }}
+                              ></div>
+                            </div>
+                          </div>
 
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-sm">
-                        <span>No</span>
-                        <span>
-                          {Math.round(
-                            (proposal.votes.no / (proposal.votes.yes + proposal.votes.no + proposal.votes.abstain)) *
-                              100,
-                          )}
-                          % ({proposal.votes.no})
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-2">
-                        <div
-                          className="h-2 rounded-full bg-red-500"
-                          style={{
-                            width: `${Math.round((proposal.votes.no / (proposal.votes.yes + proposal.votes.no + proposal.votes.abstain)) * 100)}%`,
-                          }}
-                        ></div>
-                      </div>
-                    </div>
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-sm">
+                              <span>No</span>
+                              <span>
+                                {pct(proposal.votes.no)}% ({fmt(proposal.votes.no)})
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-2">
+                              <div
+                                className="h-2 rounded-full bg-red-500"
+                                style={{ width: `${pct(proposal.votes.no)}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        </>
+                      )
+                    })()}
                   </div>
                 </CardContent>
                 <CardFooter className="flex justify-between pt-2">
                   <div className="text-sm text-gray-500">
                     {proposal.comments} comments • Threshold: {proposal.threshold}%
+                    {proposal.viewerVoteWeight != null && proposal.phase === "active" && (
+                      <span className="ml-2 text-xs">· your weight: {proposal.viewerVoteWeight}</span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {proposal.phase === "finalized" ? (
@@ -770,7 +772,9 @@ export function GovernanceTab({
                   return (
                     <div key={member.id} className="flex items-center justify-between gap-2">
                       <span className="text-sm">{member.name}</span>
-                      <Select value={held} onValueChange={(role) => handleSetBoardRole(member.id, role)}>
+                      {/* Keyed on the held role so a save + router.refresh() reseeds
+                          the select while the dialog stays open. */}
+                      <Select key={`${member.id}-${held}`} value={held} onValueChange={(role) => handleSetBoardRole(member.id, role)}>
                         <SelectTrigger className="h-8 w-36">
                           <SelectValue />
                         </SelectTrigger>

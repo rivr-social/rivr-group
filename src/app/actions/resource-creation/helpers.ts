@@ -90,7 +90,16 @@ export async function resolveAuthenticatedUserId(): Promise<string | null> {
   // the interactions helper (GRP-DSN-001). Lazy import avoids a circular dep
   // through the actions barrels.
   const { getCurrentUserId } = await import("@/app/actions/interactions/helpers");
-  return getCurrentUserId();
+  const sessionActorId = await getCurrentUserId();
+  if (sessionActorId) return sessionActorId;
+
+  // Cookie-only remote viewers (rivr_remote_viewer, no unified session) were
+  // still invisible here — the 2026-07-16 fix surfaced the group as an owner
+  // option for SSO-landed admins, but their SUBMIT then 401'd in this helper.
+  // getAuthenticatedActorId is the established session-OR-cookie resolver
+  // (same combo the job-qa/project surfaces use for authority).
+  const { getAuthenticatedActorId } = await import("@/lib/server-auth");
+  return getAuthenticatedActorId();
 }
 
 /**

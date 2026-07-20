@@ -1046,7 +1046,15 @@ export function CreateOfferingForm({
       } : undefined,
       availability: offeringType === "service" && availability ? availability : undefined,
       bookingDates:
-        (offeringType === "service" || offeringType === "resource" || offeringType === "voucher") && normalizedBookingDates.length > 0
+        // Every type that renders the Bookable Schedule editor persists it —
+        // product previously RENDERED the editor but silently dropped its
+        // blocks here, and skill (the canonical "book someone's time" type)
+        // had no editor at all.
+        (offeringType === "service" ||
+          offeringType === "resource" ||
+          offeringType === "voucher" ||
+          offeringType === "product" ||
+          offeringType === "skill") && normalizedBookingDates.length > 0
           ? normalizedBookingDates
           : undefined,
       category: (offeringType === "service" && serviceCategory) || (offeringType === "product" && productCategory) || undefined,
@@ -1862,6 +1870,7 @@ export function CreateOfferingForm({
               {currencyField}
               {acceptedCurrenciesField}
               {quantityField}
+              {bookingScheduleField}
               {tagsField}
             </CardContent>
           </Card>

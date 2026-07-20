@@ -54,7 +54,7 @@ import { CommentFeed } from "@/components/comment-feed"
 import { getResourcesByProjectId, getEventsByProjectId, getJobsByProjectId } from "@/lib/queries/resources"
 import { serializeResource, type SerializedResource } from "@/lib/graph-serializers"
 import { resolveEventWindow } from "@/lib/calendar/event-window"
-import { extractStockNeeds, toStockInventory } from "@/lib/stock"
+import { composeNeedLists, toStockInventory } from "@/lib/stock"
 import { ProjectDistributionTab } from "@/components/project-distribution-tab"
 import { NavBreadcrumbs } from "@/components/nav-breadcrumbs"
 import { buildContainmentChain, type BreadcrumbNode } from "@/lib/breadcrumbs"
@@ -527,7 +527,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   // metadata.projectId, plus the editable Needs list on the project's own
   // resource metadata. Managing needs uses the same gate as the Jobs tab.
   const stockInventory = toStockInventory(await getResourcesByProjectId(project.id).catch(() => []))
-  const projectStockNeeds = extractStockNeeds(agent.metadata as Record<string, unknown>)
+  const projectStockNeedLists = composeNeedLists(agent.metadata as Record<string, unknown>)
 
   // ── Calendar tab data ── this project's jobs + events, serialized for the
   // shared GroupCalendar. Jobs persist no date of their own, so the calendar
@@ -1066,7 +1066,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             parentType="project"
             parentId={project.id}
             inventory={stockInventory}
-            initialNeeds={projectStockNeeds}
+            initialLists={projectStockNeedLists}
             canManage={isAdmin}
           />
         </TabsContent>

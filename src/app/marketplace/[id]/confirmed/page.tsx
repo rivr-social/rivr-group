@@ -101,7 +101,7 @@ export default async function MarketplaceItemConfirmedPage({
         </Button>
 
         <Button asChild variant="outline" className="w-full">
-          <Link href="/profile?tab=wallet&walletTab=purchases">View My Purchases</Link>
+          <Link href="/profile/purchases">View My Purchases</Link>
         </Button>
 
         <Button asChild className="w-full">
