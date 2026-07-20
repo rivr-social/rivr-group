@@ -13,6 +13,7 @@ import {
 } from '@/lib/stripe-connect';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { ensureConnectAccountForWallet } from '@/lib/connect-account';
+import { settleConnectPayout } from '@/lib/connect-payout';
 import { getCurrentUserId, resolveManagedWalletTarget } from './helpers';
 import { isPositiveInteger } from './types';
 import {
@@ -338,6 +339,170 @@ export async function releaseTestConnectBalanceToWalletAction(ownerId?: string):
  * @param {'standard' | 'instant'} speed - Payout speed.
  * @returns {Promise<{ success: boolean; payoutId?: string; error?: string }>}
  */
+/**
+ * "Move to Stripe" — resolve internal Rivr wallet credit into REAL money in the
+ * owner's Stripe Connect balance, from which {@link requestPayoutAction} pays out
+ * to their bank. The Rivr wallet is a platform IOU (instant, fee-free internal
+ * credit); converting it to real funds means real dollars move to the payee's
+ * connected account. On a sovereign instance the transfer is fulfilled by GLOBAL
+ * (the single Connect authority) via {@link settleConnectPayout}, which resolves
+ * the payee's global-held account and does the Stripe Transfer there.
+ *
+ * Saga: debit the wallet + write a `pending` ledger row in one locked tx, request
+ * the federated transfer keyed on that row's id (retry-safe), then mark it
+ * `completed`; anything other than a `paid` result refunds the wallet and marks
+ * the row `failed` — money is never lost or minted.
+ */
+export async function resolveWalletToConnectAction(
+  amountCents: number,
+  ownerId?: string,
+): Promise<{ success: boolean; transferId?: string; newBalanceCents?: number; error?: string }> {
+  const currentUserId = await getCurrentUserId();
+  if (!currentUserId) {
+    return { success: false, error: 'You must be logged in.' };
+  }
+  if (!isPositiveInteger(amountCents)) {
+    return { success: false, error: 'Amount must be a positive integer (in cents).' };
+  }
+
+  const check = await rateLimit(
+    `wallet:${currentUserId}`,
+    RATE_LIMITS.WALLET.limit,
+    RATE_LIMITS.WALLET.windowMs,
+  );
+  if (!check.success) {
+    return { success: false, error: 'Rate limit exceeded. Please try again later.' };
+  }
+
+  const result = await updateFacade.execute(
+    {
+      type: 'resolveWalletToConnectAction',
+      actorId: currentUserId,
+      targetAgentId: currentUserId,
+      payload: { amountCents, ownerId },
+    },
+    async () => {
+      const target = await resolveManagedWalletTarget(currentUserId, ownerId);
+      const [wallet] = await db
+        .select({ id: wallets.id, balanceCents: wallets.balanceCents, metadata: wallets.metadata })
+        .from(wallets)
+        .where(eq(wallets.id, target.walletId))
+        .limit(1);
+      if (!wallet) throw new Error('Wallet not found.');
+
+      const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
+      const connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
+      if (!connectAccountId) {
+        throw new Error('No payment account found. Set up payments first.');
+      }
+      if (wallet.balanceCents < amountCents) {
+        throw new Error('Insufficient Rivr wallet balance.');
+      }
+
+      // 1) Debit the wallet + pending ledger row in ONE locked tx.
+      const txnId = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM wallets WHERE id = ${wallet.id} FOR UPDATE`);
+        const [locked] = await tx
+          .select({ balanceCents: wallets.balanceCents })
+          .from(wallets)
+          .where(eq(wallets.id, wallet.id))
+          .limit(1);
+        if (!locked || locked.balanceCents < amountCents) {
+          throw new Error('Insufficient Rivr wallet balance.');
+        }
+        await tx
+          .update(wallets)
+          .set({ balanceCents: sql`${wallets.balanceCents} - ${amountCents}`, updatedAt: new Date() })
+          .where(eq(wallets.id, wallet.id));
+        const [row] = await tx
+          .insert(walletTransactions)
+          .values({
+            type: 'connect_payout',
+            fromWalletId: wallet.id,
+            amountCents,
+            feeCents: 0,
+            currency: 'usd',
+            description: 'Moved Rivr wallet balance to Stripe',
+            status: 'pending',
+            metadata: { source: 'wallet_to_connect', connectAccountId, ownerId: target.ownerId },
+          })
+          .returning({ id: walletTransactions.id });
+        return row.id;
+      });
+
+      // 2) Federated transfer via GLOBAL (the single Connect authority).
+      const settle = await settleConnectPayout({
+        payeeAgentId: target.ownerId,
+        amountCents,
+        idempotencyKey: `wallet-cashout:${txnId}`,
+        metadata: { walletTransactionId: txnId, source: 'wallet_to_connect' },
+      });
+
+      if (settle.status !== 'paid') {
+        // 3a) Refund + mark failed. Friendly message per status.
+        await db.transaction(async (tx) => {
+          await tx.execute(sql`SELECT id FROM wallets WHERE id = ${wallet.id} FOR UPDATE`);
+          await tx
+            .update(wallets)
+            .set({ balanceCents: sql`${wallets.balanceCents} + ${amountCents}`, updatedAt: new Date() })
+            .where(eq(wallets.id, wallet.id));
+          await tx
+            .update(walletTransactions)
+            .set({
+              status: 'failed',
+              metadata: { source: 'wallet_to_connect', connectAccountId, ownerId: target.ownerId, settleStatus: settle.status, detail: settle.detail },
+            })
+            .where(eq(walletTransactions.id, txnId));
+        });
+        const message =
+          settle.status === 'needs_onboarding'
+            ? 'Finish payment onboarding before moving funds to Stripe.'
+            : settle.status === 'insufficient_funds'
+              ? 'The platform cannot back this transfer right now — try a smaller amount or try again later.'
+              : settle.status === 'disabled'
+                ? 'Connect payouts are not enabled on this instance.'
+                : settle.detail ?? 'Unable to move funds to Stripe.';
+        throw new Error(message);
+      }
+
+      // 3b) Confirm.
+      await db
+        .update(walletTransactions)
+        .set({
+          status: 'completed',
+          metadata: { source: 'wallet_to_connect', connectAccountId, ownerId: target.ownerId, transferId: settle.transferId },
+        })
+        .where(eq(walletTransactions.id, txnId));
+
+      const [after] = await db
+        .select({ balanceCents: wallets.balanceCents })
+        .from(wallets)
+        .where(eq(wallets.id, wallet.id))
+        .limit(1);
+
+      return { success: true, transferId: settle.transferId, newBalanceCents: after?.balanceCents ?? null } as {
+        success: boolean;
+        transferId?: string;
+        newBalanceCents?: number;
+      };
+    },
+  );
+
+  if (!result.success) {
+    return { success: false, error: result.error ?? 'Unable to move funds to Stripe.' };
+  }
+
+  emitDomainEvent({
+    eventType: EVENT_TYPES.WALLET_PAYOUT,
+    entityType: 'wallet',
+    entityId: currentUserId,
+    actorId: currentUserId,
+    payload: { action: 'resolve_wallet_to_connect', amountCents, ownerId },
+  }).catch(() => {});
+
+  return result.data ?? { success: true };
+}
+
 export async function requestPayoutAction(
   amountCents: number,
   speed: 'standard' | 'instant' = 'standard',

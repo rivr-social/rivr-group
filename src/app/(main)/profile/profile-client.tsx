@@ -41,6 +41,7 @@ import {
   getConnectStatusAction,
   releaseTestConnectBalanceToWalletAction,
   requestPayoutAction,
+  resolveWalletToConnectAction,
   setupConnectAccountAction,
 } from "@/app/actions/wallet";
 import { getAllSubscriptionStatusesAction } from "@/app/actions/billing";
@@ -119,6 +120,8 @@ function ConnectBalanceSection() {
     dashboardUrl?: string;
   } | null>(null);
   const [payoutLoading, setPayoutLoading] = useState(false);
+  const [moveAmount, setMoveAmount] = useState("");
+  const [moveLoading, setMoveLoading] = useState(false);
   const [releaseLoading, setReleaseLoading] = useState(false);
   const [setupLoading, setSetupLoading] = useState(false);
   const { toast } = useToast();
@@ -252,6 +255,29 @@ function ConnectBalanceSection() {
     }
   };
 
+  const handleMoveToStripe = async () => {
+    const dollars = Number.parseFloat(moveAmount);
+    if (!Number.isFinite(dollars) || dollars <= 0) {
+      toast({ title: "Enter an amount", description: "Type how much of your Rivr wallet to move to Stripe.", variant: "destructive" });
+      return;
+    }
+    const amountCents = Math.round(dollars * 100);
+    setMoveLoading(true);
+    const result = await resolveWalletToConnectAction(amountCents);
+    setMoveLoading(false);
+    if (result.success) {
+      toast({
+        title: "Moved to Stripe",
+        description: `$${(amountCents / 100).toFixed(2)} moved from your Rivr wallet to your Stripe balance. Use a payout to send it to your bank.`,
+      });
+      setMoveAmount("");
+      const balRes = await getConnectBalanceAction();
+      if (balRes.success && balRes.balance) setConnectBalance(balRes.balance);
+    } else {
+      toast({ title: "Move failed", description: result.error, variant: "destructive" });
+    }
+  };
+
   const handleReleaseTestSales = async () => {
     setReleaseLoading(true);
     const result = await releaseTestConnectBalanceToWalletAction();
@@ -334,6 +360,34 @@ function ConnectBalanceSection() {
             <Badge variant={connectStatus.detailsSubmitted ? "default" : "outline"}>
               Details {connectStatus.detailsSubmitted ? "Submitted" : "Incomplete"}
             </Badge>
+          </div>
+        </CardContent>
+      </Card>
+      {/* Move Rivr wallet → Stripe: resolves internal credit into real Stripe
+          funds (fulfilled by global), which the payout buttons send to the bank. */}
+      <Card>
+        <CardContent className="py-4 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Move Rivr wallet balance to Stripe (then pay out to your bank)
+          </p>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <span className="text-sm text-muted-foreground">$</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={moveAmount}
+                onChange={(e) => setMoveAmount(e.target.value)}
+                className="w-28 rounded-md border bg-background px-2 py-1 text-sm"
+                aria-label="Amount to move to Stripe"
+              />
+            </div>
+            <Button variant="outline" size="sm" disabled={moveLoading} onClick={() => void handleMoveToStripe()}>
+              {moveLoading ? "Moving..." : "Move to Stripe"}
+            </Button>
           </div>
         </CardContent>
       </Card>

@@ -32,6 +32,7 @@ export {
   createBankLinkSessionAction,
   saveLinkedBankAccountAction,
   requestPayoutAction,
+  resolveWalletToConnectAction,
   releaseTestConnectBalanceToWalletAction,
   releaseTestConnectBalanceToWalletInternal,
 } from './seller';
