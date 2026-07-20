@@ -250,13 +250,25 @@ export async function canModifyResource(userId: string, resourceId: string): Pro
   if (!resource) return { allowed: false };
   if (resource.ownerId === userId) return { allowed: true, resource };
 
-  const ownerIsGroup = await db
-    .select({ id: agents.id })
+  const [owner] = await db
+    .select({ id: agents.id, type: agents.type, parentAgentId: agents.parentAgentId })
     .from(agents)
-    .where(and(eq(agents.id, resource.ownerId), inArray(agents.type, [...GROUP_LIKE_OWNER_AGENT_TYPES])))
+    .where(eq(agents.id, resource.ownerId))
     .limit(1);
 
-  if (ownerIsGroup.length === 0) return { allowed: false, resource };
+  if (!owner) return { allowed: false, resource };
+
+  // Persona ownership: a persona is an `agents` row whose `parentAgentId` is the
+  // controlling account, which may modify/delete its persona's content. Without
+  // this branch a persona-homed resource was un-deletable by its own owner (the
+  // group-like check below never matches a persona).
+  if (owner.parentAgentId && owner.parentAgentId === userId) {
+    return { allowed: true, resource };
+  }
+
+  if (!GROUP_LIKE_OWNER_AGENT_TYPES.includes(owner.type as (typeof GROUP_LIKE_OWNER_AGENT_TYPES)[number])) {
+    return { allowed: false, resource };
+  }
   const canWrite = await hasGroupWriteAccess(userId, resource.ownerId);
   return { allowed: canWrite, resource };
 }
