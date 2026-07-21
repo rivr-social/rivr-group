@@ -736,6 +736,49 @@ treasury-to-treasury moves are net-zero so funding never double-counts.
   payout rail) — BY DESIGN, not a destination charge. Do NOT convert these to
   destination charges without Cameron (changes the settlement model; live money).
 
+## Virtual Meeting events — LiveKit room + identified-diarization transcript (2026-07-20)
+
+An event can be a **Virtual Meeting**: its venue IS a LiveKit room on the
+event page, the session is recorded **per participant track**, and a
+speaker-identified transcript lands on the event afterward. Speaker labels
+are exact by construction — each audio track belongs to one authenticated
+agent identity (never WhisperX guess-diarization).
+
+- **Create:** third Event Type option "Virtual Meeting (hosted here)" on
+  `/create` → `createEventResource({ virtualMeeting: true })` writes
+  `metadata.meetingKind: "virtual-meeting"` + `transcriptionEnabled: true`
+  (fields already existed in `EventMetadataSchema`).
+- **Lib:** `src/lib/meetings/` — `constants.ts` (env keys, deterministic
+  `eventRoomName(eventId)` = `evt-<id>`, join-window, statuses),
+  `livekit.ts` (config/room/token + `startTrackAudioEgress` via
+  DirectFileOutput→S3 + `receiveWebhookEvent`), `event-window.ts` (pure
+  join-window math), `meeting-recordings.ts` (pure per-egress state on
+  `metadata.meetingRecordings`), `transcript-merge.ts` (pure: per-track
+  segments → meeting-clock interleave → coalesced `**Name** [MM:SS]: text`
+  markdown), `transcript-land.ts` (SYSTEM lane — the webhook has no session,
+  so the transcript doc is landed with direct DB writes mirroring the exact
+  `event-transcript` document shape the session lane produces),
+  `recording-storage.ts` (S3 reader for egress files).
+- **Routes:** `GET/POST /api/events/[id]/meeting` — join lane;
+  `resolveAuthenticatedUserId` (NOT bare auth() — remote-viewer parity),
+  electorate = manage access OR `canPostToGroup` OR `hasActiveEventRsvp`
+  (now exported), join window enforced for non-managers.
+  `POST /api/livekit/webhook` — LiveKit-signed (JWT) machine lane:
+  track_published → start per-track audio egress; egress_ended /
+  room_finished → when the meeting ended and no egress is active,
+  transcribe each track (`transcribeAudioFileDetailed`, segments preserved),
+  merge, land the transcript, stamp `meetingTranscriptProcessedAt`.
+- **UI:** `components/event-meeting-panel.tsx` on the event page (status
+  poll, Join → full-screen `<LiveKitRoom><VideoConference/>`, recording
+  notice). Event page detects `meetingKind` (no more string-sniffing for
+  this lane).
+- **Env (instance):** `LIVEKIT_URL` (+ `LIVEKIT_API_KEY`/`_SECRET`) and
+  `MEETING_RECORDINGS_S3_{ENDPOINT,ACCESS_KEY,SECRET_KEY,BUCKET,REGION}`;
+  transcription reuses `WHISPER_TRANSCRIBE_URL`. Unset → routes 503/panel
+  explains; recording silently off without storage config.
+- **Tests:** `src/lib/__tests__/{transcript-merge,meeting-recordings,event-window}.test.ts`
+  (`pnpm test:unit`, 20 cases).
+
 ## Builder assistant — agentic edit + publish inside /builder (2026-07-14)
 
 Cameron's directive: "the assistant in builder should be able to edit and

@@ -879,8 +879,9 @@ export default function CreatePage() {
         time: eventTime,
         endDate: eventEndDate || null,
         endTime: eventEndTime || null,
-        location: eventLocation,
-        eventType: eventType as "in-person" | "online",
+        location: eventType === "virtual-meeting" ? "" : eventLocation,
+        eventType: eventType === "in-person" ? "in-person" : "online",
+        virtualMeeting: eventType === "virtual-meeting",
         price: normalizedTickets[0] && Number.isFinite(normalizedTickets[0].price) ? normalizedTickets[0].price : null,
         imageUrl: eventImageUrl ?? undefined,
         ownerId: postEventAsGroup && eventGroup !== "none" ? eventGroup : null,
@@ -1689,15 +1690,25 @@ export default function CreatePage() {
                   <SelectContent>
                     <SelectItem value="in-person">In-Person</SelectItem>
                     <SelectItem value="online">Online</SelectItem>
+                    <SelectItem value="virtual-meeting">Virtual Meeting (hosted here)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+
+              {eventType === "virtual-meeting" ? (
+                <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                  A meeting room opens on the event page around start time.
+                  The session is recorded per participant and a
+                  speaker-labeled transcript is attached to the event
+                  afterward.
+                </div>
+              ) : null}
 
               <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                 Locale is set from the Visibility Scope picker below. Add one or more locales there to scope and tag this event.
               </div>
 
-              {showEventLocation ? (
+              {eventType === "virtual-meeting" ? null : showEventLocation ? (
                 <div className="space-y-2">
                   <Label htmlFor="event-location">
                     {eventType === "online" ? "Meeting Link/Platform" : "Location"}

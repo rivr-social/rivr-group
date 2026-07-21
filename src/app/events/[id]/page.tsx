@@ -12,7 +12,9 @@ import { getEventTranscriptDocument } from "@/lib/queries/resources"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { EventDetailActions } from "@/components/event-detail-actions"
+import { EventMeetingPanel } from "@/components/event-meeting-panel"
 import { EventTranscriptPanel } from "@/components/event-transcript-panel"
+import { MEETING_KIND_VIRTUAL } from "@/lib/meetings/constants"
 import { EventToolbar } from "@/components/event-toolbar"
 import { EventDetailTabs } from "@/components/event-detail-tabs"
 import { buildEventStructuredData, serializeJsonLd } from "@/lib/structured-data"
@@ -169,7 +171,8 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
   const locationName = typeof event.location === "object" && event.location
     ? event.location.name || event.location.address || ""
     : ""
-  const locationIsVirtual = !locationName || locationName.toLowerCase().includes("zoom") || locationName.toLowerCase().includes("virtual") || locationName.toLowerCase().includes("online")
+  const isVirtualMeeting = (agent.metadata as Record<string, unknown> | null)?.meetingKind === MEETING_KIND_VIRTUAL
+  const locationIsVirtual = isVirtualMeeting || !locationName || locationName.toLowerCase().includes("zoom") || locationName.toLowerCase().includes("virtual") || locationName.toLowerCase().includes("online")
 
   const ticketPrice = Number(event.price ?? 0)
   const showTickets = Number.isFinite(ticketPrice) && ticketPrice > 0
@@ -386,7 +389,7 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
               {locationIsVirtual ? (
                 <>
                   <Video className="h-5 w-5 text-muted-foreground" />
-                  <span>{locationName || "Virtual Event"}</span>
+                  <span>{isVirtualMeeting ? "Virtual Meeting — hosted here" : locationName || "Virtual Event"}</span>
                 </>
               ) : (
                 <>
@@ -396,6 +399,11 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
               )}
             </div>
           </div>
+
+          {/* Virtual Meeting room (the event's venue) */}
+          {isVirtualMeeting ? (
+            <EventMeetingPanel eventId={event.id} eventName={event.name} />
+          ) : null}
 
           {/* Registration section */}
           <div className="bg-background rounded-lg border p-6">

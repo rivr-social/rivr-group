@@ -35,6 +35,94 @@ function extractTranscriptText(payload: unknown): string {
   return "";
 }
 
+/** One timestamped span of a detailed transcription (milliseconds). */
+export type TranscriptionSegment = {
+  startMs: number;
+  endMs: number;
+  text: string;
+};
+
+export type DetailedTranscriptionResult = TranscriptionResult & {
+  /**
+   * Timestamped segments when the provider supplies them (WhisperX does);
+   * otherwise a single zero-anchored segment covering the full text.
+   */
+  segments: TranscriptionSegment[];
+};
+
+function extractTranscriptSegments(payload: unknown): TranscriptionSegment[] {
+  if (!payload || typeof payload !== "object") return [];
+  const raw = (payload as Record<string, unknown>).segments;
+  if (!Array.isArray(raw)) return [];
+
+  const segments: TranscriptionSegment[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const start = typeof record.start === "number" ? record.start : null;
+    const end = typeof record.end === "number" ? record.end : null;
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    if (start === null || end === null || !text) continue;
+    // Whisper-family services report seconds; store milliseconds.
+    segments.push({
+      startMs: Math.round(start * 1000),
+      endMs: Math.round(end * 1000),
+      text,
+    });
+  }
+  return segments;
+}
+
+/**
+ * Like {@link transcribeAudioFile} but preserves per-segment timestamps,
+ * which the Virtual Meeting transcript merge needs to interleave speakers.
+ */
+export async function transcribeAudioFileDetailed(
+  file: File,
+): Promise<DetailedTranscriptionResult> {
+  if (!isTranscriptionConfigured()) {
+    throw new Error("Transcription is not configured on this deployment.");
+  }
+
+  if (WHISPER_TRANSCRIBE_URL) {
+    const formData = new FormData();
+    formData.append("file", file, file.name || "meeting-track.ogg");
+    if (process.env.WHISPER_TRANSCRIBE_MODEL?.trim()) {
+      formData.append("model", process.env.WHISPER_TRANSCRIBE_MODEL.trim());
+    }
+    const response = await fetch(WHISPER_TRANSCRIBE_URL, {
+      method: "POST",
+      headers: WHISPER_TRANSCRIBE_API_KEY
+        ? { Authorization: `Bearer ${WHISPER_TRANSCRIBE_API_KEY}` }
+        : undefined,
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Whisper transcription failed with status ${response.status}`);
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    const text = extractTranscriptText(payload);
+    if (!text) {
+      throw new Error("Whisper transcription returned no text.");
+    }
+    const segments = extractTranscriptSegments(payload);
+    return {
+      text,
+      provider: "whisper",
+      segments:
+        segments.length > 0 ? segments : [{ startMs: 0, endMs: 0, text }],
+    };
+  }
+
+  const fallback = await transcribeAudioFile(file);
+  return {
+    ...fallback,
+    segments: [{ startMs: 0, endMs: 0, text: fallback.text }],
+  };
+}
+
 export async function transcribeAudioFile(file: File): Promise<TranscriptionResult> {
   if (!isTranscriptionConfigured()) {
     throw new Error("Transcription is not configured on this deployment.");

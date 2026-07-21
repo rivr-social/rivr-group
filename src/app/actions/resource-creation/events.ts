@@ -165,6 +165,12 @@ export async function createEventResource(input: {
   endTime?: string | null;
   location: string;
   eventType: "in-person" | "online";
+  /**
+   * Host a Virtual Meeting on this instance: the event page opens a LiveKit
+   * room during the event window; the session is recorded per participant
+   * and a speaker-identified transcript lands on the event.
+   */
+  virtualMeeting?: boolean;
   price?: number | null;
   imageUrl?: string;
   ownerId?: string | null;
@@ -367,6 +373,9 @@ export async function createEventResource(input: {
           ...(input.eftValues ? { eftValues: input.eftValues } : {}),
           ...(input.capitalValues ? { capitalValues: input.capitalValues } : {}),
           ...(input.auditValues ? { auditValues: input.auditValues } : {}),
+          ...(input.virtualMeeting
+            ? { meetingKind: "virtual-meeting", transcriptionEnabled: true }
+            : {}),
         },
       });
 

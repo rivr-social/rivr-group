@@ -18,7 +18,7 @@ import { isUuid } from "./types";
 import { createDocumentResourceAction, updateResource } from "@/app/actions/create-resources";
 import { hasGroupWriteAccess } from "@/app/actions/resource-creation/helpers";
 
-async function hasActiveEventRsvp(userId: string, eventId: string): Promise<boolean> {
+export async function hasActiveEventRsvp(userId: string, eventId: string): Promise<boolean> {
   const rows = await db.execute(sql`
     SELECT 1
     FROM ledger
