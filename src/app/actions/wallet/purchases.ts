@@ -24,6 +24,7 @@ import { resolvePostOfferingDeal } from '@/lib/post-offer-deals';
 import { getResource } from '@/lib/queries/resources';
 import { getAgent } from '@/lib/queries/agents';
 import { getOrCreateStripeCustomer, getStripe } from '@/lib/billing';
+import { buildAutomaticTax, STRIPE_TAX_CODE_DEFAULT, RIVR_TAX_BEHAVIOR } from '@/lib/stripe-tax';
 import { consumeBookingSlot, hasBookableSchedule, isBookingSlotAvailable } from '@/lib/booking-slots';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { getCurrentUserIdForWrite } from './helpers';
@@ -549,11 +550,13 @@ export async function createEventTicketCheckoutAction(
               currency: 'usd',
               product_data: {
                 name: selection.ticketName,
+                tax_code: STRIPE_TAX_CODE_DEFAULT,
                 metadata: {
                   eventId,
                   ticketProductId: selection.ticketProductId,
                 },
               },
+              tax_behavior: RIVR_TAX_BEHAVIOR,
               unit_amount: selection.unitPriceCents,
             },
             quantity: selection.quantity,
@@ -564,13 +567,19 @@ export async function createEventTicketCheckoutAction(
                   currency: "usd",
                   product_data: {
                     name: `${eventName} Platform fee`,
+                    tax_code: STRIPE_TAX_CODE_DEFAULT,
                   },
+                  tax_behavior: RIVR_TAX_BEHAVIOR,
                   unit_amount: breakdown.totalCents - subtotalCents,
                 },
                 quantity: 1,
               }]
             : []),
         ],
+        // Destination-based sales tax via Stripe Tax (inert until registered).
+        // A customer is set, so the collected address is saved back to it.
+        automatic_tax: buildAutomaticTax(),
+        customer_update: { address: 'auto' },
         success_url: `${baseUrl}/events/${eventId}/registered?checkout=success`,
         cancel_url: `${baseUrl}/events/${eventId}/tickets?checkout=cancel`,
         metadata: {

@@ -28,6 +28,7 @@ import { db } from '@/db';
 import { resources, ledger, agents } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getStripe } from '@/lib/billing';
+import { buildAutomaticTax, STRIPE_TAX_CODE_DEFAULT, RIVR_TAX_BEHAVIOR } from '@/lib/stripe-tax';
 import { calculateCheckoutFees } from '@/lib/checkout-fees';
 import { resolveMarketplaceFeePolicy } from '@/lib/marketplace-fees';
 import { resolvePostOfferingDeal } from '@/lib/post-offer-deals';
@@ -308,12 +309,18 @@ export async function POST(request: NextRequest) {
                 quantity * hours > 1
                   ? `${listing.name} x${quantity * hours}`
                   : listing.name,
+              tax_code: STRIPE_TAX_CODE_DEFAULT,
             },
+            tax_behavior: RIVR_TAX_BEHAVIOR,
             unit_amount: fees.buyerTotalCents,
           },
           quantity: 1,
         },
       ],
+      // Sales tax (destination-based, from the buyer's address) via Stripe Tax
+      // — inert until RIVR has active tax registrations.
+      automatic_tax: buildAutomaticTax(),
+      billing_address_collection: 'required',
       payment_intent_data: {
         metadata: {
           settlementModel: 'platform_capital_accounts',

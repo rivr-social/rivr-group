@@ -38,6 +38,7 @@ import { db } from '@/db';
 import { groupMembershipSubscriptions, ledger, type NewLedgerEntry } from '@/db/schema';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getStripe, getOrCreateStripeCustomer } from '@/lib/billing';
+import { buildAutomaticTax, STRIPE_TAX_CODE_DEFAULT, RIVR_TAX_BEHAVIOR } from '@/lib/stripe-tax';
 import { getSettlementWalletForAgent } from '@/lib/wallet';
 import type { GroupMembershipPlan } from '@/lib/group-memberships';
 import type { GroupSubscriptionSettlementRail } from '@/db/schema';
@@ -179,8 +180,9 @@ export async function createGroupSubscriptionCheckout(params: {
     lineItem = {
       price_data: {
         currency: 'usd',
-        product_data: { name: `${plan.name} membership` },
+        product_data: { name: `${plan.name} membership`, tax_code: STRIPE_TAX_CODE_DEFAULT },
         recurring: { interval },
+        tax_behavior: RIVR_TAX_BEHAVIOR,
         unit_amount: pricing.buyerTotalCents,
       },
       quantity: 1,
@@ -227,6 +229,13 @@ export async function createGroupSubscriptionCheckout(params: {
     payment_method_collection: 'always',
     subscription_data: subscriptionData,
     metadata: subscriptionMetadata,
+    // Destination-based sales tax via Stripe Tax (inert until registered). On the
+    // Connect rail the charge routes to the group's connected account, so
+    // RIVR-the-facilitator is the party liable to collect + remit.
+    automatic_tax: buildAutomaticTax({
+      platformLiable: settlement.rail === 'connect' && Boolean(settlement.connectAccountId),
+    }),
+    customer_update: { address: 'auto' },
   });
 
   if (!session.url) {

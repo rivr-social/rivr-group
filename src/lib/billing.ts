@@ -20,6 +20,7 @@ import { db } from '@/db';
 import { agents, subscriptions, type MembershipTier } from '@/db/schema';
 import { eq, and, or, gt } from 'drizzle-orm';
 import { getStripeSecretKey, STRIPE_API_VERSION } from '@/lib/integrations/stripe';
+import { buildAutomaticTax, STRIPE_TAX_CODE_DEFAULT, RIVR_TAX_BEHAVIOR } from '@/lib/stripe-tax';
 import { getMembershipConnectSurchargeCents } from '@/lib/membership-pricing';
 
 /**
@@ -375,10 +376,12 @@ export async function createCheckoutSession(
           currency: 'usd',
           product_data: {
             name: 'Connect settlement fee',
+            tax_code: STRIPE_TAX_CODE_DEFAULT,
           },
           recurring: {
             interval: billingPeriod === 'monthly' ? 'month' : 'year',
           },
+          tax_behavior: RIVR_TAX_BEHAVIOR,
           unit_amount: getMembershipConnectSurchargeCents(billingPeriod),
         },
         quantity: 1,
@@ -387,6 +390,10 @@ export async function createCheckoutSession(
     success_url: successUrl.toString(),
     cancel_url: cancelUrl.toString(),
     payment_method_collection: 'always',
+    // Destination-based sales tax via Stripe Tax (inert until registered). The
+    // fixed-tier line's tax code lives on its Stripe Product in the dashboard.
+    automatic_tax: buildAutomaticTax(),
+    customer_update: { address: 'auto' },
     subscription_data: {
       metadata: {
         agentId,
