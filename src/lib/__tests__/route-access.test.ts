@@ -278,6 +278,7 @@ describe("route-access", () => {
         "/api/murmurations",
         "/api/universal-manifest",
         "/api/stripe/webhook",
+        "/api/livekit/webhook",
         "/api/stripe/checkout",
         "/api/stripe/marketplace-checkout",
         "/api/stripe/payment-intent",

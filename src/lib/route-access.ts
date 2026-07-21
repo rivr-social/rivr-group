@@ -43,6 +43,10 @@ const PUBLIC_API_PREFIXES = [
   "/api/murmurations",
   "/api/universal-manifest",
   "/api/stripe/webhook",
+  // LiveKit webhook: machine lane, authenticated inside the route by the
+  // LiveKit-signed JWT (Virtual Meeting recording pipeline) — same model
+  // as the Stripe webhook above.
+  "/api/livekit/webhook",
   "/api/stripe/checkout",
   "/api/stripe/marketplace-checkout",
   "/api/stripe/payment-intent",
