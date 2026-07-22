@@ -24,16 +24,37 @@ const STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS = 200;
 const CONNECT_OVERHEAD_RECOVERY_BPS = 500;
 
 /**
- * Cross-border transfer surcharge in basis points (1%), grossed into the
- * BUYER total when the seller's connected account lives outside the
- * platform country (US). Stripe's cross-border transfer fee runs
- * 0.25%–1% by corridor, plus ~1% currency conversion when the recipient
- * is paid in another currency — 1% covers the common same-currency
- * corridors; FX-heavy corridors may exceed it (tunable, revisit with
- * real corridor data). Same philosophy as every other component: the
- * payer covers it, the seller always nets face value.
+ * Cross-border transfer surcharge in basis points (0.25%), grossed into
+ * the BUYER total when the seller's connected account lives outside the
+ * platform country. Matches Stripe's documented cross-border payout fee
+ * for full-agreement accounts on the classic Connect rail
+ * (docs.stripe.com/connect/cross-border-payouts — 0.25%, waived UK↔EEA;
+ * seller-side currency conversion at payout is borne by the connected
+ * account under Stripe defaults, so this alone makes the platform
+ * whole). Recipients outside the Connect regions ride the separate
+ * Global Payouts rail (its per-payout pricing is handled there, not
+ * here). Same philosophy as every component: the payer covers it, the
+ * seller always nets face value.
  */
-export const CROSS_BORDER_TRANSFER_BPS = 100;
+export const CROSS_BORDER_TRANSFER_BPS = 25;
+/** Stripe's flat per-payout component on the Connect rail (25¢). */
+export const CROSS_BORDER_PAYOUT_FLAT_CENTS = 25;
+
+/**
+ * GLOBAL PAYOUTS corridor (sellers outside the Connect regions, e.g.
+ * Costa Rica): $1.50 flat per payout + volume tier (0.25%–1.25% by
+ * country — worst tier assumed until corridor data) + 1% FX when Stripe
+ * converts to the destination currency. Provisional per the Stripe docs
+ * changelog/pricing trail — RE-CONFIRM when the Global Payouts
+ * integration lands (it is a separate API surface; these constants only
+ * make CHECKOUT pricing ready for it).
+ */
+export const GLOBAL_PAYOUT_FLAT_CENTS = 150;
+export const GLOBAL_PAYOUT_VOLUME_BPS = 125;
+export const GLOBAL_PAYOUT_FX_BPS = 100;
+
+/** Which payout rail the seller's account settles on. */
+export type SellerPayoutCorridor = "domestic" | "connect_cross_border" | "global_payouts";
 
 /**
  * A referral fee/split recipient resolved server-side from group/locale/global
@@ -118,12 +139,13 @@ export function calculateCheckoutFees(
      */
     connectOverheadCents?: number;
     /**
-     * True when the seller's connected account is outside the platform
-     * country — grosses CROSS_BORDER_TRANSFER_BPS into the buyer total so
-     * Stripe's cross-border transfer fee never comes out of the seller's
-     * face value or RIVR's margin.
+     * The seller's payout corridor. Non-domestic corridors gross Stripe's
+     * documented payout-side costs into the BUYER total so they never
+     * come out of the seller's face value or RIVR's margin:
+     * connect_cross_border → 0.25% + 25¢; global_payouts → $1.50 +
+     * 1.25% volume + 1% FX (provisional — see constants above).
      */
-    crossBorderSeller?: boolean;
+    payoutCorridor?: SellerPayoutCorridor;
   },
 ): CheckoutFeeResult {
   if (!Number.isInteger(sellerPriceCents) || sellerPriceCents < 0) {
@@ -193,9 +215,17 @@ export function calculateCheckoutFees(
           Math.ceil((sellerPriceCents * CONNECT_OVERHEAD_RECOVERY_BPS) / BPS_DIVISOR),
         );
 
-  const crossBorderFeeCents = options?.crossBorderSeller
-    ? Math.round((sellerPriceCents * CROSS_BORDER_TRANSFER_BPS) / BPS_DIVISOR)
-    : 0;
+  const corridor: SellerPayoutCorridor = options?.payoutCorridor ?? "domestic";
+  const crossBorderFeeCents =
+    corridor === "connect_cross_border"
+      ? Math.round((sellerPriceCents * CROSS_BORDER_TRANSFER_BPS) / BPS_DIVISOR) +
+        CROSS_BORDER_PAYOUT_FLAT_CENTS
+      : corridor === "global_payouts"
+        ? Math.round(
+            (sellerPriceCents * (GLOBAL_PAYOUT_VOLUME_BPS + GLOBAL_PAYOUT_FX_BPS)) /
+              BPS_DIVISOR,
+          ) + GLOBAL_PAYOUT_FLAT_CENTS
+        : 0;
 
   const targetPlatformNetCents =
     platformFeeCents +

@@ -132,33 +132,38 @@ describe("calculateCheckoutFees — micro-transaction overhead scaling", () => {
   });
 });
 
-describe("calculateCheckoutFees — cross-border sellers", () => {
-  it("grosses the corridor surcharge into the buyer total; seller still nets face", () => {
+describe("calculateCheckoutFees — payout corridors", () => {
+  it("connect_cross_border grosses 0.25% + 25\u00a2 into the buyer total; seller nets face", () => {
     const domestic = calculateCheckoutFees(10_000);
-    const crossBorder = calculateCheckoutFees(10_000, { crossBorderSeller: true });
-    expect(crossBorder.crossBorderFeeCents).toBe(
-      Math.round((10_000 * CROSS_BORDER_TRANSFER_BPS) / 10_000),
+    const xb = calculateCheckoutFees(10_000, { payoutCorridor: "connect_cross_border" });
+    expect(xb.crossBorderFeeCents).toBe(
+      Math.round((10_000 * CROSS_BORDER_TRANSFER_BPS) / 10_000) + 25,
     );
-    expect(crossBorder.sellerNetCents).toBe(10_000);
-    expect(crossBorder.buyerTotalCents).toBeGreaterThan(domestic.buyerTotalCents);
-    // The whole surcharge (plus its share of the processing gross-up) is
-    // carried by the buyer — platform margin is not raided.
-    expect(crossBorder.platformFeeCents).toBe(domestic.platformFeeCents);
+    expect(xb.sellerNetCents).toBe(10_000);
+    expect(xb.buyerTotalCents).toBeGreaterThan(domestic.buyerTotalCents);
+    expect(xb.platformFeeCents).toBe(domestic.platformFeeCents);
   });
 
-  it("is zero for domestic sellers and when the flag is absent", () => {
+  it("global_payouts grosses $1.50 + volume tier + FX; seller nets face", () => {
+    const gp = calculateCheckoutFees(50_000, { payoutCorridor: "global_payouts" });
+    // 1.25% + 1% of $500 = $11.25, + $1.50 flat = $12.75
+    expect(gp.crossBorderFeeCents).toBe(1_275);
+    expect(gp.sellerNetCents).toBe(50_000);
+  });
+
+  it("domestic and absent corridor carry no surcharge", () => {
     expect(calculateCheckoutFees(10_000).crossBorderFeeCents).toBe(0);
     expect(
-      calculateCheckoutFees(10_000, { crossBorderSeller: false }).crossBorderFeeCents,
+      calculateCheckoutFees(10_000, { payoutCorridor: "domestic" }).crossBorderFeeCents,
     ).toBe(0);
   });
 
   it("composes with other buyer-funded components", () => {
     const fees = calculateCheckoutFees(20_000, {
       orgCommissionBps: 500,
-      crossBorderSeller: true,
+      payoutCorridor: "connect_cross_border",
     });
-    expect(fees.crossBorderFeeCents).toBe(200);
+    expect(fees.crossBorderFeeCents).toBe(75); // 50 (0.25%) + 25 flat
     expect(fees.orgCommissionCents).toBe(1_000);
     expect(fees.sellerNetCents).toBe(20_000);
     expect(fees.applicationFeeCents).toBe(fees.buyerTotalCents - 20_000);
