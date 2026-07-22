@@ -2,21 +2,20 @@
  * Offering / event-ticket fee calculator ("legacy" breakdown shape).
  *
  * Purpose:
- * Preserves the historical PRICING exactly — the buyer total and the
- * platform's take are unchanged from the legacy pipeline (platform 3.3% +
- * $1.44, tax 9.05%, payment leg 4% + 40¢; the profit model depends on the
- * spread between the payment leg and Stripe's actual cost — Cameron,
- * 2026-07-11). What changed in the consolidation is the ACCOUNTING and the
- * cost parameter: `paymentFeeCents` now reports Stripe's exact processing
- * cost (2.9% + 30¢, the single adjustable constant pair in checkout-fees.ts)
- * and the spread above it lands explicitly in `platformFeeCents` instead of
- * hiding inside the payment line. A canonical-engine gross-up FLOOR keeps the
- * surface solvent even if Stripe's pricing ever exceeds the 4% + 40¢ leg.
+ * Keeps the historical breakdown SHAPE (`LegacyFeeBreakdown` field names) that
+ * callers/UI/webhook metadata depend on, while the PRICING now delegates to the
+ * single unified engine (`calculateCheckoutFees`) — RIVR 3.3% + $1.49 + Connect
+ * overhead, grossed up so the payer separately covers Stripe's 2.9% + 30¢. The
+ * old per-surface pipeline (platform 3.3% + $1.44, flat 9.05% "sales tax", 4% +
+ * 40¢ payment leg) was RETIRED 2026-07-20 so offerings/tickets price identically
+ * to marketplace/dues/crypto.
  *
- * Key exports:
- * `LegacyFeeBreakdown` and `calculateLegacyCheckoutFeesCents` (same shape and
- * field names as before — `paymentFeeCents` is the exact processing cost and
- * `platformFeeCents` carries the margin INCLUDING the payment-leg spread) and
+ * Breakdown mapping: `paymentFeeCents` = Stripe's exact processing cost (2.9% +
+ * 30¢), `platformFeeCents` = everything above subtotal + Stripe (RIVR's cut),
+ * and `salesTaxCents` = 0 (retired — real sales tax, when needed, is Stripe Tax
+ * remitted properly, not a flat rate kept as revenue).
+ *
+ * Key exports: `LegacyFeeBreakdown`, `calculateLegacyCheckoutFeesCents`,
  * `calculateOfferingDestinationCharge`.
  */
 import { calculateCheckoutFees, estimateStripeProcessingFeeCents } from "@/lib/checkout-fees";
@@ -32,33 +31,20 @@ export type LegacyFeeBreakdown = {
   totalCents: number;
 };
 
-/** Flat platform fee in cents added to each non-zero order. */
-const PLATFORM_FEE_FIXED_CENTS = 144;
-/** Platform fee rate applied to subtotal (3.3%), in basis points. */
-const PLATFORM_FEE_BPS = 330;
-/** Tax rate applied after platform fee is included, in basis points. */
-const SALES_TAX_BPS = 905;
-/**
- * PRICING leg charged on top of subtotal + platform fee + tax (4% + 40¢).
- * Deliberately above Stripe's actual cost — the spread is platform margin
- * (part of the profit model, NOT a rounding artifact). Adjust THESE to change
- * what buyers pay; adjust checkout-fees.ts constants when Stripe's cost moves.
- */
-const PAYMENT_LEG_BPS = 400;
-const PAYMENT_LEG_FIXED_CENTS = 40;
-/** Basis-point divisor. */
-const BPS_DIVISOR = 10_000;
+// The legacy per-surface fee constants (platform 3.3%+$1.44, 9.05% sales tax,
+// 4%+40¢ payment leg) were retired 2026-07-20 — offerings/tickets now inherit
+// the single unified margin from checkout-fees.ts. The margin/Stripe knobs live
+// there (MARKETPLACE_FEE_BPS, PLATFORM_MARGIN_FIXED_CENTS, the Stripe constants).
 
 /**
  * Calculates the fee components and total charge for a checkout subtotal.
  *
- * The buyer total = subtotal + platform fee (3.3% + $1.44) + tax (9.05%) +
- * payment leg (4% + 40¢) — IDENTICAL to the historical pricing. The reported
- * breakdown splits that total honestly: `paymentFeeCents` = Stripe's exact
- * cost on the charged total, `platformFeeCents` = margin + the payment-leg
- * spread. The canonical engine's gross-up acts as a solvency FLOOR on the
- * total, so the platform cannot net negative even if Stripe's pricing ever
- * exceeds the payment leg.
+ * Buyer total = subtotal + the UNIFIED RIVR margin (3.3% + $1.49 + Connect
+ * overhead), grossed up so the payer separately covers Stripe's 2.9% + 30¢.
+ * No sales tax. The reported breakdown splits the total honestly:
+ * `paymentFeeCents` = Stripe's exact cost, `platformFeeCents` = RIVR's cut,
+ * `salesTaxCents` = 0 (retired). Delegates to `calculateCheckoutFees` so
+ * offerings/tickets price identically to marketplace/dues/crypto.
  *
  * @param subtotalCents Subtotal before fees/tax, in integer cents.
  * @returns A full fee breakdown in cents including the charged total.
@@ -85,32 +71,19 @@ export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyF
     };
   }
 
-  const baseMarginCents =
-    Math.round((subtotalCents * PLATFORM_FEE_BPS) / BPS_DIVISOR) + PLATFORM_FEE_FIXED_CENTS;
-  const salesTaxCents = Math.round(
-    ((subtotalCents + baseMarginCents) * SALES_TAX_BPS) / BPS_DIVISOR,
-  );
-  const preProcessingCents = subtotalCents + baseMarginCents + salesTaxCents;
-
-  // PRICING: the historical payment leg (4% + 40¢) sets the buyer total.
-  const paymentLegCents =
-    Math.round((preProcessingCents * PAYMENT_LEG_BPS) / BPS_DIVISOR) + PAYMENT_LEG_FIXED_CENTS;
-
-  // SOLVENCY FLOOR: the canonical engine's exact gross-up over the same base
-  // (zero engine margin/overhead — the layers above are this surface's
-  // policy). Today the payment leg exceeds it, so the floor is inert; it
-  // binds only if Stripe's cost ever outgrows the pricing leg.
-  const grossUpFloorCents = calculateCheckoutFees(preProcessingCents, {
-    platformFeeBps: 0,
-    connectOverheadCents: 0,
-  }).buyerTotalCents;
-
-  const totalCents = Math.max(preProcessingCents + paymentLegCents, grossUpFloorCents);
-
-  // ACCOUNTING: report Stripe's exact cost as the payment fee; everything
-  // above cost + tax + subtotal is platform margin (base + payment-leg
-  // spread), stated explicitly instead of hiding inside the payment line.
+  // UNIFIED MARGIN (2026-07-20): offerings + tickets now use the SAME model as
+  // marketplace/dues/crypto — RIVR's 3.3% + $1.49 + Connect overhead, grossed up
+  // so the payer separately covers Stripe's 2.9% + 30¢. The old base-fee +
+  // payment-leg-spread + flat 9.05% "sales tax" are retired (the tax was a
+  // Boulder rate charged to everyone and kept as revenue — dropped; real sales
+  // tax, if ever needed, is Stripe Tax remitted properly). Same breakdown shape
+  // for callers/UI: `salesTaxCents` is now always 0.
+  const fees = calculateCheckoutFees(subtotalCents);
+  const totalCents = fees.buyerTotalCents;
   const paymentFeeCents = estimateStripeProcessingFeeCents(totalCents);
+  const salesTaxCents = 0;
+  // Everything above the seller's subtotal + Stripe's cost is RIVR's cut
+  // (3.3% + $1.49 + Connect overhead) — the invariant the callers rely on.
   const platformFeeCents = totalCents - subtotalCents - salesTaxCents - paymentFeeCents;
 
   return {

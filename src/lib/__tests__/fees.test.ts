@@ -11,6 +11,7 @@ import {
   calculateLegacyCheckoutFeesCents,
   calculateOfferingDestinationCharge,
 } from "@/lib/fees";
+import { calculateCheckoutFees } from "@/lib/checkout-fees";
 
 describe("calculateLegacyCheckoutFeesCents", () => {
   it("returns an all-zero breakdown for a free order", () => {
@@ -23,19 +24,19 @@ describe("calculateLegacyCheckoutFeesCents", () => {
     });
   });
 
-  it("layers platform fee, tax, then processing onto the subtotal", () => {
+  it("layers platform fee then processing onto the subtotal (no sales tax)", () => {
     const b = calculateLegacyCheckoutFeesCents(100_00);
-    // total is strictly greater than each intermediate, and the components sum
-    // (within rounding) to the charged total.
+    // total is strictly greater than the subtotal, and the components sum to the
+    // charged total. Sales tax is retired (unified fee model, 2026-07-20).
     expect(b.subtotalCents).toBe(100_00);
     expect(b.platformFeeCents).toBeGreaterThan(0);
-    expect(b.salesTaxCents).toBeGreaterThan(0);
+    expect(b.salesTaxCents).toBe(0);
     expect(b.paymentFeeCents).toBeGreaterThan(0);
     expect(b.totalCents).toBeGreaterThan(b.subtotalCents);
     const componentSum =
       b.subtotalCents + b.platformFeeCents + b.salesTaxCents + b.paymentFeeCents;
-    // independent per-component rounding can drift the sum by a few cents.
-    expect(Math.abs(componentSum - b.totalCents)).toBeLessThanOrEqual(2);
+    // paymentFee is total-derived, so the components sum EXACTLY to the total.
+    expect(componentSum).toBe(b.totalCents);
   });
 
   it("rejects negative or non-integer subtotals", () => {
@@ -52,18 +53,13 @@ describe("calculateLegacyCheckoutFeesCents", () => {
     }
   });
 
-  it("preserves the historical buyer total (the profit model's pricing)", () => {
-    // The legacy float pipeline that the profit model is based on.
-    function legacyTotalCents(subtotalCents: number): number {
-      const basePrice = subtotalCents / 100;
-      const platformFee = basePrice * 0.033 + 1.44;
-      const salesTax = (basePrice + platformFee) * 0.0905;
-      const paymentFee = (basePrice + platformFee + salesTax) * 0.04 + 0.4;
-      return Math.round((basePrice + platformFee + salesTax + paymentFee) * 100);
-    }
+  it("prices identically to the unified checkout engine (offerings == marketplace)", () => {
+    // The legacy float pipeline (3.3%+$1.44 base + 9.05% tax + 4%+40¢ leg) was
+    // retired 2026-07-20; offerings/tickets now DELEGATE to calculateCheckoutFees,
+    // so the buyer total must match the unified engine exactly for every subtotal.
     for (const sub of [1_00, 6_00, 10_00, 45_00, 100_00, 1000_00]) {
       const b = calculateLegacyCheckoutFeesCents(sub);
-      expect(Math.abs(b.totalCents - legacyTotalCents(sub))).toBeLessThanOrEqual(2);
+      expect(b.totalCents).toBe(calculateCheckoutFees(sub).buyerTotalCents);
     }
   });
 
@@ -72,10 +68,10 @@ describe("calculateLegacyCheckoutFeesCents", () => {
       const b = calculateLegacyCheckoutFeesCents(sub);
       const stripeCost = Math.round(b.totalCents * 0.029) + 30;
       expect(b.paymentFeeCents).toBe(stripeCost);
-      // Platform line = base margin (3.3% + $1.44) + the payment-leg spread —
-      // strictly MORE than the base margin alone (the spread is the profit
-      // model's margin, stated explicitly instead of hiding in paymentFee).
-      const baseMargin = Math.round(sub * 0.033) + 144;
+      // Platform line = unified margin (3.3% + $1.49) + the gross-up spread over
+      // Stripe's real cost — strictly MORE than the bare margin alone (the spread
+      // is stated explicitly in platformFee instead of hiding in paymentFee).
+      const baseMargin = Math.round(sub * 0.033) + 149;
       expect(b.platformFeeCents).toBeGreaterThan(baseMargin);
     }
   });
