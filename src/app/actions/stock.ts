@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
+import { getAuthenticatedActorId } from "@/lib/server-auth";
 import { db } from "@/db";
 import { agents, resources } from "@/db/schema";
 import { isGroupAdmin } from "@/app/actions/group-admin";
@@ -233,8 +234,13 @@ async function freshLists(parent: ResolvedStockParent, listId: string, needs: St
 
 /** Resolve the current session user id, or `null` when unauthenticated. */
 async function currentUserId(): Promise<string | null> {
+  // Remote-viewer-aware unified session: a cross-instance SSO admin (e.g.
+  // the group's creator arriving from their home instance) has NO NextAuth
+  // session — only the remote-viewer cookie. Bare auth() here made every
+  // stock/needs-list action report "Authentication required" for them.
   const session = await auth();
-  return session?.user?.id ?? null;
+  if (session?.user?.id) return session.user.id;
+  return getAuthenticatedActorId();
 }
 
 /**

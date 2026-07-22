@@ -1,6 +1,7 @@
 "use server";
 
 import { and, eq, sql } from "drizzle-orm";
+import { projectMembershipToMemberHome } from "@/lib/federation/membership-projection";
 import { db } from "@/db";
 import { agents, ledger } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
@@ -118,6 +119,11 @@ export async function toggleJoinGroup(groupId: string, type: "group" | "ring" = 
             console.error("[toggleJoinGroup] Matrix sync failed:", err);
           }
         })();
+        // Fire-and-forget: a remote-homed member's home instance learns
+        // about the new membership so their Groups tab shows this group.
+        if (result.active) {
+          void projectMembershipToMemberHome(userId, groupId);
+        }
       }
 
       return result;

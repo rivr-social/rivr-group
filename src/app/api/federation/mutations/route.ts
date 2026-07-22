@@ -23,6 +23,14 @@ import type {
 } from "@/lib/federation/cross-instance-types";
 import type { RoutingProvenance } from "@/lib/federation/write-router";
 import { toggleFollowAgent, toggleJoinGroup } from "@/app/actions/interactions/social";
+import { toggleLikeOnTarget, setReactionOnTarget } from "@/app/actions/interactions/reactions";
+import { setEventRsvp } from "@/app/actions/interactions/events-jobs";
+import { postCommentAction } from "@/app/actions/resource-creation/comments";
+import {
+  canonicalMutationType,
+  INTERACTION_MUTATION_TYPES,
+  LEGACY_MUTATION_ALIASES,
+} from "@/lib/federation/mutation-contract";
 import { applyMembershipRequestForActor } from "@/app/actions/group-access";
 import { isGroupMember } from "@/lib/permissions";
 import { createEventResource } from "@/app/actions/resource-creation/events";
@@ -62,8 +70,6 @@ const KNOWN_MUTATION_TYPES = [
   "createOffering",
   "createOfferingResource",
   "updateAgent",
-  "createComment",
-  "toggleReaction",
   "projectResourceBundle",
   "applyMembershipProjection",
   // Buyer-rail owner-routed actions (open-issues P0). Dispatched to this
@@ -73,7 +79,9 @@ const KNOWN_MUTATION_TYPES = [
   "bookAssetAction",
   "applyToJob",
   "purchaseWithWalletAction",
-] as const;
+  ...INTERACTION_MUTATION_TYPES,
+  ...Object.keys(LEGACY_MUTATION_ALIASES),
+] as readonly string[];
 
 const INTERACTION_HANDLERS: Record<
   FederatedInteractionAction,
@@ -793,6 +801,76 @@ async function handleLegacyMutation(
   });
 
   const isKnownType = (KNOWN_MUTATION_TYPES as readonly string[]).includes(type);
+  // Retired wire names (createComment/toggleReaction) resolve to their
+  // modern equivalents via the shared contract before dispatch.
+  const canonicalType = canonicalMutationType(type);
+
+  // ── Fleet interaction vocabulary (shared mutation contract) ──────────
+  // These call the SAME local actions the UI uses; the federation
+  // execution context resolves the mapped actor as the acting session.
+  if (
+    canonicalType === "postCommentAction" ||
+    canonicalType === "toggleLikeOnTarget" ||
+    canonicalType === "setReactionOnTarget" ||
+    canonicalType === "setEventRsvp"
+  ) {
+    const record =
+      payload && typeof payload === "object"
+        ? (payload as Record<string, unknown>)
+        : {};
+    const str = (key: string): string | null =>
+      typeof record[key] === "string" && (record[key] as string).length > 0
+        ? (record[key] as string)
+        : null;
+    const targetType = (
+      ["post", "event", "resource", "comment", "job"].includes(String(record.targetType))
+        ? String(record.targetType)
+        : "post"
+    ) as "post";
+
+    const result = await runWithFederationExecutionContext(authorizedActorId, async () => {
+      switch (canonicalType) {
+        case "postCommentAction": {
+          const resourceId = str("resourceId") ?? str("targetId");
+          const content = str("content");
+          if (!resourceId || !content) {
+            return { success: false, message: "resourceId and content are required" };
+          }
+          return postCommentAction(resourceId, content, str("parentCommentId"));
+        }
+        case "toggleLikeOnTarget":
+          return toggleLikeOnTarget(str("targetId") ?? targetAgentId, targetType);
+        case "setReactionOnTarget":
+          return setReactionOnTarget(
+            str("targetId") ?? targetAgentId,
+            targetType,
+            (str("reactionType") ?? "like") as Parameters<typeof setReactionOnTarget>[2],
+          );
+        case "setEventRsvp": {
+          const eventId = str("eventId") ?? str("targetId");
+          if (!eventId) return { success: false, message: "eventId is required" };
+          const status = ["going", "interested", "none"].includes(String(record.status))
+            ? (String(record.status) as "going" | "interested" | "none")
+            : "going";
+          return setEventRsvp(eventId, status);
+        }
+      }
+    });
+    return NextResponse.json({
+      success: (result as { success?: boolean } | undefined)?.success !== false,
+      data: result,
+      knownType: true,
+      instanceId: config.instanceId,
+      ...(routedFrom
+        ? {
+            routedFrom: {
+              originInstanceSlug: routedFrom.originInstanceSlug,
+              originInstanceId: routedFrom.originInstanceId,
+            },
+          }
+        : {}),
+    });
+  }
 
   if (type === "toggleFollowAgent") {
     const result = await runWithFederationExecutionContext(authorizedActorId, () => toggleFollowAgent(targetAgentId));

@@ -138,12 +138,18 @@ export function requiredVisitorCapability(
   key: string | undefined,
 ): VisitorCapability | null {
   switch (key) {
+    // Light reactions — legacy names plus the shared-contract interaction
+    // vocabulary actually on the wire (mutation-contract.ts).
     case "react":
     case "toggleReaction":
+    case "toggleLikeOnTarget":
+    case "setReactionOnTarget":
       return "react";
     case "createComment":
+    case "postCommentAction":
       return "comment";
     case "rsvp":
+    case "setEventRsvp":
       return "rsvp";
     case "message_thread_start":
       return "message";

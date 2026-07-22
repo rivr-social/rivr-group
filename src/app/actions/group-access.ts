@@ -10,6 +10,7 @@
  */
 
 import { db } from "@/db";
+import { projectMembershipToMemberHome } from "@/lib/federation/membership-projection";
 import { agents, ledger } from "@/db/schema";
 import type { NewLedgerEntry } from "@/db/schema";
 import { eq, and, or, sql, isNull } from "drizzle-orm";
@@ -203,6 +204,8 @@ export async function challengeGroupAccess(
       },
     } as NewLedgerEntry)
     .returning({ id: ledger.id });
+
+  void projectMembershipToMemberHome(actorId, groupId);
 
   return {
     success: true,
@@ -416,6 +419,8 @@ export async function renewGroupMembership(
       },
     } as NewLedgerEntry)
     .returning({ id: ledger.id });
+
+  void projectMembershipToMemberHome(actorId, groupId);
 
   return {
     success: true,
@@ -698,6 +703,8 @@ export async function applyMembershipRequestForActor(
       } as NewLedgerEntry)
       .returning({ id: ledger.id });
 
+    void projectMembershipToMemberHome(actorId, groupId);
+
     return { success: true, status: "joined" as const, membershipId: entry.id };
   }
 
@@ -927,6 +934,7 @@ export async function reviewGroupJoinRequest(
           grantedBy: actorId,
         },
       } as NewLedgerEntry);
+      void projectMembershipToMemberHome(request.userId, groupId);
     }
   }
 
