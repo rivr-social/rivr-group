@@ -27,7 +27,6 @@ import type { GroupWorkPeriodItem } from "@/app/actions/calendar-work"
 import { InviteMemberCard } from "@/components/invite-member-card"
 import type { GroupInvite } from "@/app/actions/group-members"
 import { AboutDocumentsCard } from "@/components/about-documents-card"
-import { FlowPassModal } from "@/components/flow-pass-modal"
 import { GroupAccessDialog } from "@/components/group-access-dialog"
 import type {
   NetAllocationClassOption,
@@ -340,7 +339,6 @@ export function GroupTabsClient({
 
   const [offeringModalOpen, setOfferingModalOpen] = useState(false)
   const [savedListings, setSavedListings] = useState<string[]>([])
-  const [flowPassOpen, setFlowPassOpen] = useState(false)
   const [accessDialogOpen, setAccessDialogOpen] = useState(
     () => !!passwordRequired && !isGroupMember
   )
@@ -907,11 +905,6 @@ export function GroupTabsClient({
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <p className="text-sm text-muted-foreground">Total listings: {listingResources.length}</p>
-            {isGroupMember && (
-              <Button size="sm" variant="ghost" onClick={() => setFlowPassOpen(true)}>
-                Flow Pass
-              </Button>
-            )}
           </div>
           {isGroupMember && (
             <Button size="sm" variant="outline" onClick={() => setOfferingModalOpen(true)}>
@@ -919,12 +912,6 @@ export function GroupTabsClient({
             </Button>
           )}
         </div>
-        <FlowPassModal
-          open={flowPassOpen}
-          onClose={() => setFlowPassOpen(false)}
-          groupName={groupName}
-          isBasicMember={isGroupMember}
-        />
         <CreateOfferingModal
           open={offeringModalOpen}
           onClose={() => setOfferingModalOpen(false)}

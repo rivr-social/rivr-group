@@ -19,7 +19,7 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Bot, Camera, Drama, ExternalLink, Loader2, Pencil, Plus, Rocket, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Crown, Plug, Eye } from "lucide-react";
+import { ArrowLeft, Bot, Camera, Drama, ExternalLink, Loader2, Pencil, Plus, Rocket, Trash2, UserPlus, CreditCard, MessageSquare, Globe, Mail, Plug, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -51,9 +51,6 @@ import type { ChatMode } from "@/db/schema";
 import { tierHasCapability } from "@/lib/entitlements";
 import { getSubscriptionStatusAction } from "@/app/actions/billing";
 import { SubscriptionGateDialog } from "@/components/subscription-gate-dialog";
-import { GroupAdminView } from "@/components/group-admin-view";
-import { GroupType as LegacyGroupType } from "@/lib/types";
-import type { Group as LegacyGroup } from "@/lib/types";
 import { ConnectionsForm, type GroupGoogleConnectionSummary } from "./connections/connections-form";
 import { fetchGroupGoogleConnectionAction } from "./connections/actions";
 import { ConnectorsSettingsPanel } from "@/components/connectors-settings-panel";
@@ -75,7 +72,6 @@ const TAB_VALUES = {
   ANNOUNCEMENTS: "announcements",
   CONNECTIONS: "connections",
   MAP_MARKER: "map-marker",
-  ADMIN_OVERVIEW: "admin-overview",
 } as const;
 type TabValue = (typeof TAB_VALUES)[keyof typeof TAB_VALUES];
 
@@ -807,10 +803,6 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
             <Globe className="h-4 w-4" />
             Map Marker
           </TabsTrigger>
-          <TabsTrigger value={TAB_VALUES.ADMIN_OVERVIEW} className="inline-flex items-center gap-2">
-            <Crown className="h-4 w-4" />
-            Admin Overview
-          </TabsTrigger>
         </ResponsiveTabsList>
 
         {/* Profile tab folds the former Edit-Profile modal into settings (A4). */}
@@ -1404,22 +1396,6 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
               <ConnectorsSettingsPanel targetAgentId={groupId} />
             </CardContent>
           </Card>
-        </TabsContent>
-
-        {/* Admin Overview tab renders the GroupAdminView component with data mapped from settings state. */}
-        <TabsContent value="admin-overview" className="space-y-4">
-          <GroupAdminView
-            group={{
-              id: groupId,
-              name: groupName,
-              description: "",
-              image: "",
-              memberCount: 0,
-              createdAt: new Date().toISOString(),
-              type: groupType === "organization" ? LegacyGroupType.Organization : LegacyGroupType.Basic,
-              modelUrl: modelUrl ?? undefined,
-            } satisfies LegacyGroup}
-          />
         </TabsContent>
 
         {/* Map Marker tab: place location (A5) + a GLB 3D model for the marker. */}
