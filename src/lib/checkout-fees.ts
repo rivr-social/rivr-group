@@ -24,6 +24,18 @@ const STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS = 200;
 const CONNECT_OVERHEAD_RECOVERY_BPS = 500;
 
 /**
+ * Cross-border transfer surcharge in basis points (1%), grossed into the
+ * BUYER total when the seller's connected account lives outside the
+ * platform country (US). Stripe's cross-border transfer fee runs
+ * 0.25%–1% by corridor, plus ~1% currency conversion when the recipient
+ * is paid in another currency — 1% covers the common same-currency
+ * corridors; FX-heavy corridors may exceed it (tunable, revisit with
+ * real corridor data). Same philosophy as every other component: the
+ * payer covers it, the seller always nets face value.
+ */
+export const CROSS_BORDER_TRANSFER_BPS = 100;
+
+/**
  * A referral fee/split recipient resolved server-side from group/locale/global
  * config. `bps` is basis points of the seller price; `cents` is the computed
  * amount the buyer total is grossed up by and that the recipient is paid at
@@ -53,6 +65,8 @@ export interface CheckoutFeeResult {
   applicationFeeCents: number;
   stripeProcessingFeeEstimateCents: number;
   connectAccountFeeEstimateCents: number;
+  /** Cross-border transfer surcharge (buyer-funded; 0 for domestic sellers). */
+  crossBorderFeeCents: number;
 }
 
 
@@ -103,6 +117,13 @@ export function calculateCheckoutFees(
      * processing gross-up.
      */
     connectOverheadCents?: number;
+    /**
+     * True when the seller's connected account is outside the platform
+     * country — grosses CROSS_BORDER_TRANSFER_BPS into the buyer total so
+     * Stripe's cross-border transfer fee never comes out of the seller's
+     * face value or RIVR's margin.
+     */
+    crossBorderSeller?: boolean;
   },
 ): CheckoutFeeResult {
   if (!Number.isInteger(sellerPriceCents) || sellerPriceCents < 0) {
@@ -122,6 +143,7 @@ export function calculateCheckoutFees(
       applicationFeeCents: 0,
       stripeProcessingFeeEstimateCents: 0,
       connectAccountFeeEstimateCents: 0,
+      crossBorderFeeCents: 0,
     };
   }
 
@@ -171,11 +193,16 @@ export function calculateCheckoutFees(
           Math.ceil((sellerPriceCents * CONNECT_OVERHEAD_RECOVERY_BPS) / BPS_DIVISOR),
         );
 
+  const crossBorderFeeCents = options?.crossBorderSeller
+    ? Math.round((sellerPriceCents * CROSS_BORDER_TRANSFER_BPS) / BPS_DIVISOR)
+    : 0;
+
   const targetPlatformNetCents =
     platformFeeCents +
     orgCommissionCents +
     referralSplitTotalCents +
-    connectOverheadCents;
+    connectOverheadCents +
+    crossBorderFeeCents;
 
   const grossBeforeStripeFixedCents =
     sellerPriceCents + targetPlatformNetCents + STRIPE_CARD_FIXED_CENTS;
@@ -200,5 +227,6 @@ export function calculateCheckoutFees(
     applicationFeeCents,
     stripeProcessingFeeEstimateCents,
     connectAccountFeeEstimateCents: connectOverheadCents,
+    crossBorderFeeCents,
   };
 }

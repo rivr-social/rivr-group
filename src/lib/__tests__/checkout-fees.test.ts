@@ -5,7 +5,7 @@
  * total and reported per-recipient for settlement.
  */
 import { describe, expect, it } from "vitest";
-import { calculateCheckoutFees, PLATFORM_MARGIN_FIXED_CENTS } from "@/lib/checkout-fees";
+import { CROSS_BORDER_TRANSFER_BPS, calculateCheckoutFees, PLATFORM_MARGIN_FIXED_CENTS } from "@/lib/checkout-fees";
 import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from "@/lib/wallet-constants";
 
 describe("calculateCheckoutFees — base behavior", () => {
@@ -129,5 +129,38 @@ describe("calculateCheckoutFees — micro-transaction overhead scaling", () => {
   it("an explicit connectOverheadCents override still wins (dues pass 0)", () => {
     const fees = calculateCheckoutFees(600, { connectOverheadCents: 0 });
     expect(fees.connectAccountFeeEstimateCents).toBe(0);
+  });
+});
+
+describe("calculateCheckoutFees — cross-border sellers", () => {
+  it("grosses the corridor surcharge into the buyer total; seller still nets face", () => {
+    const domestic = calculateCheckoutFees(10_000);
+    const crossBorder = calculateCheckoutFees(10_000, { crossBorderSeller: true });
+    expect(crossBorder.crossBorderFeeCents).toBe(
+      Math.round((10_000 * CROSS_BORDER_TRANSFER_BPS) / 10_000),
+    );
+    expect(crossBorder.sellerNetCents).toBe(10_000);
+    expect(crossBorder.buyerTotalCents).toBeGreaterThan(domestic.buyerTotalCents);
+    // The whole surcharge (plus its share of the processing gross-up) is
+    // carried by the buyer — platform margin is not raided.
+    expect(crossBorder.platformFeeCents).toBe(domestic.platformFeeCents);
+  });
+
+  it("is zero for domestic sellers and when the flag is absent", () => {
+    expect(calculateCheckoutFees(10_000).crossBorderFeeCents).toBe(0);
+    expect(
+      calculateCheckoutFees(10_000, { crossBorderSeller: false }).crossBorderFeeCents,
+    ).toBe(0);
+  });
+
+  it("composes with other buyer-funded components", () => {
+    const fees = calculateCheckoutFees(20_000, {
+      orgCommissionBps: 500,
+      crossBorderSeller: true,
+    });
+    expect(fees.crossBorderFeeCents).toBe(200);
+    expect(fees.orgCommissionCents).toBe(1_000);
+    expect(fees.sellerNetCents).toBe(20_000);
+    expect(fees.applicationFeeCents).toBe(fees.buyerTotalCents - 20_000);
   });
 });
