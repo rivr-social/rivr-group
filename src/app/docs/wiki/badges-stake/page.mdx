@@ -2,39 +2,108 @@
 
 ## What it is
 
-Badges are issued credentials that recognize skills, roles, or contribution and
-can gate actions (e.g. job claims). Points-based stake converts contribution into
-standing/weight within an org. Admins manage badge issuance.
+Two different ways the group recognizes people.
 
-## Where it lives
+A **badge** is an issued credential — a skill, a role, a qualification. Badges
+are mostly **gates**: a job can require one before it can be claimed. Badges are
+awarded by group admins; they are not minted by finishing work.
 
-- `/badges`, `/badges/[id]` — badge directory + detail · `src/app/badges/**`
-- `/admin/badges` — badge administration · `src/app/admin/badges/page.tsx`
-- `/points` — points/stake · `src/app/(main)/points/page.tsx`
+**Stake** is a share of standing derived from **attested task points**. Your
+stake in an org is your points divided by the total points earned across that
+org and its whole subgroup tree. It is what net-distribution class rules pay by.
 
-## Every interaction
+<Callout type="note" title="There is no /points page and no /admin/badges">
+  Points and stake live on the group's <strong>Stake</strong> tab. Badges are
+  browsed at <code>/badges</code> and issued from the group's
+  <strong>Badges</strong> tab. Earlier docs cited <code>/points</code> and
+  <code>/admin/badges</code>; neither route exists here.
+</Callout>
 
-- **Browse badges / open a badge** — see a badge and its holders.
-- **Issue a badge** — admins award badges to agents (`/admin/badges`).
-- **Earn points (claim → attest)** — checking off a task records the worker's
-  *claimed finished* event; points land as `earn` ledger rows **when the
-  project's QA, lead, or a group admin attests** the work (the attester can
-  adjust the value). Reopening or rejecting work retracts its points. Task-less
-  jobs carry a job-level pool split among assignees by their mutual
-  peer-assessment sliders at job completion.
-- **Stake** — org stake is proportional to attested task points earned across
-  the group and its subgroup tree: `profitShare = your points ÷ subtree total`,
-  shown on the group's Stake tab and reused by net-allocation class rules.
-  Badges remain claim-time *gates*; completion records contribution instead of
-  minting badges.
+## How to browse badges
 
-## Permissions / gating
+1. Go to **`/badges`** — the badge directory. It shows every badge definition
+   and marks which ones you hold.
+2. Click a badge to open **`/badges/<id>`**: the badge, its holders, and its
+   **Available Jobs** — the jobs this badge unlocks, each with its pay badge.
 
-- **Public** badge pages (`/badges` is a public prefix).
-- **Badge issuance** is admin-gated (`/admin/badges`).
-- Badge holdings gate downstream capabilities (e.g. claiming badge-gated jobs).
+## How to create and award a badge (admin)
 
-## Cross-links
+1. Open the group's **Badges** tab (`/groups/<id>?tab=badges`).
+2. Click **Create Badge** and fill in the definition.
+3. On any badge card, use the **Award to member…** picker to choose a member,
+   then click **Award**.
 
-- Wiki: [Projects & jobs](/docs/wiki/projects-jobs) (badge-gated claims) · [Governance](/docs/wiki/governance) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Admin](/docs/wiki/admin)
-- API/MCP: [`rivr.points.balance`](/docs/api) · [Work Graph tools](/docs/api)
+> 📸 **Screenshot:** _the group Badges tab with the Create Badge button and a badge card's "Award to member…" control_ — capture at `/groups/<id>?tab=badges` (as an admin). _(placeholder — remove when image added)_
+
+## How to earn points and stake
+
+1. Claim a job and do the work — see [Projects & jobs](/docs/wiki/projects-jobs).
+2. **Check off a task.** This records a *claim*, not points. You may propose a
+   point value.
+3. The project's **QA**, its **lead**, or a **group-or-ancestor admin** attests
+   the claim. **Points land at attestation**, and the attester may adjust the
+   awarded value.
+4. Rejecting or reopening the work deactivates both the claim and its points.
+5. Task-less jobs carry a job-level point pool that splits by peer assessment at
+   mark-done.
+
+## How to read the Stake tab
+
+1. Open the group's **Stake** tab (`/groups/<id>?tab=stake`).
+2. **Your points by subgroup** — a card showing how your points are split across
+   the org's subgroups. It's a read-only partition by the task's direct owner, so
+   the parts sum exactly to your subtree total.
+3. **Stake Overview** — the group stake distribution: each member with their
+   `profitShare` percentage and a bar.
+4. **Contribution Metrics** — recorded contributions per member.
+
+> 📸 **Screenshot:** _the Stake tab showing "Your points by subgroup" above the group stake distribution_ — capture at `/groups/<id>?tab=stake` (as a member with attested points). _(placeholder — remove when image added)_
+
+## Good to know
+
+- **The maths.** `profitShare = your points ÷ subtree total points`, over the
+  recursive subgroup tree. Net-allocation `class` rules split their basis points
+  proportionally to the same weights, falling back to an equal split only when
+  nobody in the class holds points.
+- **Badges gate; they don't reward.** Completion records contribution; it does
+  not mint a badge. Job claims can be badge-gated, and **group and ancestor
+  admins bypass badge gates**.
+- **Badges also feed governance.** A poll or proposal can restrict voting to
+  badge holders (any badge, or one specific governance badge), and a governance
+  badge can carry a **voting weight**. See [Governance](/docs/wiki/governance).
+- **Share classes are separate.** Steward/Worker equity — a percentage of org net
+  split among members by shares held — lives on the **Treasury** tab, not here,
+  and is authored per share class. It also supplies the `vote %` governance
+  dimension.
+- Badge pages are public; the group's Badges and Stake tabs are members-default.
+- There is exactly **one writer** for the points ledger edge, and it only fires
+  at attestation.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Badge directory | `/badges` | `src/app/badges/page.tsx` |
+| Badge detail | `/badges/[id]` | `src/app/badges/[id]/badge-detail.tsx` |
+| Group badges | `/groups/[id]?tab=badges` | `src/components/badges-tab.tsx` |
+| Group stake | `/groups/[id]?tab=stake` | `src/components/stake-tab.tsx` |
+| Share classes | `/groups/[id]?tab=treasury` | `src/components/share-classes-card.tsx` |
+
+- **Badge actions:** `createBadgeResourceAction`, `awardBadgeToMemberAction` in
+  `src/app/actions/resource-creation/lifecycle.ts` (re-exported from
+  `src/app/actions/create-resources.ts`).
+- **Points writer:** `src/lib/work-completion.ts` (`attestWork`) — writes the
+  `earn` / `task-points-earned` ledger edge. One active edge per worker+target;
+  re-attest updates in place; reject/reopen deactivates.
+- **Stake queries:** `src/lib/queries/stakes.ts` —
+  `getMemberStakesForGroup`, `getMemberSubgroupPointsBreakdown`,
+  `getSubtreeTaskPointsByMember`.
+- **Net allocation:** `resolveGroupNetAllocation` / `resolveNetAllocation` /
+  `splitBpsByWeight`, folded with `resolveShareClassAllocations`.
+- **Share classes:** `src/app/actions/wallet/share-classes.ts`.
+- **Job badge gates:** `src/components/job-required-badges-field.tsx`.
+
+Related: [Projects & jobs](/docs/wiki/projects-jobs) ·
+[Governance](/docs/wiki/governance) ·
+[Wallet & treasury](/docs/wiki/wallet-treasury) ·
+[Groups & subgroups](/docs/wiki/groups)

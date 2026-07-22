@@ -2,31 +2,84 @@
 
 ## What it is
 
-Direct messages between users and group/room conversations, backed by Matrix
-(Synapse). Includes 1:1 DMs and multi-party rooms.
+Real-time chat, backed by **Matrix (Synapse)**. One page holds everything:
+your direct messages, group DMs, and the rooms of groups you belong to. Because
+it is Matrix underneath, messages sync live and the group's rooms can be bridged
+to outside messengers.
 
-## Where it lives
+<Callout type="note" title="One route, not three">
+  Everything lives at <code>/messages</code>. There are no
+  <code>/messages/[otherUserId]</code> or <code>/messages/room/[roomId]</code>
+  routes — earlier docs listed both. Conversations are selected inside the page;
+  the only deep link is <code>/messages?user=&lt;agentId&gt;</code>.
+</Callout>
 
-- `/messages` — inbox · `src/app/(main)/messages/page.tsx`
-- `/messages/[otherUserId]` — 1:1 DM thread · `src/app/(main)/messages/[otherUserId]/page.tsx`
-- `/messages/room/[roomId]` — group room · `src/app/(main)/messages/room/[roomId]/page.tsx`
+## How to send a message
 
-## Every interaction
+1. Go to **`/messages`**. The page connects to Matrix ("Connecting to
+   Matrix…"), starts a sync, and waits until it is ready.
+2. The left **conversation list** shows your DM rooms and the rooms of the groups
+   you belong to.
+3. Click a conversation to open its chat panel.
+4. Type and send. Delivery is over Matrix, in real time.
 
-- **Open a conversation** — select a DM or room from the inbox.
-- **Send a message** — compose and send; delivered over Matrix.
-- **Start a DM** — message another user by id.
-- **Participate in a room** — group/room conversations. _TODO(verify): confirm
-  room creation, invites, and read-receipt affordances live._
+## How to start a new conversation
 
-## Permissions / gating
+1. Click **New message**.
+2. Pick one person for a DM, or several for a **group DM**.
+3. RIVR resolves each agent to their Matrix user id and gets or creates the
+   room, then opens it.
 
-- All messaging requires a session and a provisioned Matrix identity.
-- Room membership gates room visibility and participation.
-- Matrix discovery is advertised at `/.well-known/matrix/*`.
+You can also link straight into a DM: **`/messages?user=<recipientAgentId>`**.
+Marketplace "Contact seller" uses exactly this — it resolves the DM room for the
+listing and drops you in the conversation.
 
-## Cross-links
+> 📸 **Screenshot:** _the messages page with the conversation list on the left and an open DM thread on the right_ — capture at `/messages` (signed in, with at least one conversation). _(placeholder — remove when image added)_
 
-- API/MCP: [Notifications tools](/docs/api) · Matrix well-known ([Federation protocol](/docs/api/federation))
-- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Account & settings](/docs/wiki/account-settings)
-- Integration: Matrix homeserver (`matrix.rivr.social`); config via `MATRIX_*` env.
+## How group rooms work
+
+- A group's chat mode is set by an admin at **`/groups/<id>/settings` → Chat**:
+  ledger, Matrix, or both. Chat turns on automatically when a group is created
+  with chat enabled.
+- Members of a group see its rooms in the same conversation list, rendered by the
+  group chat panel.
+- **Leaving** a room is available from the conversation.
+
+## Good to know
+
+- **A session and a provisioned Matrix identity are required.** The page fetches
+  Matrix credentials from the server; it never takes them from the client.
+- The Matrix SDK is ~831 KB, so the messages client is loaded with
+  `next/dynamic({ ssr: false })` — the chunk is fetched only when you actually
+  open messages, and chat is browser-only anyway.
+- Sync **stops on unmount**, so leaving the page does not leave a client running.
+- Matrix discovery is advertised at `/.well-known/matrix/*`; the homeserver and
+  credentials come from `MATRIX_*` env vars.
+- **Bridged messengers.** Telegram, WhatsApp, Signal, Slack, Facebook, and
+  Instagram connectors sync through RIVR's mautrix bridges on the shared
+  Matrix/Synapse infrastructure. Connect them at
+  `/groups/<id>/settings` → **Connectors**.
+- **Notifications** are a separate surface at `/notifications`.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Messages | `/messages` (`?user=<agentId>`) | `src/app/(main)/messages/page.tsx` → `messages-page-client.tsx` |
+| Notifications | `/notifications` | `src/app/(main)/notifications/page.tsx` |
+
+- **Client SDK wrapper:** `src/lib/matrix-client.ts` — `getMatrixClient`,
+  `startSync` / `stopSync`, `getDmRooms`, `getOrCreateDmRoom`,
+  `createGroupDmRoom`, `leaveRoom`.
+- **Server actions:** `src/app/actions/matrix.ts` — `getMatrixCredentials`,
+  `getDmRoomForUser`, `getDmRoomForListing`, `getMatrixUserIdsForAgents`,
+  `getUserGroupRooms`.
+- **UI:** `src/components/chat/` — `conversation-list.tsx`,
+  `matrix-chat-panel.tsx`, `group-chat-panel.tsx`, `message-bubble.tsx`,
+  `new-message-dialog.tsx`.
+- **Chat mode setting:** the `chat` tab in
+  `src/app/groups/[id]/settings/page.tsx`.
+
+Related: [Groups & subgroups](/docs/wiki/groups) ·
+[Marketplace & fees](/docs/wiki/marketplace) ·
+[Account & settings](/docs/wiki/account-settings)

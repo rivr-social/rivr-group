@@ -1,36 +1,62 @@
-# Admin
+# Admin (there is no admin console)
 
 ## What it is
 
-Operator surfaces for platform administrators: user management, task/queue
-inspection, the knowledge/graph explorer, badge administration, and integration
-debug tooling. These are gated to platform/admin actors.
+**There are no `/admin/*` pages on this instance.** An earlier version of this
+wiki listed an admin dashboard, user manager, task queue, graph explorer, and
+badge admin. None of those routes exist in this codebase — they were inherited
+from the global hub's docs.
 
-## Where it lives
+Running this instance is split three ways:
 
-- `/admin` — admin dashboard · `src/app/admin/page.tsx`
-- `/admin/users` — user management · `src/app/admin/users/page.tsx`
-- `/admin/tasks` — tasks/queues · `src/app/admin/tasks/page.tsx`
-- `/admin/graph` — graph explorer · `src/app/admin/graph/page.tsx`
-- `/admin/badges` — badge administration · `src/app/admin/badges/page.tsx`
-- `/admin/integrations/debug` — integration debug · `src/app/admin/integrations/debug/page.tsx`
+- **Group administration** happens on the group itself — the Settings page and
+  the admin-only controls embedded in each group tab. See
+  [Groups & subgroups](/docs/wiki/groups).
+- **Instance ownership** has exactly two dedicated pages: outgoing email and
+  federated-visitor access.
+- **Everything else** — badge issuance, job attestation, treasury moves,
+  governance settings — is done inline on the surface it belongs to, by whoever
+  holds authority there.
 
-## Every interaction
+## How to reach the real owner surfaces
 
-- **Manage users** — inspect/administer accounts. _TODO(verify): enumerate exact admin actions live._
-- **Inspect tasks** — view background/cron task state (federation-sync,
-  gcal-pull, trial-reminders, etc.).
-- **Explore the graph** — browse the agent/resource/ledger graph.
-- **Administer badges** — issue/revoke badges (see [Badges & stake](/docs/wiki/badges-stake)).
-- **Debug integrations** — SMTP config/test and connector diagnostics.
+1. Sign in as an instance admin (an agent flagged admin in its metadata; for
+   visitor-access, the instance **owner** specifically).
+2. Open **`/settings/outgoing-email`** to set this instance's transactional SMTP
+   credentials, send a test message, or delete the config and fall back to the
+   shared relay. Non-admins are redirected back to `/settings`.
+3. Open **`/settings/visitor-access`** to set the policy for federated visitors
+   landing here from another RIVR instance — which capabilities a visitor is
+   granted and how long their session lasts — and to review the recent-landings
+   log (referral path, home instance, granted scope).
 
-## Permissions / gating
+> 📸 **Screenshot:** _the visitor-access policy form with the recent-landings table below it_ — capture at `/settings/visitor-access` (signed in as the instance owner). _(placeholder — remove when image added)_
 
-- **Admin-gated.** These routes require an operator/admin actor; they are not
-  public and are not part of the ordinary user surface. Admin API routes (e.g.
-  `/api/admin/smtp-config`) enforce their own checks.
+## Good to know
 
-## Cross-links
+- These two pages are the only owner-scoped pages on the instance. If you were
+  told to "open the admin panel", you want the group's
+  [settings tabs](/docs/wiki/groups#how-to-change-a-group-setting) instead.
+- The SMTP form deliberately does **not** expose federated-auth email routing —
+  that is pinned by the mailer so a peer admin cannot redirect authentication
+  mail. The UI says so inline.
+- Group admin authority **cascades**: an admin of a parent org administers its
+  subgroups (`isGroupAdminCascade`). There is no separate "platform admin" role
+  with a UI here.
+- The page-level redirect is a convenience, not the security boundary — each API
+  route re-checks authority server-side.
 
-- API: [`/api/admin` REST](/docs/api) · [`/api/cron` REST](/docs/api) · [`/api/debug` REST](/docs/api) · [`/api/runtime`](/docs/api)
-- Wiki: [Badges & stake](/docs/wiki/badges-stake) · [Autobot & agents](/docs/wiki/autobot-agents) · [Federation & SSO identity](/docs/wiki/federation-identity)
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Outgoing email | `/settings/outgoing-email` | `src/app/settings/outgoing-email/page.tsx` |
+| Visitor access | `/settings/visitor-access` | `src/app/settings/visitor-access/page.tsx` |
+| SMTP config API | `/api/admin/smtp-config`, `/api/admin/smtp-config/test` | `src/app/api/admin/smtp-config/**` |
+| Visitor-access API | `/api/admin/visitor-access` | `src/app/api/admin/visitor-access/route.ts` |
+
+Those three route files are the **entire** `src/app/api/admin` tree.
+
+Related: [Account & settings](/docs/wiki/account-settings) ·
+[Groups & subgroups](/docs/wiki/groups) ·
+[Federation & SSO identity](/docs/wiki/federation-identity)

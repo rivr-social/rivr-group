@@ -1,35 +1,48 @@
-# Explore & search
+# Explore & search (lives on the global hub)
 
 ## What it is
 
-The discovery surfaces: a browsable explore view, full-text/entity search across
-agents and resources, a geographic map, and a people directory. These are the
-primary public entry points into RIVR.
+Cross-community discovery — browsing everything on RIVR, searching people and
+groups you don't already know, the map, the people directory — is a **global
+aggregator** feature. This instance is one sovereign group; it publishes
+outward and does not host a platform-wide index.
 
-## Where it lives
+**There is no `/explore`, `/search`, `/map`, or `/people` route in this
+codebase.** Any earlier wiki page claiming otherwise was inherited fiction.
 
-- `/explore` — discovery · `src/app/(main)/explore/page.tsx`
-- `/search` — search · `src/app/(main)/search/page.tsx`
-- `/map` — map · `src/app/(main)/map/page.tsx`
-- `/people` — people directory · `src/app/(main)/people/page.tsx`
+## How to search from here
 
-## Every interaction
+1. Use the **search bar** in the app header to look for things **within this
+   group** — its members, posts, events, and listings.
+2. To search all of RIVR, use the search bar's "search everything" / "see all
+   results" action, or the bottom nav's Explore and Map buttons. Both open the
+   **global hub** in a new tab (`getGlobalUrl()` → `…/explore?q=…`), because
+   there is no local results page to land on.
+3. Use the **command palette** (the launcher next to the bottom nav) to jump
+   between this instance's own surfaces — Members, Documents, Governance,
+   Marketplace, Wallet sub-tabs — without typing a URL.
 
-- **Search** — type a query; results span people, groups, events, listings, and
-  posts. _TODO(verify): confirm result facets and ranking._
-- **Filter / browse explore** — browse curated/discovery collections.
-- **Pan/zoom the map** — map tiles are served from the instance's own style/tile
-  routes (`/api/map-style`, `/api/map-tilesets`, `/api/map-style-tiles`); pins
-  resolve to place-scoped and located resources.
-- **Open a person** — navigate to their profile.
+> 📸 **Screenshot:** _the command palette open, showing local jump targets_ — capture on any page (open the command-palette launcher in the bottom nav). _(placeholder — remove when image added)_
 
-## Permissions / gating
+## Good to know
 
-- **Public.** `/`, `/explore`, `/search`, and `/map` are in `PUBLIC_PAGE_PATHS`;
-  `/people` is browsable. Guests can discover without an account. Personalized
-  ranking and private results require a session.
+- Because discovery is global, the way to be found is to **federate**: content
+  created here projects to the hub as signed events. See
+  [Federation & SSO identity](/docs/wiki/federation-identity).
+- The command palette's "Members / Documents / Governance" entries deep-link to
+  `/?tab=members|documents|governance`, which the root redirect forwards to the
+  primary group page. Only tabs in `ALLOWED_HOME_TABS` are forwarded.
+- A map component exists in the source tree but is **not rendered by any route**
+  here — do not document it as a user surface.
 
-## Cross-links
+## Under the hood
 
-- API/MCP: [`rivr.places.list`](/docs/api) · map REST groups ([`/api/map-style`](/docs/api), [`/api/map-tilesets`](/docs/api), [`/api/map-neighborhoods`](/docs/api)) · [`/api/murmurations`](/docs/api)
-- Wiki: [Locales & regions](/docs/wiki/locales-regions) · [Feeds & posts](/docs/wiki/feeds-posts) · [Groups & subgroups](/docs/wiki/groups)
+- Outward links: `src/lib/global-base-url.ts` (`getGlobalUrl`), used by
+  `src/components/bottom-nav.tsx`, `search-bar.tsx`, `search-header.tsx`.
+- Local jump targets: `src/components/CommandBar.tsx`.
+- Root-tab forwarding: `src/lib/home-tabs.ts` (`ALLOWED_HOME_TABS`,
+  `resolveHomeRedirectPath`) + the `/` 307 in `src/middleware.ts`.
+
+Related: [Feeds & posts](/docs/wiki/feeds-posts) ·
+[Groups & subgroups](/docs/wiki/groups) ·
+[Federation & SSO identity](/docs/wiki/federation-identity)

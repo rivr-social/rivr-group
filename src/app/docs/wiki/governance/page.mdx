@@ -2,83 +2,152 @@
 
 ## What it is
 
-Group-level decision-making: proposals, votes/decisions, and the rules by which a
-group or org coordinates authority. Governance is tied to membership, badges, and
-points-based stake.
+How the group decides things. Three item types live on the group's
+**Governance** tab:
 
-## Where it lives
+- an **issue** — a titled discussion item, no vote;
+- a **poll** — a multi-option question, resolved by one of six ballot styles;
+- a **proposal** — a yes / no / abstain motion with a pass threshold.
 
-- The **Voice** tab within the group page — `src/components/governance-tab.tsx`,
-  mounted from `group-tabs-client.tsx`. It has two sub-tabs: **Issues & Polls**
-  and **Proposals & Votes**.
-- Items persist on the group agent's `metadata` (`proposals`, `polls`, `issues`
-  arrays) and are read back through `group-tabs-client` into the tab.
-- Related: stake and badges (`/badges`, `/points`)
+Every votable item carries three independent settings: **who may vote**
+(eligibility), **how much each vote counts** (weight), and **what happens when
+it closes** (quorum, board finalization). Nothing executes automatically —
+outcomes are *recorded*, and people enact them by hand through the treasury and
+capability rails.
 
-## Every interaction
+## How to create a governance item
 
-Three creatable governance item types, each with its own composer at the top of
-the Voice tab:
+1. Open the group's **Governance** tab (`/groups/<id>?tab=governance`). It has
+   two sub-tabs: **Issues & Polls** and **Proposals & Votes**.
+2. Use the composer at the top of the sub-tab.
+3. For a **proposal**: title, description, a pass **threshold** (%), a
+   **duration** (days), optionally a **quorum**.
+4. For a **poll**: title, 2+ options, a **duration**, and a **ballot style**:
 
-- **Create a proposal** — a yes / no / abstain decision with a pass **threshold**
-  (%) and a **duration** (days). `createGovernanceProposalAction`.
-- **Create a poll** — a lightweight multi-option question (2+ options) with a
-  **duration** and a **ballot style**: multiple choice, approval, score,
-  ranked (instant-runoff), rate + rank, or quadratic (per-voter credit budget).
-  `createGovernancePollAction`. Distinct from a proposal: a poll gathers
-  preference across several choices rather than ratifying a single motion.
-- **Create an issue** — a titled discussion item (title + description).
-  `createGovernanceIssueAction`.
-- **Vote / decide** — the Vote button opens the voting modal. Proposals take
-  yes/no/abstain; polls take one of their options. `castGovernanceVoteAction`
-  records the vote (one active vote per member per item; re-voting supersedes the
-  prior vote).
-- **View items / results** — proposals show yes/no tallies + threshold; polls
-  show per-option percentages.
+| Style | How it resolves |
+| --- | --- |
+| **Multiple choice** | pick one option; highest count wins |
+| **Approval** | pick any options you approve of; counted per option |
+| **Score** | rate each option on a slider (0–5 by default, max 10); averaged |
+| **Ranked choice** | rank the options; resolved by instant-runoff to one winner |
+| **Rate + Rank** | score each option *and* mark how much it matters; salience-weighted |
+| **Quadratic** | spend a credit budget (100 by default) across options; voice grows as √credits — anti-whale |
 
-## Permissions / gating (eligibility gates)
+5. For an **issue**: title and description.
+6. Choose **Who can vote** and the **vote weight** (below).
+7. Create.
 
-- **Creating** a proposal, poll, or issue requires **group write access** by
-  default (`hasGroupWriteAccess` — group/subgroup admins, cascading to
-  parent-group admins). Admins can **widen** propose authority from the
-  Voice tab's Governance Settings (gear icon) — e.g. to all members or badge
-  holders — via `setGovernanceProposeGateAction`; admins always retain it.
-  Server-enforced in each create action; the client cannot bypass it.
-- **Voting** is gated per item by its **eligibility gate**, chosen at creation
-  ("Who can vote"): **group members** (the default), **anyone signed in**,
-  **badge holders** (any or a specific governance badge), **admins only**,
-  **share holders** (any or a specific share class, with a minimum share
-  count), or **custom policy** (the group's permission policies for the
-  `vote` verb). The gate defines the electorate exactly — admins do not
-  bypass it. Each item's card shows its gate as a chip, and the Vote button
-  is disabled (with the reason) for ineligible viewers; the server re-enforces
-  in `castGovernanceVoteAction`, which is also rate-limited (one active vote
-  per voter per item; re-voting supersedes the prior vote).
+## How to vote
 
-## Weights, resolution & the board (P3/P4)
+1. Find the item's card on the Governance tab. Its chips tell you the
+   **eligibility gate**, the **weight function**, and **your weight**.
+2. Click **Vote**. If you're not eligible, the button is **disabled and shows
+   the reason** — no silent failure.
+3. Proposals take yes / no / abstain. Polls take the input their ballot style
+   defines.
+4. Submit. One active vote per member per item; voting again **supersedes** your
+   previous vote and refreshes your weight.
 
-- **Vote weight** — each poll/proposal carries a weight function chosen at
-  creation (org default in Governance Settings, ships as **equal** 1p1v):
-  **stake** (task points earned across the org subtree — the same weights
-  net-distribution pays by), **voting shares** (share-class `vote %`, a
-  governance dimension authored independently of the profit `net %` in the
-  Shares card), or **badge weight** (the governance badge's voting weight).
-  A voter's weight is resolved server-side when they cast and FROZEN onto the
-  vote, so later stake/share changes never rewrite past tallies; re-voting
-  refreshes it. Zero-weight votes count toward participation (quorum) but
-  move no bars. Cards show a weight chip and "your weight".
-- **Quorum & phases** — proposals may set a quorum (minimum RAW voters —
-  weights never inflate it). When an item's window closes it becomes
-  **Closed**; voting locks and finalization opens.
-- **Board & finalization (record-only)** — admins seat a board
-  (Chair/Treasurer/Secretary/Director) in Governance Settings. A closed
-  decision is **finalized when 2/3 of current board-role holders approve**;
-  the outcome (passed/failed over the weighted yes/(yes+no) pool with
-  abstains excluded, or the poll winner) is then RECORDED on the card.
-  Nothing executes automatically — people enact the decided change by hand
-  via the existing treasury/capability rails.
+> 📸 **Screenshot:** _a poll card showing the eligibility-gate chip, the weight chip, "your weight", and the Vote button_ — capture at `/groups/<id>?tab=governance`. _(placeholder — remove when image added)_
 
-## Cross-links
+## Who can vote (eligibility gates)
 
-- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Badges & stake](/docs/wiki/badges-stake) · [Projects & jobs](/docs/wiki/projects-jobs)
-- API/MCP: [Groups tools](/docs/api) · [Moderation tools](/docs/api)
+Chosen per item at creation, from one enforced menu:
+
+| Gate | Who |
+| --- | --- |
+| **Group members** *(default)* | active members of this group |
+| **Anyone signed in** | any signed-in user, including non-members |
+| **Badge holders** | holders of a governance badge — any, or one specific badge |
+| **Admins only** | group admins and managers |
+| **Share holders** | members holding shares — any class or a specific one, with a minimum share count (default 1) |
+| **Custom policy** | whoever the group's permission policies allow for the `vote` verb |
+
+**The gate defines the electorate exactly — admins do not bypass it.** The
+server re-enforces it in `castGovernanceVoteAction`, which is also rate-limited;
+the client cannot widen it.
+
+**Who can propose** is a group-level setting, defaulting to **admin**. Admins can
+widen it — to all members, badge holders, and so on — from the Governance
+Settings gear. **Admins always retain propose authority.**
+
+> 📸 **Screenshot:** _the Governance Settings dialog (gear icon) showing "Who can propose", the default vote weight, and the board seats_ — capture at `/groups/<id>?tab=governance` (click the settings gear as an admin). _(placeholder — remove when image added)_
+
+## How much a vote counts (weights)
+
+Every item carries a weight function, seeded from the org default (which ships as
+**equal** — one person, one vote) and overridable per item:
+
+| Weight | Basis |
+| --- | --- |
+| **Equal** | 1 person = 1 vote |
+| **Stake** | task points earned across the org subtree — the same weights net-distribution pays by |
+| **Voting shares** | a share class's **vote %** — a governance dimension authored independently of the profit **net %** in the Shares card |
+| **Badge weight** | the governance badge's voting weight |
+
+- A voter's weight is resolved **server-side when they cast** and **frozen onto
+  the vote**, so later stake or share changes never rewrite past tallies.
+  Re-voting refreshes it.
+- **Zero-weight votes still count toward participation** (quorum) but move no
+  bars.
+
+## Closing, quorum and the board
+
+1. A proposal may set a **quorum**: a minimum number of **raw voters**. Weights
+   never inflate it.
+2. When the item's window elapses it becomes **Closed** — voting locks,
+   finalization opens.
+3. Admins seat a **board** in Governance Settings, from four roles: **Chair**,
+   **Treasurer**, **Secretary**, **Director**. Board roles live on membership
+   edges.
+4. A closed decision is **finalized when 2/3 of current board-role holders
+   approve**.
+5. The outcome is then **recorded** on the card — passed/failed over the weighted
+   yes/(yes+no) pool with abstains excluded, or the poll winner.
+6. **Nothing executes.** The card reads "Recorded … · enact manually". People
+   carry out the decision through the ordinary treasury and capability rails.
+
+## Good to know
+
+- Governance items persist on the **group agent's metadata** (`proposals`,
+  `polls`, `issues` arrays), read back through the group page into the tab. There
+  is no separate governance table.
+- **Votes tally back correctly.** Tallies recompute from the active ledger rows
+  rather than trusting an incremented counter — which also removed a latent
+  re-vote drift and self-heals on the first new vote.
+- **Voting requires group membership by default** — it used to be
+  login-only.
+- The Governance tab is **members**-visible by default; a group admin can widen
+  or tighten it in Settings → Tab Visibility.
+- Ballot resolution is a **pure engine** with its own unit tests — the tally
+  logic does not live in the UI.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Governance tab | `/groups/[id]?tab=governance` | `src/components/governance-tab.tsx` (mounted from `group-tabs-client.tsx`) |
+
+- **Ballot engine:** `src/lib/governance-ballot.ts` — `BALLOT_STYLES`,
+  `BALLOT_STYLE_LABELS` / `_DESCRIPTIONS`, `DEFAULT_BALLOT_STYLE`,
+  `DEFAULT_SCORE_MAX`, `DEFAULT_CREDITS_PER_VOTER`.
+- **Eligibility engine:** `src/lib/governance-eligibility.ts` —
+  `ELIGIBILITY_KINDS` (`public`, `member`, `badge-holder`, `admin`,
+  `share-holder`, `abac`), `DEFAULT_VOTE_GATE` (`member`),
+  `DEFAULT_PROPOSE_GATE` (`admin`), `DEFAULT_MIN_SHARES`, `EligibilityFacts`.
+- **Weights:** `src/lib/governance-weight.ts` — `WEIGHT_KINDS`
+  (`equal`, `stake`, `voting-shares`, `badge-weight`), `DEFAULT_WEIGHT_CONFIG`;
+  UI `src/components/governance-weight-picker.tsx`.
+- **Resolution / board:** `src/lib/governance-resolution.ts` — `BOARD_ROLES`
+  (`chair`, `treasurer`, `secretary`, `director`), `BOARD_ROLE_LABELS`.
+- **Actions:** `src/app/actions/create-resources.ts` —
+  `createGovernanceProposalAction`, `createGovernancePollAction`,
+  `createGovernanceIssueAction`, `castGovernanceVoteAction`,
+  `setGovernanceProposeGateAction`.
+- Server-side gate evaluation: `evaluateGovernanceGatesForUser`,
+  `resolveVoterWeight` (called from `src/app/groups/[id]/page.tsx`).
+
+Related: [Groups & subgroups](/docs/wiki/groups) ·
+[Badges & stake](/docs/wiki/badges-stake) ·
+[Wallet & treasury](/docs/wiki/wallet-treasury) ·
+[Projects & jobs](/docs/wiki/projects-jobs)

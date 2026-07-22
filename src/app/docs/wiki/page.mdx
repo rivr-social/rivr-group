@@ -1,45 +1,59 @@
 # Wiki
 
-The RIVR wiki documents every **user-facing surface** at click level. Each page
-follows the same five-slot template so behavior is described the same way
-everywhere:
+This is the handbook for **this instance** — a single sovereign RIVR group
+running its own app, its own database, and its own money rails, federating
+outward to the RIVR global aggregator.
 
-1. **What it is** — a one-paragraph definition.
-2. **Where it lives** — the route(s) and repo file anchors.
-3. **Every interaction** — each button, menu, and form, and what it does.
-4. **Permissions / gating** — who can see or do it, and what's hidden for whom.
-5. **Cross-links** — related surfaces, API/MCP tools, and federation behavior.
+Every page answers three questions in the same order:
 
-<Callout type="note" title="Map, not final product-truth">
-  These pages are drafted from the product-surface inventory, the user-capability
-  matrix, and the code knowledge graphs, then verified against the live app.
-  Where a slot is still thin it is marked <strong>TODO</strong> — treat those as
-  leads to verify, not guarantees.
+1. **What it is** — plain language, no jargon.
+2. **How to do it** — numbered steps you can follow with the app open.
+3. **Good to know** + **Under the hood** — limits and gotchas, then the real
+   routes, files, and gates for anyone reading the source.
+
+<Callout type="note" title="Single-group instance">
+  This build serves **one primary group**. Opening <code>/</code> issues a real
+  HTTP 307 to <code>/groups/&lt;PRIMARY_AGENT_ID&gt;</code> — the group page IS
+  the home page. There is no platform-wide explore, search, map, people
+  directory, admin console, or locale browser here; those are global-aggregator
+  surfaces. Pages below say so explicitly where the distinction matters.
 </Callout>
 
-## Surfaces
+<Callout type="tip" title="Screenshots">
+  Pages carry inline screenshot placeholders naming the exact route and
+  interaction to capture. The reference deployment for captures is
+  <strong>spirit-of-the-front-range.rivr.social</strong>; substitute your own
+  instance's host and its primary group id for <code>&lt;id&gt;</code>.
+</Callout>
 
-### Core surfaces
-- [Feeds & posts](/docs/wiki/feeds-posts) — home feed, post detail, composer, reactions, comments.
-- [Explore & search](/docs/wiki/explore-search) — discovery surfaces (public).
-- [Calendar & events](/docs/wiki/calendar-events) — RSVP, ticketing, GCal.
-- [Messages](/docs/wiki/messages) — DMs + Matrix group rooms.
-- [Marketplace & gifts](/docs/wiki/marketplace) — listings, checkout, receipts, thanks-token gifting.
-- [Wallet & treasury](/docs/wiki/wallet-treasury) — balances, transactions, memberships, points.
+## Start here
 
-### Groups & coordination
-- [Groups & subgroups](/docs/wiki/groups) — membership toggles, org tabs, lineage.
-- [Projects & jobs](/docs/wiki/projects-jobs) — treasury, deliverables, job claims.
-- [Governance](/docs/wiki/governance) — proposals and decisions.
-- [Badges & stake](/docs/wiki/badges-stake) — badge issuance, points-based stake.
-- [Docs, filesystem & vault](/docs/wiki/docs-vault) — the faceted-tag docs filesystem + ACLs.
+- [Groups & subgroups](/docs/wiki/groups) — the group page, its tabs, membership, dues, and the settings a group owner actually has.
+- [Feeds & posts](/docs/wiki/feeds-posts) — writing and reading the group's feed.
+- [Account & settings](/docs/wiki/account-settings) — your profile, notification/email preferences, data export, and the owner-only instance settings.
 
-### Identity & extension
-- [Federation & SSO identity](/docs/wiki/federation-identity) — sovereign homes, verified principal.
-- [Autobot & agents](/docs/wiki/autobot-agents) — personas, connectors, MCP act-as.
-- [Builder](/docs/wiki/builder) — site builder → publish to custom domains.
-- [Locales & regions](/docs/wiki/locales-regions) — place-scoped surfaces.
+## Money
 
-### Account & operator
-- [Account & settings](/docs/wiki/account-settings) — profile, data export, notification prefs.
-- [Admin](/docs/wiki/admin) — operator surfaces (admin-gated).
+- [Marketplace & gifts](/docs/wiki/marketplace) — listings, booking, checkout, the **one fee model** (3.3% + $1.49 + scaled Connect overhead, buyer-funded), **Stripe Tax**, and **cross-border corridor pricing**.
+- [Wallet & treasury](/docs/wiki/wallet-treasury) — your wallet at `/profile?tab=wallet`, the group Treasury tab's five sub-tabs, the **Connect payout leg** ("Release payment"), and **Move to Stripe** cash-out.
+
+## Coordination
+
+- [Projects & jobs](/docs/wiki/projects-jobs) — the job board, claim → attest → pay, and **Stock**: multiple named **needs lists** with project connect, org rollup, and fulfilled → Inventory.
+- [Calendar & events](/docs/wiki/calendar-events) — events, RSVP, ticketing, and **Virtual Meetings** (a LiveKit room on the event, with a recorded speaker-identified transcript).
+- [Governance](/docs/wiki/governance) — proposals, six ballot styles, eligibility gates, vote weights, board finalization.
+- [Badges & stake](/docs/wiki/badges-stake) — badges as claim-time gates; stake from attested points.
+- [Docs & vault](/docs/wiki/docs-vault) — the faceted-tag document vault and per-resource access control.
+
+## Identity & extension
+
+- [Federation & SSO identity](/docs/wiki/federation-identity) — one identity across instances, the shared mutation contract, membership back-projection, remote-viewer sessions.
+- [Assistant, personas & MCP](/docs/wiki/autobot-agents) — the group's AI assistant, persona actors, and the `/api/mcp` endpoint.
+- [Builder](/docs/wiki/builder) — generate and publish a site from the group's resources.
+- [Press & gallery](/docs/wiki/groups#press-gallery-and-announcements) — the Press tab's feed sources, media gallery, and newsletter.
+
+## Not on this instance
+
+- [Explore & search](/docs/wiki/explore-search) — discovery lives on the global aggregator.
+- [Locales & regions](/docs/wiki/locales-regions) — place-scoped commons are a global concept.
+- [Admin](/docs/wiki/admin) — there is no `/admin` console; ownership lives in settings.

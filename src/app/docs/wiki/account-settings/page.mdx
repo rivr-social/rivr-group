@@ -2,35 +2,126 @@
 
 ## What it is
 
-Personal account management: profile editing, avatar/cover, notification
-preferences, privacy, billing, outgoing-email configuration, and full data
-export (account sovereignty).
+Everything about **you** on this instance: your profile, who can see what, how
+you're notified, your seller payment account, and the identities you link
+outward. Plus — for the person who owns the instance — two operator pages.
 
-## Where it lives
+## How to edit your account
 
-- `/settings` — settings · `src/app/settings/page.tsx`
-- `/settings/outgoing-email` — SMTP/outgoing email · `src/app/settings/outgoing-email/page.tsx`
-- `/profile` — own profile · `src/app/(main)/profile/page.tsx`
-- `/notifications` — notifications · `src/app/(main)/notifications/page.tsx`
+1. Go to **`/settings`** (redirects to `/auth/login` if you aren't signed in).
+2. You get six tabs:
 
-## Every interaction
+| Tab | What's in it |
+| --- | --- |
+| **Account** | name, username, email, bio, phone, avatar upload |
+| **Privacy** | profile visibility, friend requests, transaction visibility, activity visibility, attribute visibility — grouped in accordions, saved with **Save Privacy Settings** |
+| **Notifications** | push notifications, **email notifications**, event reminders, new messages, Murmurations publishing |
+| **Appearance** | dark mode and display preferences |
+| **Seller** | your Stripe USD wallet — set up or continue Connect onboarding |
+| **Federation** | peer-node export permission, linked identities (PeerMesh Spatial, Bluesky / AT Protocol), manifest export preview, exported-event counts |
 
-- **Edit profile** — name, bio, skills, location; upload avatar and cover.
-  (Sparse update: only supplied fields change; explicit `null` clears a field.)
-- **Notification preferences** — configure what triggers notifications.
-- **Manage billing** — open the Stripe portal, manage memberships (see [Wallet & treasury](/docs/wiki/wallet-treasury)).
-- **Configure outgoing email** — set/test SMTP for the account/instance.
-- **Export your data** — request a full JSON export (profile, personas,
-  resources, ledger, wallets, subscriptions, memberships). Session-only.
-- **Auth flows** — login, signup, forgot/reset password (public auth pages).
+3. Save. Profile updates are **sparse** — only the fields you supply change, and
+   an explicit `null` clears one.
 
-## Permissions / gating
+> 📸 **Screenshot:** _the settings page's six tabs with the Account tab open_ — capture at `/settings` (signed in). _(placeholder — remove when image added)_
 
-- All settings require a session; data export and account deletion are strictly
-  session-derived (deletion only via the interactive UI with typed confirmation —
-  never over MCP).
+## How to stop getting email
 
-## Cross-links
+1. Go to **`/settings` → Notifications**.
+2. Turn **Email Notifications** off.
+3. Save.
 
-- API/MCP: [Account tools](/docs/api) (`rivr.account.export_data`) · [Settings tools](/docs/api) · [`rivr.profile.update_basic`](/docs/api) · [`/api/auth` REST](/docs/api) · [`/api/recovery`](/docs/api)
-- Wiki: [Federation & SSO identity](/docs/wiki/federation-identity) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Notifications via Messages](/docs/wiki/messages)
+**This is honored.** Group broadcasts (Settings → Announcements) and newsletters
+both resolve member emails through a shared check and **exclude** anyone who has
+opted out. Every outbound message also carries a non-tracking
+unsubscribe/preferences footer pointing back at your notification settings — and
+the footer is appended to the **outbound** copy only, so the stored body is never
+polluted.
+
+The check reads two shapes, so an older account is honored too:
+`metadata.emailNotifications` (top level) and
+`metadata.notificationSettings.emailNotifications` (nested).
+
+## How to update your profile page
+
+1. Go to **`/profile`**. Your profile has eleven tabs: **About**, **Posts**,
+   **Events**, **Groups**, **Photos**, **Offerings**, **Calendar**, **Wallet**,
+   **Personas**, **Saved**, **Activity**.
+2. Your public profile is at `/profile/<username>`.
+3. Wallet and money live under the **Wallet** tab — see
+   [Wallet & treasury](/docs/wiki/wallet-treasury).
+4. Personas live under the **Personas** tab — see
+   [Assistant, personas & MCP](/docs/wiki/autobot-agents).
+
+## How to sign in, sign up, or reset a password
+
+Public auth pages:
+
+- **`/auth/login`** and **`/login`**
+- **`/auth/signup`** — a stepped flow: login method → name → email → phone →
+  birthday → terms → verify → save login → confirm
+- **`/auth/forgot-password`** and **`/auth/reset-password`**
+
+Federated members sign in through their home instance — see
+[Federation & SSO identity](/docs/wiki/federation-identity).
+
+## Owner-only pages
+
+These are not part of `/settings`; navigate to them directly.
+
+- **`/settings/outgoing-email`** — this instance's transactional SMTP
+  credentials, a test-send, and a delete-and-fall-back-to-relay action.
+  Instance admins only. Federated-auth email routing is deliberately **not**
+  exposed — it is pinned by the mailer so a peer admin cannot redirect
+  authentication mail.
+- **`/settings/visitor-access`** — the policy for federated visitors landing here
+  from another instance: which capabilities they're granted and how long their
+  session lasts, plus a log of recent landings (referral path, home instance,
+  granted scope). **Instance owner only**; also barred at the middleware for
+  non-owner federated visitors.
+
+> 📸 **Screenshot:** _the visitor-access capability checkboxes and TTL, with the recent-landings log below_ — capture at `/settings/visitor-access` (as the instance owner). _(placeholder — remove when image added)_
+
+## Good to know
+
+- **Every settings surface requires a session.** Billing and seller actions
+  derive the subject from the session — never from client input.
+- **Social links are validated server-side** in `updateProfileAction`, not just
+  in the browser.
+- **There is no account data-export or account-deletion UI in this build.**
+  Earlier docs described a full JSON export (`rivr.account.export_data`) and a
+  typed-confirmation deletion flow; neither exists on this instance. The
+  Federation tab's "Manifest Export Preview" is a *federation identity*
+  manifest, not an account data export.
+- The instance-owner pages redirect non-owners, but the redirect is a
+  convenience — each API route re-checks authority.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Settings | `/settings` | `src/app/settings/page.tsx` → `settings-form.tsx` (via `settings-form-lazy.tsx`) |
+| Outgoing email | `/settings/outgoing-email` | `src/app/settings/outgoing-email/page.tsx` |
+| Visitor access | `/settings/visitor-access` | `src/app/settings/visitor-access/{page,visitor-access-form}.tsx` |
+| Own profile | `/profile` | `src/app/(main)/profile/{page,profile-client}.tsx` |
+| Public profile | `/profile/[username]` | `src/app/(main)/profile/[username]/page.tsx` |
+| Purchases | `/profile/purchases` | `src/app/(main)/profile/purchases/page.tsx` |
+| Notifications | `/notifications` | `src/app/(main)/notifications/page.tsx` |
+| Auth | `/auth/**`, `/login` | `src/app/auth/**`, `src/app/login/page.tsx` |
+
+- Profile actions: `src/app/actions/settings.ts` — `updateProfileAction`,
+  `updateProfileImageAction`, `updateGroupImageAction`; validation
+  `src/lib/social-links.ts`.
+- Email opt-out: `src/lib/email-preferences.ts` (`isEmailEnabled`), consumed by
+  `resolveGroupMemberEmails` and `sendNewsletterAction`
+  (`src/app/actions/newsletter.ts`). Tests:
+  `src/app/actions/__tests__/newsletter-optout.test.ts`.
+- Federation identity: `src/lib/federation-identities.ts`.
+- Visitor scope: `src/lib/federation/visitor-scope.ts`
+  (`VISITOR_CAPABILITIES`, `BASELINE_VISITOR_CAPABILITY`,
+  `DEFAULT_VISITOR_TTL_MINUTES`).
+- Admin APIs: `/api/admin/smtp-config` (+ `/test`), `/api/admin/visitor-access`.
+
+Related: [Federation & SSO identity](/docs/wiki/federation-identity) ·
+[Wallet & treasury](/docs/wiki/wallet-treasury) ·
+[Groups & subgroups](/docs/wiki/groups) · [Admin](/docs/wiki/admin)

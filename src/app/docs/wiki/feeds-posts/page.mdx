@@ -2,43 +2,103 @@
 
 ## What it is
 
-The social core of RIVR: the home feed of posts from people, groups, and places
-the actor follows or is scoped into, the individual post detail view, and the
-composer used to create posts (including group-authored and place-scoped posts).
+The social core. On this single-group instance the **group's Feed tab is the
+feed** — opening `/` sends you to the group page, and Feed is one of its tabs.
+Posts come in four kinds: a plain **social** post, an **offer**, a **request**,
+and a **gratitude** post that thanks a specific person.
 
-## Where it lives
+Posts can be authored by you or, if you're an admin, **as the group**.
 
-- `/` — home feed · `src/app/(main)/page.tsx` (→ `home-or-instance.tsx` / `home-client.tsx`)
-- `/posts/[id]` — post detail · `src/app/posts/[id]/page.tsx`
-- `/create` — composer · `src/app/(main)/create/page.tsx`
+<Callout type="note" title="Where the feed is">
+  <code>/</code> issues a 307 to <code>/groups/&lt;PRIMARY_AGENT_ID&gt;</code>.
+  The <code>(main)/page.tsx</code> file is only a fallback for requests the
+  middleware matcher misses — it renders no feed of its own. Individual posts open
+  at <code>/posts/[id]</code>.
+</Callout>
 
-## Every interaction
+## How to write a post
 
-- **Compose a post** — title (optional), body, post type; URLs in the body are
-  auto-extracted into rich link embeds. Result: a `post` resource owned by the
-  actor (or by a group, when posting as a group).
-- **Post as a group** — choose a group the actor administers; the group becomes
-  the owner and the actor is recorded as provenance.
-- **Scope to a place** — attach a locale/chapter and/or region so the post shows
-  in that place's feed as well as the global feed.
-- **React** — toggle a reaction on a post; reaction counts are aggregated per user.
-- **Comment** — add a threaded comment. _TODO(verify): confirm live comment
-  affordances and edit/delete controls._
-- **Open detail / share** — navigate to `/posts/[id]`; share surfaces a link.
-- **Show more** — the feed renders the newest 15 items and grows in steps of 15
-  via the Show more button (windowed rendering keeps the page fast; nothing is
-  hidden, just deferred).
+1. Go to **`/create`** and stay on the **Post** tab (the composer is also
+   embedded on feed surfaces).
+2. Click into the composer to expand it.
+3. Choose the **post type**:
+   - **Social** — an ordinary post. Optionally mark it a **live invitation**
+     with a location.
+   - **Offer** — attach an existing offering, or create a new one inline. The
+     post carries the listing.
+   - **Request** — ask for something. (Stock needs post as Requests too — see
+     [Projects & jobs](/docs/wiki/projects-jobs#stock-inventory-and-needs-lists).)
+   - **Gratitude** — pick a recipient and thank them.
+4. Write the body. **URLs in the body are auto-extracted into rich link
+   previews.**
+5. Set **visibility**. If global visibility is off you must choose at least one
+   locale, group, or person — the composer refuses an empty scope.
+6. Optionally attach the ecosocial pickers (EFT / capital / audit values) shown
+   alongside the composer on `/create`.
+7. Post.
 
-## Permissions / gating
+> 📸 **Screenshot:** _the expanded post composer with the post-type selector and the visibility scope picker_ — capture at `/create` (Post tab, composer expanded). _(placeholder — remove when image added)_
 
-- **Guests** can read public posts and post detail; composing requires a session.
-- **Hosted users / sovereign persons** can compose their own posts.
-- **Group admins** can author posts as the group.
-- Home feed content is permission-filtered per actor (private/group-scoped posts
-  only appear to eligible viewers).
+## How to post as the group
 
-## Cross-links
+1. Be an admin of the group.
+2. In the composer, choose the group as the author.
+3. The **group** becomes the owner of the post; **you** are recorded as
+   provenance.
 
-- API/MCP: [`rivr.posts.create`, `rivr.posts.create_live_invite`, `rivr.posts.list`](/docs/api) · [Social tools](/docs/api) · [`/api/link-preview` REST](/docs/api)
-- Wiki: [Explore & search](/docs/wiki/explore-search) · [Groups & subgroups](/docs/wiki/groups) · [Calendar & events](/docs/wiki/calendar-events)
-- Federation: posts created on a sovereign instance project to global as signed `post.created` events.
+## How to read and react
+
+1. Open the group's **Feed** tab.
+2. The feed renders the newest **15** items and grows in steps of 15 via **Show
+   more**. Nothing is hidden — rendering is just deferred so the page stays fast.
+3. Click a post to open **`/posts/<id>`**.
+4. **React** — toggle a like, or set a specific reaction type. Counts aggregate
+   per user.
+5. **Comment** — comments are threaded; a reply carries a `parentCommentId`. The
+   same thread component powers job, project, and event discussions.
+6. **Thank** — toggle a thank on a post.
+
+## Good to know
+
+- **Guests can read** public posts and post detail. Composing requires a
+  session.
+- **Home feed content is permission-filtered per actor** — private and
+  group-scoped posts only reach eligible viewers.
+- **Federation.** A post created here projects to peers as a signed event and
+  materializes on the far side with its body and embeds intact. Cross-instance
+  comments, likes, reactions, and RSVPs arrive over the shared mutation contract
+  — see [Federation & SSO identity](/docs/wiki/federation-identity#the-shared-mutation-contract).
+- **A post whose resource is sovereign-homed elsewhere redirects** to its source
+  instance rather than rendering a hollow local mirror.
+- Post pages emit structured data (JSON-LD) for link unfurling and search.
+- Link previews are fetched server-side through `/api/link-preview`, which is
+  SSRF-hardened.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Root → group page | `/` (307) | `src/middleware.ts`, `src/lib/home-tabs.ts`, fallback `src/app/(main)/page.tsx` |
+| Group feed | `/groups/[id]?tab=feed` | `src/components/group-tabs-client.tsx` → `group-feed.tsx` |
+| Post detail | `/posts/[id]` | `src/app/posts/[id]/page.tsx` → `post-detail-client.tsx` |
+| Composer | `/create` (Post tab) | `src/app/(main)/create/page.tsx` → `src/components/create-post.tsx` |
+| Design composer | `/create/design` | `src/app/(main)/create/design/page.tsx` |
+
+- Post kinds: `PostType` in `src/lib/types.ts` — `social`, `offer`, `request`,
+  `gratitude`.
+- Creation: `createPostResource` in
+  `src/app/actions/resource-creation/posts.ts`.
+- Reactions: `src/app/actions/interactions/reactions.ts` —
+  `toggleLikeOnTarget`, `setReactionOnTarget`, `toggleThankOnTarget`.
+- Comments: `postCommentAction` in
+  `src/app/actions/resource-creation/comments.ts`; UI
+  `src/components/comment-feed.tsx`.
+- Feed rendering: `src/components/post-feed.tsx` (windowed, +15 per Show more).
+- Structured data: `src/lib/structured-data.ts`.
+- Link previews: `src/app/api/link-preview/route.ts`.
+- MCP: `rivr.posts.create`.
+
+Related: [Groups & subgroups](/docs/wiki/groups) ·
+[Calendar & events](/docs/wiki/calendar-events) ·
+[Marketplace & fees](/docs/wiki/marketplace) ·
+[Federation & SSO identity](/docs/wiki/federation-identity)

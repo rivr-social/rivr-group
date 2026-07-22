@@ -2,37 +2,199 @@
 
 ## What it is
 
-How a person is one identity across many instances. Sovereign instances (person,
-group, locale, region) run independently and federate into global; a user's
-**home instance** is authoritative for their identity, and global is the
-credential authority. Profiles render locally and via cross-instance projection.
+You have **one identity across many RIVR instances**. Your **home instance** is
+authoritative for who you are; the global hub is the credential authority. This
+sovereign group runs independently and federates outward: it publishes signed
+events, accepts signed events from peers, and lets people homed elsewhere sign
+in, browse, and act here without creating a second account.
 
-## Where it lives
+The rule that holds it together: **identity is derived from a verified session
+or a verified peer signature — never from an asserted id in a request body.**
 
-- `/profile`, `/profile/[username]` — profile · `src/app/(main)/profile/**`
-- `/settings` — identity/account settings · `src/app/settings/page.tsx`
-- Federation protocol · `src/app/api/federation/**`; resolution `src/lib/federation/**`
+## How to sign in from another instance
 
-## Every interaction
+1. Land on this instance (a link, a shared post, a marketplace listing).
+2. Choose federated sign-in. The flow starts at
+   **`/api/federation/sso/start?homeBaseUrl=…`**.
+3. Password verification is delegated to the global authority
+   (`/api/federation/sso/issue`), with a local bcrypt fallback.
+4. You land back here (`/api/federation/sso/land`) holding a **remote-viewer
+   session cookie**, valid for this instance and scoped by the owner's
+   visitor-access policy.
+5. You can now browse, RSVP, comment, join, buy, and pay dues **as yourself**.
 
-- **View your / others' profile** — home-authoritative data plus federated
-  projections; a remote viewer cookie tracks cross-instance viewing.
-- **Federated sign-in (SSO)** — start at `/api/federation/sso/start?homeBaseUrl=…`;
-  password verification is delegated to the global authority
-  (`/api/federation/sso/issue`) with local bcrypt fallback.
-- **Register / connect a peer** — instances register in each other's peer registry
-  (`/api/federation/peers`) to exchange signed events.
-- **Sovereign merge** — migrate a hosted user to a sovereign home. _TODO(verify):
-  the merge flow still requires manual fixes for new users (see open issues)._
+## How your session is recognized everywhere
 
-## Permissions / gating
+A federated visitor's session lives in the remote-viewer cookie, **not** in
+NextAuth. Server code therefore resolves the actor through a single helper that
+checks both:
 
-- Identity is derived from the session or a verified peer signature — never an
-  asserted node id (the verified-principal rule; see [Auth models](/docs/api/auth)).
-- Cross-instance direct interaction on a domain you lack an account on is limited
-  (cross-instance SSO not yet fully implemented).
+```
+getAuthenticatedActor()
+  → auth() session?           → { actorId, authType: "local" }
+  → remote-viewer cookie?     → { actorId, homeBaseUrl, authType: "remote" }
+  → null
+```
 
-## Cross-links
+`getAuthenticatedActorId()` is the id-only shorthand. **This is the fix that
+unblocked cross-instance SSO on the group's own surfaces** — the group page
+resolves `currentUserId` through it, so an SSO'd federated member is a real
+member for tab visibility, governance eligibility, admin cascade, Stock/Needs
+management, and the meeting join lane. Pages that used a bare `auth()` treated
+those visitors as anonymous.
 
-- API: [Federation protocol](/docs/api/federation) · [Auth models](/docs/api/auth) · [`/api/federation` REST](/docs/api) · [`/api/universal-manifest` REST](/docs/api)
-- Wiki: [Autobot & agents](/docs/wiki/autobot-agents) · [Account & settings](/docs/wiki/account-settings) · [Builder](/docs/wiki/builder)
+<Callout type="warning" title="Rule for contributors">
+  Never gate an admin or member control on the <em>client-side</em> user context
+  — it cannot see a remote-viewer session. Compute authority on the server and
+  pass it down as a prop. Likewise, do not reintroduce plain <code>auth()</code>
+  on economic or membership routes.
+</Callout>
+
+## The shared mutation contract
+
+When one instance acts on another (you comment on a post that lives here from
+your home instance), it POSTs a **mutation** to `/api/federation/mutations`.
+Both sides must agree on the vocabulary — the *names* on the wire.
+
+Those names live in **one manifest-shared file that must stay byte-identical
+across every RIVR repo**. A parity check inside the drift guard fails the build
+when copies diverge. This exists because of a real 2026-07 bug: every emitter was
+sending `postCommentAction` while the person and group receivers only knew a
+retired `createComment`, so cross-instance comments silently vanished.
+
+**The interaction vocabulary (`INTERACTION_MUTATION_TYPES`):**
+
+| Wire name | What it does |
+| --- | --- |
+| `postCommentAction` | comment on a resource (`resourceId`/`targetId`, `content`, optional `parentCommentId`) |
+| `toggleLikeOnTarget` | toggle a like |
+| `setReactionOnTarget` | set a reaction type |
+| `toggleThankOnTarget` | toggle a thank |
+| `setEventRsvp` | set RSVP to going / interested / none |
+
+**Retired aliases still accepted** (`LEGACY_MUTATION_ALIASES`), so a stale peer
+is never silently dropped: `createComment` → `postCommentAction`,
+`toggleReaction` → `setReactionOnTarget`. `canonicalMutationType()` resolves
+them on arrival.
+
+**Dispatch.** The receiver canonicalizes the incoming type and then handles
+**four** interaction branches inline — `postCommentAction`,
+`toggleLikeOnTarget`, `setReactionOnTarget`, `setEventRsvp` — by calling the
+**same local server actions the UI uses**, wrapped in
+`runWithFederationExecutionContext(authorizedActorId, …)` so the mapped remote
+actor is the acting session. Other mutation types (`toggleFollowAgent`,
+`toggleJoinGroup`, resource create/update/delete, bookings, job applications,
+wallet purchase, KG operations) are handled by their own branches further down.
+
+**Scope is names only.** Payload shapes stay owned by the emitting action;
+receivers validate defensively. Adding a name to the contract does not oblige
+every receiver to support it — an unsupported type must still be rejected
+**explicitly** (`501 MUTATION_NOT_IMPLEMENTED`, or `400 UNKNOWN_MUTATION_TYPE`),
+never silently accepted.
+
+## Membership back-projection
+
+If you are homed on another instance and are granted membership **here**, your
+home instance has no way to know — so your home's Groups tab silently omits this
+group. Every sovereign receiver has carried an `applyMembershipProjection`
+handler since the invites wave, but for a long time **nothing emitted it**.
+
+Now it does. When an active membership is created for an agent whose home is
+elsewhere, this instance resolves their home and projects the membership to it.
+
+- **No-op when the member is homed locally.**
+- **Fire-and-forget by design** — the membership write must never fail because
+  the member's home is unreachable. It never throws.
+- A **backfill script** reconciles projections that were missed.
+
+Emitted from every writer that can create or activate a membership:
+
+| Writer | File |
+| --- | --- |
+| `toggleJoinGroup` | `src/app/actions/interactions/social.ts` |
+| `challengeGroupAccess` | `src/app/actions/group-access.ts` |
+| `renewGroupMembership` | `src/app/actions/group-access.ts` |
+| `applyMembershipRequestForActor` | `src/app/actions/group-access.ts` |
+| `reviewGroupJoinRequest` (on approve) | `src/app/actions/group-access.ts` |
+
+> 📸 **Screenshot:** _the settings Federation tab — peer-node export permission, linked identities, and the exported-event count_ — capture at `/settings` (open the **Federation** tab). _(placeholder — remove when image added)_
+
+## Peering
+
+1. Instances register in each other's **peer registry**
+   (`/api/federation/peers`, `/api/federation/registry`).
+2. Each peer holds a shared secret; requests carry `x-peer-slug` (identifying
+   the **sender**) and `x-peer-secret`, or fall back to `x-node-admin-key`.
+3. Signed events flow both ways — push via `/api/federation/events`, pull via
+   the `federation-sync` cron. Signature plus nonce dedup applies on both.
+4. The pull path allows historical catch-up so an instance can recover after
+   more than 7 days of downtime; push routes stay strict.
+5. `/api/federation/node-status` and `/api/federation/status` report health.
+
+## Visitor scope
+
+The instance owner sets what a federated visitor may do here at
+**`/settings/visitor-access`** — the capability set and the session TTL — and can
+review the recent-landings log (referral path, home instance, granted scope).
+Social-graph, membership-projection, and knowledge-graph operations are
+owner/peer-only regardless of visitor scope.
+
+## Good to know
+
+- **Cross-instance money works.** A federated member can pay dues, subscribe,
+  deposit, and buy here with their verified identity. Money surfaces resolve
+  principals through the unified session and project first-contact federated
+  actors before any actor-keyed write.
+- **Payouts are centralized.** GLOBAL is the sole Connect payout authority; this
+  instance records the obligation and asks global to move the real money. See
+  [Wallet & treasury](/docs/wiki/wallet-treasury).
+- **Links to remote-homed entities open the remote instance** in a new tab
+  (never a Next `<Link>` — cross-origin RSC prefetch is a CSP-flash class).
+  Unstamped rows resolve to their local path here, because this app renders
+  every entity class locally.
+- **Checkout for a mirrored listing redirects to its source instance**, so price,
+  inventory, and settlement all run where the listing is sovereign-homed.
+- Federated avatars hosted on the hub's asset store are allowed by CSP —
+  `img-src` derives the hub S3 origin from `REGISTRY_URL`.
+
+<Callout type="note" title="Routes that do not exist here">
+  There is no <code>/api/universal-manifest</code> and no
+  <code>/api/recovery</code> on this instance. Earlier docs cited both.
+</Callout>
+
+## Under the hood
+
+The complete `src/app/api/federation` route set:
+
+| Route | Purpose |
+| --- | --- |
+| `/api/federation/peers`, `/registry`, `/registry/[agentId]`, `/global-registry` | peer + agent registry |
+| `/api/federation/events`, `/events/import`, `/events/export` | signed event exchange |
+| `/api/federation/mutations` | cross-instance mutations (the shared contract) |
+| `/api/federation/sso/start`, `/sso/land` | federated sign-in |
+| `/api/federation/remote-auth`, `/remote-session` | remote-viewer sessions |
+| `/api/federation/remote-assertion/issue`, `/verify` | signed actor assertions |
+| `/api/federation/status`, `/node-status` | health |
+| `/api/federation/bootstrap-owner` | instance owner bootstrap |
+
+- **Shared contract:** `src/lib/federation/mutation-contract.ts`
+  (`INTERACTION_MUTATION_TYPES`, `LEGACY_MUTATION_ALIASES`,
+  `canonicalMutationType`) — manifest-shared, byte-identical across repos.
+- **Receiver:** `src/app/api/federation/mutations/route.ts`.
+- **Back-projection:** `src/lib/federation/membership-projection.ts`
+  (`projectMembershipToMemberHome`); backfill
+  `src/scripts/backfill-membership-projections.ts`.
+- **Session resolution:** `src/lib/server-auth.ts`,
+  `src/lib/federation-remote-session.ts`.
+- **Visitor scope:** `src/lib/federation/visitor-scope.ts`.
+- **Home resolution:** `src/lib/federation/resolution.ts`,
+  `instance-config.ts`, `write-router.ts`.
+- **Canonical entity links:** `src/lib/federation/entity-link.ts`,
+  `src/components/canonical-link.tsx`.
+- **Env:** `INSTANCE_TYPE=group`, `INSTANCE_ID`, `INSTANCE_SLUG`,
+  `PRIMARY_AGENT_ID`, `REGISTRY_URL`, `FEDERATION_PEER_SECRET_*`,
+  `NODE_ADMIN_KEY`.
+
+Related: [Account & settings](/docs/wiki/account-settings) ·
+[Admin](/docs/wiki/admin) · [Wallet & treasury](/docs/wiki/wallet-treasury) ·
+[Assistant, personas & MCP](/docs/wiki/autobot-agents)

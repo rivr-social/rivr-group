@@ -2,67 +2,200 @@
 
 ## What it is
 
-Groups are agent-owned communities/orgs with their own feed, members, tabs, and
-resources. Groups can nest (subgroups) with a lineage breadcrumb, and
-org-descendant subgroups get the full org tab set. A group that is an
-**affiliate/partner** of an org-grade group (a ledger `relationshipType` edge,
-not a `parentId` subgroup edge) inherits that same org tab set — so partner-group
-members see the Jobs board and other org tabs, not just subgroups. Rings and
-families are related group-like containers.
+This instance's **primary group** is its home page — opening `/` sends you
+straight to `/groups/<PRIMARY_AGENT_ID>`. A group is an agent in its own right:
+it owns resources, holds a treasury, has members, and presents its life through
+a strip of tabs.
 
-## Where it lives
+Groups nest. A **subgroup** hangs off a parent (`parentId`) and gets a lineage
+breadcrumb up to the org. A group that is an **affiliate/partner** of an
+org-grade group inherits the same full tab set — partner members see the Jobs
+board and the other org tabs, not just subgroups. Ring- and family-typed
+containers render on this same group page (never at `/rings/…` or
+`/families/…`, which don't exist here).
 
-- `/groups` — directory · `src/app/(main)/groups/page.tsx`
-- `/groups/[id]` — group home + tabs · `src/app/groups/[id]/page.tsx` (`group-tabs-client.tsx`)
-- `/groups/[id]/settings` — group settings · `src/app/groups/[id]/settings/page.tsx`
-- `/groups/[id]/docs` — group docs/filesystem · `src/app/groups/[id]/docs/page.tsx`
-- `/rings`, `/rings/[id]`, `/families`, `/families/[id]` — related containers
+<Callout type="note" title="There is no /groups directory">
+  Only <code>/groups/[id]</code> exists. There is no <code>/groups</code> index
+  page — "My Groups" in the user menu points at <code>/</code>, the primary
+  group. Deep-linking a tab from elsewhere works via <code>/?tab=…</code>, which
+  the root redirect forwards.
+</Callout>
 
-## Every interaction
+## The tab strip
 
-- **Join / leave** — toggle membership on a group or ring.
-- **Request to join / approve** — request-gated groups; admins approve or deny.
-- **Invite a member (admin)** — admins invite any person from the Members tab
-  (search by name/username, choose the member or admin role). **Membership
-  starts only when the person accepts** — the invite appears in their
-  notifications and as an accept/decline banner on the group page; admins see
-  and can cancel pending invitations. Also available to agents as the
-  `rivr.groups.invite_member` MCP tool.
-- **Browse tabs** — feed, members, events, projects, docs, and org tabs for
-  org-typed groups and their descendant subgroups.
-- **Lineage breadcrumb** — navigate up the subgroup → parent → org chain.
-- **Post as the group** — admins author group-owned posts (see [Feeds & posts](/docs/wiki/feeds-posts)).
-- **Org tab visibility** — org-grade tabs (jobs, marketplace, governance,
-  badges, stake, treasury, docs, subgroups) default to **members** visibility:
-  members see them, non-members and anonymous visitors don't. Admins can widen
-  any tab to public or tighten it to admin-only/hidden per group from settings.
-- **Inventory needs lists** — the Stock tab's Needs subtab holds MULTIPLE
-  named lists (plus the default General list), each optionally connected to a
-  project. Org groups also see a read-only rollup of every subgroup's lists
-  and, under each, the lists of that agent's projects. Marking a need
-  fulfilled materializes it as a tangible Inventory resource (the stock row
-  survives un-fulfilling).
-- **Manage settings** — name, description, visibility, membership policy, member
-  capability toggles _(TODO(verify): enumerate the exact toggle set live)_.
+An **organization**-grade group (and its descendant subgroups and affiliates)
+shows every page tab. A **basic** group shows only: About, Feed, Events, Groups,
+Members, Docs.
 
-## Membership dues & treasury
+| Tab | Strip label | Default visibility | What it is |
+| --- | --- | --- | --- |
+| `about` | About | public | description, contact, plans, admins |
+| `feed` | Feed | public | the group's posts |
+| `events` | Events | public | its events |
+| `members` | Members | public | roster, invite, roles |
+| `press` | Press | public | external feed sources, media gallery, newsletter |
+| `stock` | Stock | public | Inventory + named Needs lists |
+| `groups` | Groups | **members** | subgroups and affiliates |
+| `documents` | Docs | **members** | the faceted-tag vault |
+| `jobs` | Jobs | **members** | the job board |
+| `marketplace` | Mart | **members** | the group's listings |
+| `governance` | Governance | **members** | proposals, polls, issues |
+| `badges` | Badges | **members** | badge definitions and holders |
+| `stake` | Stake | **members** | points-based stake and share classes |
+| `treasury` | Treasury | **members** | balances, allocations, budget, reports |
 
-This group can charge **membership dues** (its paid plans, set in Settings →
-Memberships). Members are billed through Stripe, grossed up so the group nets
-the full plan price. Dues and other inflows land in the group **treasury**
-(Treasury tab: funds, subgroup allocations, payouts, and — where enabled — a
-**crypto USDC treasury** in an officer-controlled Safe). Federated members can
-join and pay with their verified identity from their home instance.
+`gallery` is a real registry key with its own visibility setting, but it is
+**not a top-level tab** — the media gallery renders inside **Press → Media**.
 
-## Permissions / gating
+> 📸 **Screenshot:** _the full org tab strip on the group page_ — capture at `/groups/<id>` (signed in as a member). _(placeholder — remove when image added)_
 
-- **Public** group pages are readable by guests (`/groups` is a public prefix).
-- **Members** see member-only content and can post/participate per capability.
-- **Group admins** manage membership, settings, subgroups, and group authorship.
-- Group-agent ownership: the group is itself an agent that can own resources.
+<Callout type="tip" title="Why org tabs default to members, not admins">
+  Until 2026-07-19 the org-grade tabs defaulted to <strong>admin</strong>, which
+  silently hid members' own surfaces — their vote, their job board, their stake —
+  on every group whose admin never touched tab settings. They now default to
+  <strong>members</strong>. Explicit per-group settings still override, and an
+  admin can still tighten any tab to admin-only or hidden.
+</Callout>
 
-## Cross-links
+## How to join
 
-- API/MCP: [Groups tools](/docs/api) · [Group lifecycle tools](/docs/api) · [`rivr.groups.join`](/docs/api) · [`/api/groups` REST](/docs/api) · [`/api/billing/group-subscribe`](/docs/api)
-- Wiki: [Projects & jobs](/docs/wiki/projects-jobs) · [Governance](/docs/wiki/governance) · [Docs, filesystem & vault](/docs/wiki/docs-vault) · [Badges & stake](/docs/wiki/badges-stake)
-- Federation: sovereign group instances federate to global; membership lifecycle emits signed events.
+1. Open the group page.
+2. Click **Join**. What happens next depends on the group's Join Settings:
+   - Open group → you're a member immediately.
+   - **Approval required** → a *pending request* is created (`isActive: false`,
+     `reviewStatus: 'pending'`). You are **not** a member until an admin
+     approves. The approval queue is real, not decorative.
+   - **Password challenge** → you must enter the group password.
+   - **Requires an active subscription** → you must hold an active paid plan;
+     subscribing grants membership automatically.
+   - **Application questions** → you answer the admin's questions first.
+3. If you were invited, the invite shows up in your notifications and as an
+   accept/decline banner on the group page. **Membership starts only when you
+   accept.**
+
+## How to invite someone (admin)
+
+1. Open the **Members** tab.
+2. Search by name or username.
+3. Choose the role — **member** or **admin**.
+4. Send. The invitation is pending until accepted; admins can see and cancel
+   pending invitations.
+
+Agents can do the same via the `rivr.groups.invite_member` MCP tool.
+
+## How to change a group setting
+
+All group configuration lives at **`/groups/<id>/settings`**, behind an admin
+gate that redirects non-admins. There are **twelve** tabs:
+
+| Tab | What you set |
+| --- | --- |
+| **Profile** | name, description, avatar/cover, social links, Mart commission (%) — and the *Upgrade to Organization* action |
+| **Memberships** | the group's paid dues plans (name, description, monthly/yearly amounts, perks, default plan) |
+| **Join Settings** | discovery (public/hidden), join type, invite link, application instructions, approval required, password challenge, require-active-subscription, application questions |
+| **Requests** | the pending join-request queue — approve or deny |
+| **Tab Visibility** | per-tab Public / Members / Admin / Hidden |
+| **Chat** | chat mode (ledger / Matrix / both) |
+| **Assistant** | the group AI assistant — model, soul prompt, knowledge sources, Anthropic key, public chat |
+| **Personas** | the group's alternate identities; pick which one carries the assistant |
+| **Site** | open the Site Builder for this group, view the published site |
+| **Announcements** | broadcast an email to members |
+| **Connectors** | Google Workspace OAuth (calendar sync, group SMTP) plus the 13-provider connector catalog |
+| **Map Marker** | the group's place — search or enter lat/lng — plus an optional GLB 3D marker model |
+
+> 📸 **Screenshot:** _the group settings tab strip showing all twelve tabs_ — capture at `/groups/<id>/settings` (signed in as an admin). _(placeholder — remove when image added)_
+
+There is also a standalone page at **`/groups/<id>/settings/connections`** —
+a server-rendered Connectors surface that resolves the group, verifies admin
+access, and loads the linked Google Workspace connection before handing off to
+the same client form.
+
+## Membership dues
+
+The group can charge dues — its paid plans, set in Settings → **Memberships**.
+
+- Members are billed through Stripe, **grossed up** so the group nets the full
+  plan price it set. The member sees the real total at Stripe Checkout before
+  paying.
+- Dues carry **no flat Connect overhead** (that stays marketplace-only), but they
+  do carry the gross-up over Stripe's 2.9% + 30¢ plus RIVR's margin.
+- Dues and other inflows land in the group **treasury**.
+- **Federated members** — people homed on another RIVR instance — can join and
+  pay with their verified identity from their home instance.
+- Dues receipts appear in the member's `/profile/purchases`.
+
+Details: [Wallet & treasury](/docs/wiki/wallet-treasury#membership-dues-pricing).
+
+## Press, gallery and announcements
+
+The **Press** tab is the group's outward-facing media surface:
+
+- **External sources** — the admin configures feeds (Instagram, video, article
+  sources) that are fetched and rendered as a press feed.
+- **Media** — the group's own gallery, built from its posts and its image/video,
+  listing, and event resources. It has a **Grid / List** toggle; grid is a dense,
+  gapless, square wall with a lightbox.
+- **Newsletter** — compose and send to members.
+
+**Announcements** (Settings → Announcements) is the email broadcast to members.
+Both the broadcast and the newsletter **honor each member's email opt-out** and
+append a non-tracking unsubscribe/preferences footer to the outbound message
+only (the stored body is untouched).
+
+> 📸 **Screenshot:** _the Press tab with the media gallery in grid layout_ — capture at `/groups/<id>?tab=press`. _(placeholder — remove when image added)_
+
+## Stock: inventory and needs lists
+
+The **Stock** tab has two sub-tabs, **Inventory** and **Needs**.
+
+Needs are organized into **multiple named lists** — the legacy **General** list
+plus any named lists you create, each optionally **connected to a project**. Org
+parents also see a read-only **rollup** of every subgroup's lists and, under
+each, the lists of that agent's projects. Marking a need **fulfilled**
+materializes it into Inventory server-side.
+
+Full walkthrough: [Projects & jobs → Stock](/docs/wiki/projects-jobs#stock-inventory-and-needs-lists).
+
+> 📸 **Screenshot:** _the Stock tab's Needs sub-tab with several named lists, one connected to a project_ — capture at `/groups/<id>?tab=stock`. _(placeholder — remove when image added)_
+
+## Good to know
+
+- **Admin authority cascades.** An admin of a parent org administers its
+  subgroups (`isGroupAdminCascade`). Parent admins bypass badge gates on job
+  claims.
+- **The group is an agent.** It can own resources, author posts, hold a wallet,
+  and be a persona's parent.
+- **Hidden groups are actually hidden** — the discovery setting is honored.
+- **Admin controls gate on server-computed authority** passed down as props. The
+  client-side user context cannot see a federated remote-viewer session, so
+  anything gated client-side would wrongly hide controls from SSO'd admins.
+- Public group pages are readable by guests; org tabs are members-default.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Group page + tabs | `/groups/[id]` | `src/app/groups/[id]/page.tsx` → `src/components/group-tabs-client.tsx` |
+| Group settings | `/groups/[id]/settings` | `src/app/groups/[id]/settings/page.tsx` (`TAB_VALUES`) |
+| Connectors (standalone) | `/groups/[id]/settings/connections` | `src/app/groups/[id]/settings/connections/page.tsx` |
+| Group docs | `/groups/[id]/docs` | `src/app/groups/[id]/docs/page.tsx` |
+| Published group site | `/groups/[id]/site/…` | `src/app/groups/[id]/site/[[...path]]/route.ts` |
+| Root redirect | `/` → `/groups/<PRIMARY_AGENT_ID>` | `src/middleware.ts` + `src/lib/home-tabs.ts` |
+
+- Tab registry, labels, defaults: `src/lib/types.ts` — `GROUP_TAB_KEYS`,
+  `GROUP_TAB_LABELS`, `DEFAULT_TAB_VISIBILITY`, `TabVisibilityLevel`.
+- Strip labels + basic-group subset: `src/components/group-tabs-client.tsx`
+  (`GROUP_TAB_TRIGGER_LABELS`, `BASIC_GROUP_PAGE_TABS`, `NON_PAGE_TAB_KEYS`).
+- Membership / join / requests: `src/app/actions/group-access.ts`.
+- Press + gallery: `src/components/press-tab.tsx`, `media-gallery.tsx`,
+  `newsletter-tab.tsx`; actions `src/app/actions/press.ts`,
+  `src/app/actions/newsletter.ts`.
+- Email opt-out: `src/lib/email-preferences.ts` (`isEmailEnabled`).
+- Session resolution (remote-viewer aware): `src/lib/server-auth.ts`
+  (`getAuthenticatedActorId`).
+
+Related: [Governance](/docs/wiki/governance) ·
+[Projects & jobs](/docs/wiki/projects-jobs) ·
+[Wallet & treasury](/docs/wiki/wallet-treasury) ·
+[Docs & vault](/docs/wiki/docs-vault) ·
+[Assistant, personas & MCP](/docs/wiki/autobot-agents)

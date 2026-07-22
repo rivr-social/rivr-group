@@ -1,34 +1,47 @@
-# Locales & regions
+# Locales, regions, rings & families (global concepts)
 
 ## What it is
 
-Place-scoped commons. Locales/chapters and regions/bioregions (basins) are
-place-typed agents that posts, events, and offerings can be scoped to, giving
-each place its own feed and directory. Rings and families are related
-place/affinity containers.
+Place-scoped commons — locales/chapters, regions/bioregions (basins) — and the
+ring/family affinity containers are **RIVR-ecosystem concepts hosted elsewhere**.
+Locales and regions run as their own sovereign instances and aggregate on the
+global hub. This group instance participates in that ecosystem; it does not
+browse it.
 
-## Where it lives
+**There is no `/locales`, `/basins`, `/rings`, or `/families` route here.**
 
-- `/locales`, `/locales/[id]` — locale commons · `src/app/(main)/locales/**`
-- `/basins` — bioregions · `src/app/(main)/basins/**`
-- `/rings`, `/families` — related containers · `src/app/(main)/rings/**`, `src/app/families/**`
+## What survives on this instance
 
-## Every interaction
+1. **Rings and families as types, not routes.** A group agent can be typed
+   `ring` or `family`; it renders on the ordinary group page at
+   `/groups/<id>` — never at `/rings/<id>` or `/families/<id>` (linking to
+   those was a real 404 bug, fixed by the canonical-entity-link sweep).
+2. **Their treasuries.** `ring-treasury-tab.tsx` and `family-treasury-tab.tsx`
+   render the money surface for a ring- or family-typed container. Everything in
+   [Wallet & treasury](/docs/wiki/wallet-treasury) applies.
+3. **Location on the map, outward.** A group can publish a **map marker** so it
+   appears on the global map — set it in group settings → **Map Marker**.
 
-- **Browse places** — list locales, basins, rings, families.
-- **Open a place** — its scoped feed of posts/events/offerings.
-- **Scope content to a place** — when composing, attach a locale/region so it
-  appears in that place's feed (resolve names → ids via `rivr.places.list`).
-- **Participate** — join/participate per the place's membership model. _TODO(verify): confirm live locale/region join + role affordances._
+> 📸 **Screenshot:** _the Map Marker settings tab with a placed marker_ — capture at `/groups/<id>/settings` (open the **Map Marker** tab). _(placeholder — remove when image added)_
 
-## Permissions / gating
+## Good to know
 
-- **Public** place pages (`/locales`, `/basins`, `/rings`, `/families` are public
-  prefixes).
-- Participation and place-admin actions require a session and the relevant role.
-- Sovereign locale/region instances federate to global for aggregation.
+- Place *scoping* on posts and events (attaching a locale or region) is a global
+  authoring affordance. Content created here reaches place feeds by federating
+  outward, not by a local place picker.
+- Location autocomplete in forms is served locally and sovereignly from this
+  instance's own place/locale graph nodes (`/api/locations/suggest`) — it never
+  calls out to global.
 
-## Cross-links
+## Under the hood
 
-- API/MCP: [`rivr.places.list`](/docs/api) · [`/api/locales` REST](/docs/api) · [`/api/map-neighborhoods`](/docs/api) · [`/api/map-microsheds`](/docs/api)
-- Wiki: [Explore & search](/docs/wiki/explore-search) · [Groups & subgroups](/docs/wiki/groups) · [Feeds & posts](/docs/wiki/feeds-posts)
+- Ring/family treasuries: `src/components/ring-treasury-tab.tsx`,
+  `src/components/family-treasury-tab.tsx`.
+- Canonical link routing (why ring/family owners link to `/groups/<id>`):
+  `src/lib/federation/entity-link.ts` + `src/components/canonical-link.tsx`.
+- Map marker: the `map-marker` tab in `src/app/groups/[id]/settings/page.tsx`.
+- Location suggestions: `src/app/api/locations/suggest/route.ts`.
+
+Related: [Groups & subgroups](/docs/wiki/groups) ·
+[Explore & search](/docs/wiki/explore-search) ·
+[Federation & SSO identity](/docs/wiki/federation-identity)

@@ -1,42 +1,156 @@
-# Calendar & events
+# Calendar, events & virtual meetings
 
 ## What it is
 
-The scheduling surfaces: a calendar of events, event detail with RSVP and
-ticketing, financials for paid events, and a scheduling/find-time helper. Events
-can be place-scoped and (for groups) tied to meeting/transcript documents.
+Events are the group's scheduled life: gatherings, classes, meetings. An event
+can be **in person**, **online** (a link to Zoom or similar), or a **Virtual
+Meeting hosted right here** — where the event page itself *is* the venue, backed
+by a LiveKit room, and the session can be recorded into a **speaker-identified
+transcript** attached to the event.
 
-## Where it lives
+The calendar is the personal view across all of it, including your own claimed
+jobs and completed work periods.
 
-- `/calendar` — calendar · `src/app/(main)/calendar/page.tsx`
-- `/events`, `/events/[id]` — list + detail · `src/app/events/**`
-- `/events/[id]/tickets`, `/registered`, `/financials`, `/edit` — event sub-surfaces
-- `/events/find-time` — scheduling helper · `src/app/events/find-time/page.tsx`
-- `/create` — event composer (event mode)
+<Callout type="note" title="No /events/find-time">
+  Earlier docs listed a scheduling / find-time helper. That route does not exist
+  in this codebase.
+</Callout>
 
-## Every interaction
+## How to create an event
 
-- **Browse the calendar** — jobs and events appear on their real dates; filter by
-  kind, group, and member.
-- **Create an event** — title, location, place scope; optional ticketing. A
-  single date-time range selector sets the event's start and end (a range
-  calendar plus start/end times in one popover) on both the create and edit
-  surfaces, replacing the old separate date + time inputs.
-- **RSVP** — set status going / interested / none.
-- **Buy tickets / view registered** — paid events route to tickets and a
-  registered-attendee view; organizers see financials.
-- **Edit** — organizers edit event details.
-- **Append transcript** — group meeting events accrue a linked transcript document.
+1. Go to **`/create`** and choose the **Event** tab.
+2. Enter the name and description.
+3. Set the **date and time** — one range selector sets start and end together (a
+   range calendar plus start/end times in a single popover). The same control is
+   on the edit page.
+4. Choose the **Event Type**:
+   - **In person** — add a location.
+   - **Online** — add a meeting link or platform.
+   - **Virtual Meeting (hosted here)** — no location or link needed; the event
+     page becomes the room.
+5. Optionally add ticket tiers (tickets are event offerings; add several tiers if
+   you need them).
+6. Optionally link the event to a project.
+7. Create.
 
-## Permissions / gating
+> 📸 **Screenshot:** _the event composer with the Event Type select open, showing "Virtual Meeting (hosted here)"_ — capture at `/create` (Event tab). _(placeholder — remove when image added)_
 
-- **Public** event pages (`/events` is a public prefix); `/calendar` is public.
-- **RSVP / ticket purchase** require a session.
-- **Edit / financials** are organizer/admin-scoped.
-- Location detail may be gated per event settings.
+## How to attend
 
-## Cross-links
+1. Open **`/events`** and pick an event, or go straight to **`/events/<id>`**.
+2. **RSVP** — going, interested, or none.
+3. For paid events, go to **`/events/<id>/tickets`**, choose a tier and quantity,
+   and pay by card or Rivr wallet.
+4. After buying you land on **`/events/<id>/registered`**, which confirms your
+   spot and offers add-to-calendar and share.
 
-- API/MCP: [Events tools](/docs/api) · [`rivr.events.rsvp`, `rivr.events.append_transcript`](/docs/api) · [`/api/transcription` REST](/docs/api) · [`/api/live-invitations`](/docs/api)
-- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Feeds & posts](/docs/wiki/feeds-posts) (live invites) · [Wallet & treasury](/docs/wiki/wallet-treasury)
-- Integrations: Google Calendar pull via the `gcal-pull` cron.
+## How to run a Virtual Meeting
+
+1. Create the event with type **Virtual Meeting (hosted here)** (above).
+2. Open `/events/<id>`. Where an in-person event shows a location, a virtual
+   meeting shows **"Virtual Meeting — hosted here"** and the meeting panel.
+3. The panel polls status every 30 seconds and shows whether the meeting is
+   **scheduled / live**, the participant count, and whether recording is on.
+4. Click **Join**. A full-screen LiveKit video conference opens in place.
+5. When recording is configured, participants are told the session is recorded
+   and that a speaker-labeled transcript will be attached afterwards.
+6. Leave with the close control. When the room empties (10-minute timeout) the
+   meeting ends.
+
+> 📸 **Screenshot:** _the event page's Virtual Meeting panel showing status, participant count, and the Join button_ — capture at `/events/<id>` (a virtual-meeting event). _(placeholder — remove when image added)_
+
+### Who can join
+
+The join lane authorizes against a real electorate — group **manage access**, an
+**active membership** (`canPostToGroup`), or an **active RSVP** on the event.
+The join **window** is enforced for non-managers: **15 minutes before** the start
+until **2 hours after**. Managers can join outside it. Auth resolves through the
+remote-viewer-aware session, so an SSO'd federated member is recognized.
+
+### How the transcript gets its speaker labels
+
+Speaker labels are exact **by construction**, not by guesswork:
+
+1. Your LiveKit token's identity **is your authenticated agent id**.
+2. When you publish a track, LiveKit's webhook starts a **per-participant audio
+   egress** — one recording file per identity.
+3. When every egress has ended and the room is finished, each track file is
+   transcribed separately, the segments are interleaved on the meeting clock and
+   coalesced, and the result is landed as the event's **transcript document** in
+   the form `**Name** [MM:SS]: text`.
+
+This is why the transcript never needs diarization guessing — the track owner
+already names the speaker.
+
+## How to use the calendar
+
+1. Go to **`/calendar`**.
+2. Move by week/month with the arrows; search and filter with the filter popover.
+3. Filter by kind, group, and member. Your **claimed job windows** and
+   **completed work periods** appear alongside events.
+4. Group admins additionally see a per-member **Work periods** kind on the group
+   calendar.
+
+## Organizer surfaces
+
+- **`/events/<id>/edit`** — change details; organizer/admin only.
+- **`/events/<id>/financials`** — line items, payouts, export; organizer/admin
+  only.
+- **`/events/<id>/registered`** — the registered view.
+- **`/events/<id>/tickets`** — the ticket purchase flow.
+
+## Good to know
+
+- **Tickets price through the same unified fee model** as the marketplace: 3.3% +
+  $1.49 + Connect overhead, grossed up over Stripe's 2.9% + 30¢, tax-exclusive
+  with Stripe Tax. See [Marketplace & fees](/docs/wiki/marketplace).
+- **Event pages are public**; RSVP and ticket purchase require a session; edit
+  and financials are organizer-scoped.
+- **Virtual meetings need instance configuration.** Without `LIVEKIT_URL` (plus
+  API key/secret) the join route returns 503 and the panel explains. Without the
+  recording S3 configuration, recording is silently off — the meeting still
+  works.
+- Room names are **deterministic**: `evt-<eventId>`. Default cap is **100
+  participants**; join tokens live 6 hours.
+- Google Calendar events are pulled in by the `gcal-pull` cron where a Google
+  Workspace connector is linked (Settings → Connectors).
+- Events can carry a linked transcript document even outside the virtual-meeting
+  lane (`rivr.events.append_transcript`).
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Calendar | `/calendar` | `src/app/(main)/calendar/page.tsx` |
+| Event list | `/events` | `src/app/events/page.tsx` |
+| Event detail | `/events/[id]` | `src/app/events/[id]/page.tsx` |
+| Edit | `/events/[id]/edit` | `src/app/events/[id]/edit/page.tsx` |
+| Tickets | `/events/[id]/tickets` | `src/app/events/[id]/tickets/page.tsx` |
+| Registered | `/events/[id]/registered` | `src/app/events/[id]/registered/page.tsx` |
+| Financials | `/events/[id]/financials` | `src/app/events/[id]/financials/page.tsx` |
+| Composer | `/create` (Event tab) | `src/app/(main)/create/page.tsx` |
+
+- **Meeting panel:** `src/components/event-meeting-panel.tsx`.
+- **Join lane:** `GET`/`POST /api/events/[id]/meeting` →
+  `src/app/api/events/[id]/meeting/route.ts` (electorate:
+  `hasGroupManageAccess` ∪ `canPostToGroup` ∪ `hasActiveEventRsvp`; auth via
+  `resolveAuthenticatedUserId`).
+- **Recording lane:** `POST /api/livekit/webhook` →
+  `src/app/api/livekit/webhook/route.ts` (LiveKit-signed JWT; `track_published`
+  → per-track egress, `egress_ended` / `room_finished` → transcribe + merge +
+  land).
+- **Meeting library:** `src/lib/meetings/` — `constants.ts` (`eventRoomName`,
+  `MEETING_KIND_VIRTUAL`, join window, `DEFAULT_MAX_PARTICIPANTS`,
+  `TOKEN_TTL_SECONDS`, `ROOM_EMPTY_TIMEOUT_SECONDS`), `livekit.ts`,
+  `event-window.ts`, `meeting-recordings.ts`, `transcript-merge.ts`,
+  `transcript-land.ts`, `recording-storage.ts`.
+- **Authoring flag:** `createEventResource({ virtualMeeting: true })` writes
+  `metadata.meetingKind: "virtual-meeting"` + `transcriptionEnabled: true`.
+- **Env:** `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+  `MEETING_RECORDINGS_S3_{ENDPOINT,ACCESS_KEY,SECRET_KEY,BUCKET,REGION}`,
+  `WHISPER_TRANSCRIBE_URL`.
+
+Related: [Groups & subgroups](/docs/wiki/groups) ·
+[Marketplace & fees](/docs/wiki/marketplace) ·
+[Projects & jobs](/docs/wiki/projects-jobs) ·
+[Docs & vault](/docs/wiki/docs-vault)

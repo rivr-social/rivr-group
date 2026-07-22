@@ -1,72 +1,121 @@
-# Docs, filesystem & vault
+# Docs & the tag vault
 
 ## What it is
 
-The docs module **is a parachute vault**: one integrated surface where a nested
-tag tree is the primary navigation and every document carries editable nested
-tags. Docs are markdown-body Resources whose faceted location is a nested-tag
-array (`metadata.facetedTags`, mirrored to flat `tags`); a doc appears under
-**every** tag path it carries. Tag semantics match Parachute exactly
-(lower-cased slash paths like `work/projects/rivr`), so a Parachute/Obsidian
-vault imports losslessly. Per-resource access control (direct grants + ABAC
-policies), visibility, share-as-post, and history ride on the same rows.
+The group's documents, filed the way a Parachute or Obsidian vault files
+notes — by **nested tags**, not folders. A document is a markdown-bodied
+resource whose location is an array of slash-paths (`work/projects/rivr`), so the
+same document appears under **every** tag path it carries. There is no
+"Documents vs. Tags" toggle: the vault *is* the docs module.
 
-## Where it lives
+Tag semantics match Parachute exactly (lower-cased slash paths), so a
+Parachute/Obsidian vault maps across losslessly.
 
-- `/groups/[id]/docs` — group docs / faceted Tags vault · `src/app/groups/[id]/docs/page.tsx`
-- `/families/[id]/docs`, `/rings/[id]/docs` — container docs
-- Profile docs tab — own-profile filesystem (`documents-tab.tsx`)
-- Agent-HQ filesystem API · `src/app/api/agent-hq/**`; ABAC engine `src/lib/permissions.ts`
+<Callout type="note" title="Two doc surfaces, and they differ">
+  The <strong>Documents tab</strong> on the group page
+  (<code>/groups/&lt;id&gt;?tab=documents</code>) is the full vault: tag rail on
+  the left, filtered list or the open document on the right. The standalone page
+  at <code>/groups/&lt;id&gt;/docs</code> is a simpler surface — the same document
+  list and viewer, without the tag rail. There is no
+  <code>/families/&lt;id&gt;/docs</code> or <code>/rings/&lt;id&gt;/docs</code>;
+  those routes do not exist here.
+</Callout>
 
-## Every interaction
+## How to browse the vault
 
-- **Navigate the vault** — a persistent left rail shows the nested tag tree
-  ("All docs", collapsible facet folders with per-node doc counts, and an
-  "Untagged" bucket); selecting a path filters to docs under it (exact or
-  subtree). No separate list-vs-Tags toggle — the vault IS the docs module.
-- **Edit a doc's tags inline** — on the doc view, tags render as chips
-  (× to remove); add tags by typing a slash path (`a/b/c`, Enter/comma to
-  commit) with autocomplete from the vault's existing paths. Persists to
-  `metadata.facetedTags` + the flat `tags` mirror in one update.
-- **Import a vault** (sovereign person instances) — Docs toolbar → "Import
-  vault": pick a Parachute/Obsidian folder (or pull a live daemon); notes become
-  faceted-tag doc Resources; unchanged notes skip on re-import (idempotent).
-- **Browse the filesystem** — a virtual DB filesystem over Resources, rooted at
-  the **object whose page you opened**, not at you: on a group's Docs tab it
-  roots at that GROUP, on your profile it roots at YOU. The root has three
-  folders — `agents/` (the object's related agents: a group's members &
-  subgroups, or a person's personas & the groups they belong to/manage),
-  `ledger/` (the object's action history, by verb), and `resources/` (the
-  object's owned content, nested by type). Select a resource folder to manage
-  its permissions. Access is authorized server-side: a **group** filesystem is
-  visible only to that group's admins; a **person** filesystem only to that same
-  person (self or their own personas). An unauthorized viewer gets an empty tree
-  — the scope subject is derived and checked from `auth()`, never trusted from
-  the client.
-- **Open the ACL panel** — for a resource (or a resource-type folder):
-  - set **visibility**;
-  - add **direct grants** (verb + role + locale/global scope) to any agent;
-  - create **ABAC policies** (allow/deny, conditions equals/in/exists/gt…lte, AND/OR, locale scope);
-  - **share as post**; view read-only **history**.
-- **Require payment for access (x402)** — per-record paid access, OFF by
-  default. The record's owner opts in from the doc editor, setting a price and
-  a settlement address (stored under `resources.metadata.x402`). A caller
-  without an explicit grant then gets a 402 challenge at
-  `GET /api/resources/[id]/access` and is served after a verified, settled
-  x402 payment (receipts persist in `x402_receipts`; a unique settlement-tx
-  index gives replay protection, and authenticated payers are re-granted
-  without re-charging). Toggling it off restores plain grant-based access.
+1. Open the group page and choose the **Docs** tab
+   (`/groups/<id>?tab=documents`). It is **members**-visible by default.
+2. The left rail shows the tag tree: **All docs**, collapsible facet folders with
+   a doc count on each node, and a synthetic **Untagged** bucket.
+3. Click a folder **name** to filter the list to that facet. **All docs** clears
+   the filter; **Untagged** selects documents carrying no tags.
+4. Click a document **leaf** in the rail — or a card in the list — to open the
+   viewer.
 
-## Permissions / gating
+> 📸 **Screenshot:** _the Docs tab with the tag rail on the left (All docs, nested facet folders with counts, Untagged) and the filtered list on the right_ — capture at `/groups/<id>?tab=documents`. _(placeholder — remove when image added)_
 
-- ACL management is gated by `check(userId, "grant", id, "resource")` — owner or
-  grant-holder only.
-- Folder ACL opens for a `resources/{type}/{id}` directory and its leaves;
-  true subtree/type-folder ABAC is a documented gap (per-resource scope).
-- Tag edits reuse the doc-update action and are gated to the doc's
-  owner/author (same enforcement the viewer already applies).
+## How to create and tag a document
 
-## Cross-links
+1. From the Docs tab, create a new document. It opens at
+   `<docsPath>?doc=<id>`.
+2. Click **Edit**.
+3. Set the title, description, and category.
+4. In the **Tags** field, type a slash path — `work/projects/rivr` — and press
+   Enter or comma to commit it. Autocomplete offers every existing path in the
+   vault **and each of its prefixes** (`work`, `work/projects`,
+   `work/projects/rivr`), so nested facets stay consistent.
+5. Remove a tag with the **×** on its chip.
+6. Optionally tick **Show on About page**.
+7. **Save.** Tags persist to `metadata.facetedTags` with a mirror to the flat
+   `tags` array in a single update, through the same `updateResource` action the
+   viewer already uses — so the same gate applies.
 
-- API/MCP: [Files tools](/docs/api) · [`/api/agent-hq` REST](/docs/api) (db/entries, resources/[id]/access|policies|ledger|share)
-- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Account & settings](/docs/wiki/account-settings) · [Autobot & agents](/docs/wiki/autobot-agents)
+> 📸 **Screenshot:** _the document viewer in edit mode with the faceted tag chip editor and its slash-path autocomplete_ — capture at `/groups/<id>?tab=documents` (open a doc, click Edit). _(placeholder — remove when image added)_
+
+## Good to know
+
+- **Tags are an index, not a location.** A document under three tag paths is one
+  resource, not three copies. Retagging never moves or duplicates the underlying
+  row.
+- **Membership gates the tree.** The rail's data comes from
+  `GET /api/agent-hq/faceted-fs?groupId=…`, which lists documents owned by the
+  group agent and gates on group membership — server-side, from the session, not
+  from the client.
+- **Tag edits are gated to the document's owner/author**, the same enforcement
+  the viewer already applies to any edit.
+- A document can be surfaced on the group's **About** page with the
+  "Show on About page" checkbox.
+- The viewer's **Share** control is present in the UI but not yet wired to an
+  action — treat it as unimplemented, not as a sharing feature.
+
+## Access control (engine present, no UI here)
+
+This instance carries the full permissions engine used across RIVR:
+
+- **`check(actorId, verb, targetId, targetType)`** — the single authorization
+  entry point, with `canView` / `canManage` / `canUse` shorthands.
+- **Direct grants** — `grantPermission` / `revokePermission`.
+- **ABAC policies** — `createPermissionPolicy`, `getPoliciesForTarget`,
+  `deletePermissionPolicy`, with allow/deny rules over attribute conditions
+  (`ATTRIBUTE_OPERATORS`) and a protected set of system-controlled attribute keys.
+- **Per-resource paid access (x402)** — `GET /api/resources/[id]/access` is the
+  one gated endpoint implementing the verified-principal model. A verified
+  principal with a grant is served. **x402 is off for every resource by
+  default**; when it is off and the caller has no grant, the answer is a plain
+  403 — there is no paying your way in. Where an owner opted a record in, a
+  caller with no grant gets a **402** plus payment requirements, and after
+  facilitator verify + on-chain settle is served with an idempotent receipt
+  persisted. An authenticated payer who already holds a receipt is re-granted
+  without being charged again.
+
+<Callout type="warning" title="Honest limitation">
+  There is <strong>no ACL panel in this app's UI</strong> — no visibility picker,
+  grant editor, ABAC policy builder, or x402 opt-in control on the document
+  surface. The engine above is reachable from server code and the gated access
+  endpoint; the authoring UI for it is not part of this build. Earlier docs
+  described that panel in detail. It isn't here.
+</Callout>
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Vault (tag rail + list + viewer) | `/groups/[id]?tab=documents` | `src/components/documents-tab.tsx` |
+| Tag rail | — | `src/components/faceted-vault-panel.tsx` |
+| Standalone docs page | `/groups/[id]/docs` | `src/app/groups/[id]/docs/{page,group-docs-content}.tsx` |
+| Document viewer / editor | — | `src/components/document-viewer.tsx` (`FacetedTagEditor`) |
+| Document list | — | `src/components/document-list.tsx` |
+| Faceted filesystem API | `/api/agent-hq/faceted-fs` | `src/app/api/agent-hq/faceted-fs/route.ts` |
+| Gated resource access | `/api/resources/[id]/access` | `src/app/api/resources/[id]/access/route.ts` |
+
+- Tag model + tree building: `src/lib/parachute-doc.ts`
+  (`FacetTreeNode`, `UNTAGGED_FACET_LABEL`, `normalizeFacetedTags`).
+- Creation: `createDocumentResourceAction` in
+  `src/app/actions/create-resources.ts`.
+- Permissions engine: `src/lib/permissions.ts`.
+- x402: `src/lib/x402/facilitator.ts` + config; receipts in `x402_receipts`.
+- MCP: `rivr.documents.create`, `rivr.kg.list_docs` / `push_doc`.
+
+Related: [Groups & subgroups](/docs/wiki/groups) ·
+[Assistant, personas & MCP](/docs/wiki/autobot-agents) ·
+[Calendar & events](/docs/wiki/calendar-events) (meeting transcripts land as documents)

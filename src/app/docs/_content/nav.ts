@@ -19,39 +19,44 @@ export const WIKI_SECTIONS: NavSection[] = [
     links: [{ href: "/docs/wiki", label: "Wiki index" }],
   },
   {
-    title: "Core surfaces",
+    title: "Start here",
     links: [
+      { href: "/docs/wiki/groups", label: "Groups & subgroups" },
       { href: "/docs/wiki/feeds-posts", label: "Feeds & posts" },
-      { href: "/docs/wiki/explore-search", label: "Explore & search" },
-      { href: "/docs/wiki/calendar-events", label: "Calendar & events" },
       { href: "/docs/wiki/messages", label: "Messages" },
-      { href: "/docs/wiki/marketplace", label: "Marketplace & gifts" },
+      { href: "/docs/wiki/account-settings", label: "Account & settings" },
+    ],
+  },
+  {
+    title: "Money",
+    links: [
+      { href: "/docs/wiki/marketplace", label: "Marketplace, listings & fees" },
       { href: "/docs/wiki/wallet-treasury", label: "Wallet & treasury" },
     ],
   },
   {
-    title: "Groups & coordination",
+    title: "Coordination",
     links: [
-      { href: "/docs/wiki/groups", label: "Groups & subgroups" },
       { href: "/docs/wiki/projects-jobs", label: "Projects & jobs" },
+      { href: "/docs/wiki/calendar-events", label: "Calendar, events & meetings" },
       { href: "/docs/wiki/governance", label: "Governance" },
       { href: "/docs/wiki/badges-stake", label: "Badges & stake" },
-      { href: "/docs/wiki/docs-vault", label: "Docs, filesystem & vault" },
+      { href: "/docs/wiki/docs-vault", label: "Docs & the tag vault" },
     ],
   },
   {
     title: "Identity & extension",
     links: [
       { href: "/docs/wiki/federation-identity", label: "Federation & SSO identity" },
-      { href: "/docs/wiki/autobot-agents", label: "Autobot & agents" },
+      { href: "/docs/wiki/autobot-agents", label: "Assistant, personas & MCP" },
       { href: "/docs/wiki/builder", label: "Builder" },
-      { href: "/docs/wiki/locales-regions", label: "Locales & regions" },
     ],
   },
   {
-    title: "Account & operator",
+    title: "Not on this instance",
     links: [
-      { href: "/docs/wiki/account-settings", label: "Account & settings" },
+      { href: "/docs/wiki/explore-search", label: "Explore & search" },
+      { href: "/docs/wiki/locales-regions", label: "Locales & regions" },
       { href: "/docs/wiki/admin", label: "Admin" },
     ],
   },

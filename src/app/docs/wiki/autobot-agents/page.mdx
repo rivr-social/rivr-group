@@ -1,39 +1,129 @@
-# Autobot & agents
+# Assistant, personas & MCP
+
+<Callout type="warning" title="There is no Autobot here">
+  This instance has **no <code>/autobot</code> pages and no
+  <code>/api/autobot</code> routes**. An earlier version of this page described
+  an autobot chat surface, voice/TTS, and a GPU lane — none of that exists in
+  this codebase. What this instance actually ships is: a **group assistant**, a
+  **persona** system, and an **MCP endpoint**.
+</Callout>
 
 ## What it is
 
-The agent control plane: personas (delegated actor identities under a controller
-account), connectors to external services, and the MCP surface that lets agents
-act on a user's behalf with full provenance logging. Autobot includes a chat
-surface and voice/TTS/transcription capabilities.
+Three related things:
 
-## Where it lives
+- **The group assistant** — an AI helper that knows this group. It appears as a
+  floating chat bubble for group admins and can be opened to non-admins if the
+  admin turns on public chat. It answers from the group's knowledge sources and
+  can perform a set of group actions.
+- **Personas** — additional actor identities. *Your* personas hang off your
+  account and let you act as someone/something else. *Group* personas are child
+  agents of the group; one of them can be designated to "be" the assistant, so
+  replies come from a named character rather than the bare group agent.
+- **MCP** — a JSON-RPC endpoint (`/api/mcp`) that lets an external agent (Claude,
+  a script, another RIVR instance) call this instance's tools with your
+  authority, with every call written to a provenance log.
 
-- `/autobot`, `/autobot/chat` — autobot UI · `src/app/(main)/autobot/**`
-- Autobot API · `src/app/api/autobot/**` (chat, status, settings, provenance, tts, voice, gpu)
-- MCP endpoint · `src/app/api/mcp/route.ts`; tool defs `src/lib/federation/mcp-tools/**`
+## How to configure the group assistant
 
-## Every interaction
+1. Sign in as a group admin and open **`/groups/<id>/settings`**.
+2. Choose the **Assistant** tab.
+3. Pick a **Model** from the allowed list — this is the model that powers
+   replies.
+4. Write the **soul prompt**: how the assistant should sound, its personality,
+   tone, and any group-specific guidance. (Max 8,000 characters.)
+5. Under **Knowledge sources**, tick the sources the assistant may draw context
+   from, and/or paste knowledge-graph scope ids (one per line).
+6. Optionally paste an **Anthropic key** — either an API key (`sk-ant-api…`) or a
+   Claude Code OAuth token (`sk-ant-oat…`). It is encrypted before storage and
+   **never** returned to the browser; the UI only ever shows whether one is set.
+   Leave it blank to use the instance's own credential.
+7. Toggle **Public chat** if non-admin visitors should be able to talk to the
+   assistant.
+8. Save.
 
-- **Chat with autobot** — `/autobot/chat`; may be augmented with knowledge-graph
-  context (`rivr.kg.chat`).
-- **Manage personas** — list/create personas under the controller; switch the
-  active persona (`rivr.personas.list`).
-- **Connect a service** — add connectors (opaque, encrypted credentials) used by
-  builder DNS-write, feeds/bridges, and agent tools.
-- **Act-as over MCP** — an MCP bearer token authorizes tool calls as a specific
-  actor/controller; every call is written to the provenance log.
-- **Review provenance** — `rivr.audit.recent` / `/api/autobot/provenance`.
+> 📸 **Screenshot:** _the Assistant settings tab — model select, soul prompt, knowledge sources, key field, public-chat toggle_ — capture at `/groups/<id>/settings` (open the **Assistant** tab as an admin). _(placeholder — remove when image added)_
 
-## Permissions / gating
+## How to talk to the assistant
 
-- MCP tools are gated by `enabledFor` (session and/or token); most allow token
-  auth, a few are session-only (e.g. account data export).
-- Personas are owned by their controller; tools resolve ownership against the
-  controller, not the persona.
-- Destructive/irreversible actions (e.g. account deletion) are withheld from MCP.
+1. On any page, look for the **robot bubble** in the lower corner. It is
+   rendered app-wide from the root layout, but only for the primary group's
+   owner/admins.
+2. Click it to open the chat panel.
+3. Ask your question. The panel POSTs to
+   `/api/groups/<id>/assistant/chat`, which resolves **your** tier server-side —
+   an admin gets full knowledge-graph scope plus the assistant's act tools; a
+   non-admin (when public chat is on) gets the narrower read scope. The bubble
+   only decides whether to *show* the launcher; it is not the gate.
 
-## Cross-links
+> 📸 **Screenshot:** _the assistant bubble open with a reply in the panel_ — capture on the group page (click the robot bubble, ask a question). _(placeholder — remove when image added)_
 
-- API: [MCP tools](/docs/api) · [Auth models](/docs/api/auth) · [`/api/autobot` REST](/docs/api) · [`/api/mcp` REST](/docs/api) · [`/api/kg` REST](/docs/api)
-- Wiki: [Federation & SSO identity](/docs/wiki/federation-identity) · [Docs, filesystem & vault](/docs/wiki/docs-vault) · [Builder](/docs/wiki/builder)
+## How to designate a group persona as the assistant
+
+1. Go to **`/groups/<id>/settings` → Personas**.
+2. Create a persona (name, description, avatar) — it becomes a child agent of the
+   group.
+3. Toggle **autobot enabled** on the persona you want the assistant to speak as.
+   This is **mutually exclusive** — enabling one clears the others.
+4. Assistant settings then attach to that persona (the "direct agent"), so the
+   soul prompt and model follow the character rather than the group agent.
+
+> 📸 **Screenshot:** _the Personas settings tab listing group personas with the assistant toggle_ — capture at `/groups/<id>/settings` (open the **Personas** tab). _(placeholder — remove when image added)_
+
+## How to manage your own personas
+
+1. Go to **`/profile`** and open the **Personas** tab.
+2. Create, edit, delete, or **switch** the active persona. Switching changes who
+   you author as.
+
+## How to connect an MCP client
+
+1. Point your MCP client at **`https://spirit-of-the-front-range.rivr.social/api/mcp`**
+   (substitute this instance's host).
+2. `GET` that URL returns the server metadata; tools are called over JSON-RPC
+   `POST`.
+3. Authenticate either with a **session** (browser cookie) or an **MCP bearer
+   token**. Each tool declares which modes it accepts via `enabledFor`.
+4. Call `rivr.instance.get_context` first — it tells you which instance you are
+   talking to and what it hosts.
+
+## Good to know
+
+- **Available tool families** on this instance (names are stable):
+  `rivr.instance.get_context`, `rivr.places.list`, `rivr.personas.list`,
+  `rivr.kg.list_docs` / `push_doc` / `query` / `chat`, `rivr.posts.create`,
+  `rivr.audit.recent`, plus the group action set —
+  `rivr.groups.create|update|delete|invite_member`,
+  `rivr.projects.create|list|update`, `rivr.jobs.create|update|claim|mark_done|record_contribution`,
+  `rivr.tasks.create|claim|update_status`, `rivr.events.create|list|update|delete`,
+  `rivr.offerings.create`, `rivr.documents.create`,
+  `rivr.payments.backfill_connect_accounts`.
+- Personas are owned by their **controller**. Tools resolve ownership against
+  the controller, never the persona — so a persona cannot escalate.
+- Every MCP call is written to the **provenance log**, readable via
+  `rivr.audit.recent`.
+- Unimplemented or unknown federation mutation types are rejected **explicitly**
+  (501 `MUTATION_NOT_IMPLEMENTED` / 400 `UNKNOWN_MUTATION_TYPE`) — they never
+  silently claim success.
+- The assistant's builder counterpart can edit and publish site files; see
+  [Builder](/docs/wiki/builder).
+
+## Under the hood
+
+| Piece | Where |
+| --- | --- |
+| Assistant config actions | `src/app/actions/group-assistant-config.ts` (admin-gated via `isGroupAdmin`) |
+| Assistant settings UI | `src/components/group-assistant-config-card.tsx` (Assistant tab) |
+| Assistant launcher + chat | `src/components/group-assistant-bubble.tsx`, `group-assistant-chat.tsx`; mounted in `src/app/layout.tsx` |
+| Assistant chat API | `src/app/api/groups/[id]/assistant/chat/route.ts` |
+| Direct-agent resolution | `src/lib/group-assistant.ts`, `src/lib/group-assistant-settings.ts` |
+| Key encryption | `src/lib/crypto/secret-box.ts` (`assistantApiKeyEnc`, never returned to the client) |
+| Group personas | `src/app/actions/group-personas.ts`, `src/components/group-persona-manager.tsx` |
+| Account personas | `src/components/persona-manager.tsx` (profile Personas tab) |
+| MCP endpoint | `src/app/api/mcp/route.ts` → `src/lib/federation/mcp-server.ts` |
+| Tool definitions | `src/lib/federation/mcp-tools/index.ts`, `src/lib/federation/group-action-tools.ts` |
+| Provenance | `src/lib/federation/mcp-provenance.ts` |
+
+Related: [Federation & SSO identity](/docs/wiki/federation-identity) ·
+[Builder](/docs/wiki/builder) · [Docs & vault](/docs/wiki/docs-vault) ·
+[Groups & subgroups](/docs/wiki/groups)

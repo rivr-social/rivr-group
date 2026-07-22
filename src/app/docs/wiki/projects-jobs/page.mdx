@@ -2,109 +2,192 @@
 
 ## What it is
 
-The work-graph surfaces. Projects are coordination containers (with treasury,
-deliverables, and lead/QA roles); jobs/tasks are claimable units of work, often
-gated on badges. Together they model who is doing what and how contribution is
-rewarded — work is **claimed finished** by the worker and **attested** by the
-project's QA before stake moves.
+The work graph. A **project** is a coordination container with its own wallet,
+team, calendar, discussion, and stock. A **job** is a claimable unit of work
+inside (or outside) a project; jobs hold **tasks**.
 
-## Where it lives
+The core discipline: the worker **claims** work finished, and someone with
+authority **attests** it. Points and cash only move at attestation — never on a
+bare check-off.
 
-- `/projects` — project directory · `src/app/(main)/projects/page.tsx`
-- `/projects/[id]` — project detail · `src/app/(main)/projects/[id]/page.tsx`
-- `/jobs` — job board · `src/app/jobs/page.tsx`
-- `/jobs/[id]` — job detail · `src/app/jobs/[id]/page.tsx` (`JobDetailClient`)
+<Callout type="note" title="Where these live">
+  There is no <code>/projects</code> directory page. Projects are reached from
+  the group's <strong>Jobs</strong> tab and open at
+  <code>/projects/[id]</code>. Jobs have their own board at <code>/jobs</code>
+  and detail at <code>/jobs/[id]</code>.
+</Callout>
 
-## Every interaction
+## How to claim and finish a job
 
-- **Browse / open** a project or job.
-- **Create / update a project** — name, description, treasury, deliverables, and
-  a timeframe set through the unified date-time range selector (start/end in one
-  popover) on both the create form and the owner edit dialog.
-- **Set project roles** — a **Lead** (coordinator, default attester) and a
-  **QA** on the project's Team tab. QA defaults to the lead; it can be any
-  member of the group, its parent, a sibling, or a child subgroup — or an
-  **affiliated group agent**, whose admins then hold the QA authority.
-- **Claim a job** — take a job. Claiming always requires **membership in the
-  owning group** (group/parent-group admins also qualify and bypass badge
-  gates); jobs may additionally be badge-gated, admin-gated, slot-capped, or
-  approval-gated.
-- **Check off a task ("claim finished")** — the worker's check-off records a
-  claim and lands the task in *awaiting attestation*; if a work timer is
-  running, the task links to that work period automatically. Workers can
-  propose a point value with their claim.
-- **Attest a task** — the QA, lead, or a group admin attests (or rejects) the
-  claim from the point chip on the task; **stake points land at attestation**
-  (the attester can adjust the awarded value). A verifier's own check-off
-  attests in one click.
-- **Claim a job complete** — an assignee claims the whole job finished, rating
-  the work's **skillfulness required** and **difficulty** (1–100 sliders);
-  the reviewing admin settles it by marking the job done.
-- **Split job points (Points tab)** — task-less jobs carry a job-level point
-  pool. Each assignee sets sliders over the *other* assignees; the pool splits
-  by the average of everyone's ratings (equal split until anyone rates) when
-  the job is marked done.
-- **Add tasks to a claimed job** — active claimants (not just admins) can add
-  tasks to their claimed job; their proposed points still settle through
-  attestation.
-- **Time bounds** — jobs and tasks carry a work window (start → deadline) and
-  a **max-hours budget**; hourly pay never exceeds the job's budget (overage
-  stays visible on the timesheet but doesn't pay).
-- **Job payouts draw from the project's treasury** — when a cash job belongs
-  to a project, marking it done pays assignees from that **project's wallet**
-  (the budget the group approved into it). An underfunded project parks the
-  payout as *pending funds* — top up the project wallet and re-run mark-done;
-  it never silently dips into the group treasury. Jobs outside any project
-  pay from the owning group's treasury as before.
-- **Volunteer pay (Thanks voucher)** — a job's fourth pay method, alongside
-  fixed cash, hourly cash, and points. **No cash moves.** When a volunteer
-  job is marked done, each volunteer receives — post-hoc — a **Thanks voucher**
-  the group *claims from them*: valued from the **skillfulness × difficulty**
-  ratings they set when claiming the job complete (× hours worked, the same
-  formula the voucher builder uses). The group redeems it by paying that many
-  **Thanks tokens from its own holdings** (oldest first) to the volunteer — the
-  group spends Thanks it actually has, none are minted. If the group holds too
-  few Thanks the payout parks as *pending* (all-or-nothing per volunteer);
-  top up the group's Thanks and re-run mark-done. Idempotent — re-running
-  transfers nothing twice.
-- **Complete a project (settles the treasury)** — a group admin or the
-  project lead completes the project; expenses are already first-class
-  debits, so the remaining project-wallet balance — the **net** — sweeps
-  into the **owning group's treasury** automatically (idempotent; run an
-  explicit net distribution first when the net should split beyond the
-  owning group). Every subgroup has a treasury to receive it. Also available
-  as the `rivr.projects.complete` and `rivr.treasury.ensure_subgroup_wallets`
-  MCP tools.
-- **Update job status** — progress a job through its lifecycle.
-- **Link to project** — jobs and events can link to a parent project.
-- **Calendar** — your completed work periods and claimed jobs' windows appear
-  on `/calendar` (filterable); group admins additionally see a per-member
-  "Work periods" kind on the group calendar.
+1. Open **`/jobs`** (or the group's Jobs tab) and pick a job. Each card shows a
+   pay badge: **Fixed $X**, **Hourly $X/hr**, **N points**, or **Volunteer
+   (Thanks)**.
+2. Click **Claim** — on the card or on `/jobs/<id>`.
+   Claiming **always requires active membership in the owning group** (group and
+   ancestor admins also qualify, and they bypass badge gates). A job may
+   additionally be badge-gated, admin-gated, slot-capped, or approval-gated —
+   approval-gated claims become pending requests.
+3. Do the work. If there is a work timer, start it — your check-off links to the
+   running work period automatically.
+4. **Check off a task.** This records a *claim*, not a completion: the task lands
+   in **awaiting attestation**. You can propose a point value with your claim.
+5. When the whole job is finished, **claim the job complete** and rate the work's
+   **skillfulness required** and **difficulty** (1–100 sliders).
 
-## Stock (Inventory + Needs)
+> 📸 **Screenshot:** _a job detail page with the Tasks tab and a task awaiting attestation_ — capture at `/jobs/<id>` (as an assignee, after checking off a task). _(placeholder — remove when image added)_
 
-Orgs, projects, and jobs each have a **Stock** tab with two subtabs:
+## How to attest work (QA / lead / admin)
 
-- **Inventory** — the material resources (REA `resource`/`asset` items) associated
-  with that object (an org's owned assets, a project's `projectId`-linked stock, a
-  job's `jobId`-linked stock).
-- **Needs** — a simple editable shopping list on the object (name, quantity, note,
-  fulfilled). Each item can be **posted as a request** (a `Request` post) so the
-  community can help fill it. Editing needs and posting requests is limited to
-  the object's owner/admins.
+1. Open the job. Attesters see extra controls the worker does not.
+2. On a task's point chip, **attest** or **reject** the claim. Attesting awards
+   the points — the attester may adjust the value. Rejecting or reopening
+   deactivates both the claim and its points.
+   *A verifier's own check-off attests in one click.*
+3. Use the admin-only **Review** tab for the full picture: per-assignee recorded
+   work periods across both timer rails, their claim ratings and proposed
+   points, their attested points, and the **discrepancies** — claimed with zero
+   tracked time, time over `maxHours`, proposed ≠ attested, claim awaiting
+   attestation.
+4. Correct a recorded period's duration if needed (admins on any row; a worker
+   on their own). A running period can't be edited. Hourly pay re-reads the
+   corrected value at the next mark-done.
+5. **Mark done.** This completes the job, records a contribution edge per
+   assignee, and records the cash owed.
+6. **Release payment** — a separate, deliberate step that fires the real Stripe
+   transfer. See [Wallet & treasury](/docs/wiki/wallet-treasury#how-the-group-gets-money-to-a-worker-release-payment).
 
-## Permissions / gating
+Who can attest: the project's **QA**, its **lead**, or a **group-or-ancestor
+admin** (`canAttestWork`). QA defaults to the lead and can be any member of the
+group, its parent, a sibling, or a child subgroup — or an **affiliated group
+agent**, whose admins then hold the authority. Set both on the project's **Team**
+tab.
 
-- **Guests** can view public projects/jobs.
-- **Claiming requires group membership** (or group/ancestor admin authority);
-  subscriptions gate group and subgroup *memberships*, never jobs.
-- Job claims can additionally be **badge-gated** (admins bypass), admin-gated,
-  slot-capped, or approval-gated.
-- **Attestation** (task completed/rejected) is QA / lead / group-admin scoped.
-- Project/treasury management is owner/admin-scoped; group-calendar work
-  periods are admin-only.
+## How pay works
 
-## Cross-links
+| Pay kind | What happens at mark-done |
+| --- | --- |
+| **Fixed cash** | equal split among assignees, deterministic remainder |
+| **Hourly cash** | rate × stopped work segments, **clamped to the job's `maxHours`** (overage stays visible on the timesheet but doesn't pay) |
+| **Points** | task-less jobs carry a job-level point pool, split by peer allocation (below) |
+| **Volunteer (Thanks)** | **no cash moves** — see below |
 
-- API/MCP: [Work Graph tools](/docs/api) (21 tools — projects, jobs, deliverables) · [Grants tools](/docs/api)
-- Wiki: [Groups & subgroups](/docs/wiki/groups) · [Badges & stake](/docs/wiki/badges-stake) · [Wallet & treasury](/docs/wiki/wallet-treasury) · [Governance](/docs/wiki/governance) · [Calendar & events](/docs/wiki/calendar-events)
+**Where the cash comes from:** a job with a `projectId` debits **that project's
+wallet** — the budget the group approved into it. Underfunded → the payout parks
+as `pending_funds`; top up and re-run mark-done. It never silently dips into the
+group treasury. Jobs outside any project pay from the group settlement wallet.
+Every payout is idempotent per assignee — re-running retries only what's pending.
+
+**Splitting job points (Points tab).** Each assignee sets sliders over the
+*other* assignees; the pool splits by the normalized average of everyone's
+ratings using largest-remainder, and stays an equal split until anyone rates.
+
+**Volunteer pay.** Marking a volunteer job done gives each volunteer a post-hoc
+**Thanks voucher**, valued from the skillfulness × difficulty ratings × hours
+worked (the same formula the voucher builder uses). The **group redeems it by
+transferring Thanks tokens it actually holds** (oldest first) — none are minted.
+If the group's pool is short, the payout parks as `volunteer_pending_thanks`
+(all-or-nothing per volunteer); top up and re-run. Marking a volunteer job done
+opens a dialog with skillfulness/difficulty sliders and a live Thanks-per-hour
+preview; those ratings value every volunteer's voucher, each still scaled by
+their own hours.
+
+## How to run a project
+
+1. Create it from **`/create` → Project**, or from the group's Jobs tab.
+2. Set name, description, budget, deliverables, and a timeframe (start/end in one
+   date-time range popover).
+3. Open **`/projects/<id>`**. Its tabs: **About**, **Jobs**, **Calendar**,
+   **Discussion**, **Team**, **Treasury**, **Stock**.
+4. On **Team**, set the **Lead** (coordinator, default attester) and the **QA**.
+5. On **Treasury**, use **Move money** to fund the project wallet from the group
+   treasury — expenses require a funded wallet. Return unspent balance the same
+   way. **Completed projects refuse new funding.**
+6. Add jobs from the Jobs tab (Add-job dialog). Active claimants — not just
+   admins — can add tasks to a job they've claimed; their proposed points still
+   settle through attestation.
+7. **Complete the project.** A group admin or the project lead completes it;
+   expenses are already first-class debits, so the remaining wallet balance — the
+   **net** — sweeps into the owning group's treasury automatically (idempotent).
+   Run an explicit net distribution *first* if the net should split beyond the
+   owning group. Every subgroup has a treasury to receive it.
+
+> 📸 **Screenshot:** _a project page with the Jobs tab expanded, showing pay badges and Claim buttons_ — capture at `/projects/<id>`. _(placeholder — remove when image added)_
+
+## Stock: inventory and needs lists
+
+Orgs, projects, and jobs each get a **Stock** tab with two sub-tabs.
+
+**Inventory** — the tangible resources associated with that object: an org's
+owned assets, a project's `projectId`-linked stock, a job's `jobId`-linked stock.
+Non-tangible resource kinds (work periods, funds) are filtered out.
+
+**Needs** — no longer a single flat list. Needs live in **named lists**:
+
+1. Open Stock → **Needs**. The legacy **General** list is always there.
+2. Click **New list**, name it, and optionally **connect it to a project**.
+3. Add a need to a chosen list: name, quantity, note.
+4. Edit or remove needs inline; only the object's owner/admins can manage them.
+5. **Post as a request** — publish a need as a `Request` post so the community
+   can help fill it.
+6. Mark a need **fulfilled** → it is **materialized into Inventory**
+   server-side. Un-fulfilling leaves the inventory row in place.
+7. On an **org** parent you additionally get a read-only **rollup**: every
+   subgroup's lists, and under each, the lists of that agent's projects.
+
+> 📸 **Screenshot:** _the Needs sub-tab showing General plus two named lists, one connected to a project, with the org rollup below_ — capture at `/groups/<id>?tab=stock`. _(placeholder — remove when image added)_
+
+## Good to know
+
+- **Job and task ordering is stable** — sorted by `createdAt` then `id`, both
+  immutable. Never sort these lists by completion or `updatedAt`; the list used
+  to jump on every check-off.
+- **Time bounds.** Jobs and tasks carry a work window (start → deadline) and a
+  **max-hours budget**. Hourly pay never exceeds the budget.
+- **Editing pay type takes effect immediately** — mark-done reads `payKind`
+  fresh, so switching a job from fixed to volunteer engages the volunteer branch.
+- **Calendar.** Your completed work periods and claimed job windows appear on
+  `/calendar` (filterable). Group admins additionally see a per-member "Work
+  periods" kind on the group calendar. Projects have their own Calendar tab
+  showing their events and jobs.
+- **Discussion.** Jobs and projects both have a Discussion tab using the same
+  comment thread primitive as events.
+- **Subscriptions gate group memberships, never jobs.**
+- Guests can view public projects and jobs.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Job board | `/jobs` | `src/app/jobs/page.tsx` |
+| Job detail | `/jobs/[id]` | `src/app/jobs/[id]/page.tsx` → `job-detail.tsx` |
+| Project detail | `/projects/[id]` | `src/app/(main)/projects/[id]/page.tsx` |
+| Group jobs board | `/groups/[id]?tab=jobs` | `src/components/job-board-tab.tsx` |
+| Group stock | `/groups/[id]?tab=stock` | `src/components/stock-tab.tsx` |
+
+- **The single points writer:** `src/lib/work-completion.ts` (`attestWork`) —
+  the only place the `earn` / `task-points-earned` edge is written. Never write
+  it elsewhere.
+- **Completion + pay:** `src/app/actions/job-completion.ts`
+  (`markJobDoneAction`); peer split `src/lib/peer-allocation.ts`; voucher value
+  `src/lib/voucher-valuation.ts`.
+- **QA review:** `src/app/actions/job-qa.ts`
+  (`getJobQaReviewData`, `editWorkPeriodDurationAction`, `setAttestedPointsAction`);
+  UI `src/components/job-qa-review-tab.tsx`.
+- **Admin panel + Release payment:** `src/components/job-admin-panel.tsx`.
+- **Job management:** `src/app/actions/job-management.ts`
+  (`addJobToProjectAction`, `addTaskToJobAction`).
+- **Pay labels:** `src/lib/job-pay.ts` (`describeJobPay`).
+- **Stock:** `src/lib/stock.ts` (`GENERAL_NEEDS_LIST_ID`,
+  `isStockInventoryResource`, `NON_STOCK_RESOURCE_KINDS`) and
+  `src/app/actions/stock.ts` (`getStockNeedListsAction`,
+  `createStockNeedListAction`, `updateStockNeedListAction`,
+  `removeStockNeedListAction`, `addStockNeedAction`,
+  `toggleStockNeedFulfilledAction`, `postStockNeedRequestAction`,
+  `fetchOrgNeedsRollupAction`).
+- **MCP:** `rivr.projects.*`, `rivr.jobs.*`, `rivr.tasks.*` in
+  `src/lib/federation/group-action-tools.ts`.
+
+Related: [Badges & stake](/docs/wiki/badges-stake) ·
+[Wallet & treasury](/docs/wiki/wallet-treasury) ·
+[Groups & subgroups](/docs/wiki/groups) ·
+[Calendar & events](/docs/wiki/calendar-events)

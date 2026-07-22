@@ -1,65 +1,202 @@
-# Marketplace & gifts
+# Marketplace, listings & fees
 
 ## What it is
 
-The marketplace lets agents list offerings and buyers purchase them via Stripe,
-with receipts and confirmation flows. Alongside paid exchange, RIVR supports
-gift/mutual-aid economy through thanks-tokens. Membership products are also sold
-here.
+The place this group buys and sells. A **listing** is an offering — a service,
+product, skill, voucher, resource, ticket, bounty, trip, or gift — posted by a
+member or by the group itself. Buyers pay by card (Stripe), by internal Rivr
+wallet balance, or in USDC on Base. Bookable listings hand the buyer a time slot
+before checkout. Membership dues are sold from separate product pages.
 
-## Where it lives
+The seller **always nets the price they typed.** Every fee is added on top and
+paid by the buyer.
 
-- `/marketplace`, `/marketplace/[id]` — listings · `src/app/(main)/marketplace/**`
-- `/marketplace/[id]/purchase`, `/confirmed`, `/receipt/[receiptId]` — checkout flow
-- `/products/membership-*` — membership products · `src/app/products/**`
-- `/profile/purchases` — purchase history · `src/app/(main)/profile/purchases/page.tsx`
+## How to list something
 
-## Every interaction
+1. Open the group's **Marketplace** tab (`/groups/<id>?tab=marketplace`) and
+   click **Add Listing** — or open a listing you own and edit it. You must be a
+   group member.
+2. Choose the **offering type**: service, product, skill, resource, voucher,
+   venue, ticket, bounty, trip, data, or gift. The form changes to match —
+   services ask for an hourly rate, products for a unit price and condition,
+   bounties for a reward and criteria, and so on.
+3. Fill in name, description, images, category, and price. `service` and
+   `product` are priced by default; `gift` is free by default.
+4. Pick the **currency** and any additional accepted currencies.
+5. If the listing should be **bookable**, scroll to **Bookable Schedule** and add
+   week-view blocks you can be booked for. Types that support it: service,
+   resource, voucher, product, skill.
+6. Choose who the offering is targeted at and whether to post it to the group's
+   feed.
+7. Save. The listing appears in the group's Marketplace tab and at
+   `/marketplace`.
 
-- **Browse / open a listing.**
-- **Save a listing** — add to saved listings.
-- **Purchase** — Stripe checkout. The buyer identity is derived **server-side**
-  from the session (never from client input); on success a receipt resource is
-  created and shown at `/marketplace/[id]/confirmed` → `/receipt/[receiptId]`.
-- **Create an offering/listing** — sellers (with the seller membership) create
-  listings.
-- **Send thanks tokens** — gift one or more thanks tokens to another agent,
-  optionally attaching a message or the resource being thanked.
+> 📸 **Screenshot:** _the offering composer with the Bookable Schedule week grid expanded_ — capture at `/groups/<id>?tab=marketplace` (click **Add Listing**, choose "Service", scroll to Bookable Schedule). _(placeholder — remove when image added)_
+
+## How to buy
+
+1. Open `/marketplace`, or the group's Marketplace tab, and click a listing to
+   reach **`/marketplace/<id>`**.
+2. Click through to **`/marketplace/<id>/purchase`**.
+3. If the listing is bookable, **pick a date and a time slot**. Checkout stays
+   disabled until a valid slot is selected; a listing with no declared blocks
+   skips the picker entirely.
+4. Set quantity / hours if the type asks for them.
+5. Choose a payment method — **card**, your **Rivr wallet** balance, or **crypto
+   (USDC)** where the listing and instance support it. The page preselects the
+   best available option.
+6. Check the breakdown: item price, **Platform fee**, **Total**.
+7. Pay. On success you land on **`/marketplace/<id>/confirmed`**, and your
+   receipt is at **`/marketplace/<id>/receipt/<receiptId>`**.
+
+> 📸 **Screenshot:** _the purchase page fee breakdown (item price, Platform fee, Total) with the bookable slot picker above it_ — capture at `/marketplace/<id>/purchase` (open a bookable, priced listing). _(placeholder — remove when image added)_
+
+8. Your purchase history lives at **`/profile/purchases`** and in
+   **`/profile?tab=wallet&walletTab=purchases`**.
+
+## The fee model (one model, fleet-wide)
+
+Since 2026-07-20 there is exactly **one** RIVR margin across every transaction
+type — marketplace, offerings, tickets, dues, crypto. The old scattered models
+(a flat 5%, a 4% + 40¢ "payment leg", a baked-in 9.05% "sales tax") are retired.
+
+Starting from the **seller's price**, the buyer total is built as:
+
+| Component | Amount | Constant |
+| --- | --- | --- |
+| RIVR margin, percent | **3.3%** of seller price | `MARKETPLACE_FEE_BPS = 330` |
+| RIVR margin, flat | **$1.49** | `PLATFORM_MARGIN_FIXED_CENTS = 149` |
+| Connect-account overhead | **5% of the cart, capped at $2.00** | `CONNECT_OVERHEAD_RECOVERY_BPS = 500`, cap `200¢` |
+| Org commission | 0 unless the owning org sets `commissionBps` | — |
+| Referral splits | 0 unless configured server-side | — |
+| Cross-border surcharge | see below | — |
+| **Then** the whole thing is grossed up | so that after Stripe's **2.9% + 30¢** the platform still nets the above | `STRIPE_CARD_PERCENT_BPS = 290`, `STRIPE_CARD_FIXED_CENTS = 30` |
+
+Consequences worth knowing:
+
+- The **seller receives the listed price**, exactly. `sellerNetCents === sellerPriceCents`.
+- The Connect overhead used to be a flat $2 on every purchase, which made a $6
+  item carry a ~$2.86 buyer fee (~48%). It now scales: a $6 cart recovers 30¢,
+  and **every cart ≥ $40 prices exactly as before**.
+- Membership **dues** run the same gross-up but with **zero flat Connect
+  overhead** — dues carry no per-purchase account cost. See
+  [Wallet & treasury](/docs/wiki/wallet-treasury#membership-dues-pricing).
+
+## Cross-border corridor pricing
+
+When the seller's payout account is not in the platform's country, Stripe
+charges extra to get the money there. RIVR prices that **into the buyer total**
+so it never comes out of the seller's face value or RIVR's margin. Three
+corridors are modelled (`SellerPayoutCorridor`):
+
+| Corridor | Who | Buyer-funded surcharge |
+| --- | --- | --- |
+| `domestic` | seller in the platform country | none |
+| `connect_cross_border` | seller in another Stripe **Connect region** | **0.25% + 25¢** (`CROSS_BORDER_TRANSFER_BPS = 25`, `CROSS_BORDER_PAYOUT_FLAT_CENTS = 25`) |
+| `global_payouts` | seller outside the Connect regions (e.g. Costa Rica) | **$1.50 + 1.25% volume + 1% FX** (`GLOBAL_PAYOUT_FLAT_CENTS = 150`, `GLOBAL_PAYOUT_VOLUME_BPS = 125`, `GLOBAL_PAYOUT_FX_BPS = 100`) |
+
+<Callout type="warning" title="Scoping — corridors are resolved on GLOBAL, not here">
+  <p>
+    <strong>GLOBAL holds every Connect account and makes every real payout.</strong>
+    The seller's country picker and the payout-setup flow live in the global repo.
+    This instance ships the shared corridor-aware fee engine so pricing is
+    consistent fleet-wide, but its own checkout call sites currently pass no
+    corridor — they compute at the <code>domestic</code> default. Do not expect a
+    country picker on this instance; there isn't one.
+  </p>
+  <p>
+    The <code>global_payouts</code> constants are <strong>provisional</strong> per
+    Stripe's pricing trail and are to be re-confirmed when that integration lands.
+  </p>
+</Callout>
+
+## Sales tax (Stripe Tax)
+
+RIVR is a Colorado Public Benefit LCA acting as a **marketplace facilitator**.
+Sales tax is **destination-based**: Stripe Tax computes it from the *buyer's*
+address at checkout. This replaced a flat 9.05% Boulder rate that was previously
+charged to every buyer and kept as revenue.
+
+- **Tax-exclusive.** The listed amount is what the seller receives; tax is added
+  **on top**, never carved out of the seller's net (`RIVR_TAX_BEHAVIOR = 'exclusive'`).
+- **Product tax codes.** Default is **General – Services** (`txcd_20030000`).
+  A listing explicitly typed `product` that isn't a ticket in product clothing
+  gets **General – Tangible Goods** (`txcd_99999999`). Offerings, services,
+  vouchers, tickets, and legacy listings stay on services — the conservative
+  failure mode is under-collection, never a wrong charge.
+- **Inert until registered.** `automatic_tax` collects tax **only** in
+  jurisdictions where RIVR has an active registration in the Stripe dashboard
+  (Settings → Tax → Registrations). Until those exist, **nobody is charged tax.**
+- **Checkout-Session paths only.** Marketplace checkout, tickets, and group/org
+  dues run through Checkout Sessions and carry the tax config. The
+  destination-charge paths (offerings and bookings, which use raw
+  PaymentIntents) need the Tax Calculation API instead — not yet wired.
+- On the Connect rail the charge routes to a connected account, so RIVR-the-
+  facilitator is set as the party **liable** to collect and remit
+  (`liability.type = 'self'`).
 
 ## Paying with crypto (USDC)
 
-Listings priced in USDC can be paid straight from a browser wallet on the Base
-network. Where this instance has the settlement splitter enabled, it is **one
-signature**: you approve a single payment authorization (no gas, no
-transaction to submit) and the platform settles the seller's share and the
-platform fee atomically in one on-chain transaction — neither leg can happen
-without the other. The instance's network is operator-configured; the current
-posture is **Base Sepolia (testnet)**, matching the Stripe test-keys posture.
+Listings priced in USDC can be paid straight from a browser wallet on **Base**.
+Where the settlement splitter is enabled, it is **one signature**: you approve a
+single payment authorization (no gas, nothing to submit) and the platform
+settles the seller's share and the platform fee atomically in one on-chain
+transaction — neither leg can happen without the other. The network is
+operator-configured per instance; the current posture is **Base Sepolia
+(testnet)**, matching the Stripe test-keys posture.
 
-## Permissions / gating
+## Membership products
 
-- **Public** listing browse (`/marketplace`, `/products` are public prefixes).
-- **Buying** requires a session; **selling** typically requires the seller
-  membership tier.
-- Checkout buyer metadata is set server-side (security-hardened, issue #101).
+`/products/membership-basic`, `-host`, `-organizer`, `-seller`, `-steward` are
+marketing + checkout pages for the cooperative membership tiers, each with a
+monthly/yearly toggle. `/subscribe` is different — on this sovereign instance it
+sells **this group's own** dues plans, never the cooperative tiers.
 
-## Booking & availability
+## Good to know
 
-Bookable offerings (services, skills, vouchers, products, resources) declare a
-**Bookable Schedule** at creation — week-view blocks the seller can be booked
-for ("Add booking times" in the composer). Buyers then pick one block in the
-purchase flow before checkout; the chosen slot is consumed on booking. A
-listing with no declared blocks stays non-bookable and checkout skips the
-picker.
+- **Buyer identity is derived server-side** from the session (or a federated
+  remote-viewer cookie) — never from client input. A signed-in federated member
+  is recognized; they used to be wrongly shown the "sign in to complete your
+  purchase" modal.
+- **Federated mirror listings redirect.** Checkout for a listing that is
+  sovereign-homed elsewhere is bounced to the source instance, so price,
+  inventory, fee config, and Stripe settlement all run where the listing lives.
+- Order numbers on the confirmation page are the last 8 alphanumerics of the
+  per-purchase order/session id.
+- Marketplace products and event tickets settle through the **platform
+  capital-accounts** model (internal ledger credit to the group plus a separate
+  Connect payout rail), not a destination charge. Offerings and group
+  subscriptions *do* use real destination charges.
+- Listing browse is public; buying requires a session.
 
-## Fees on small purchases
+## Under the hood
 
-The buyer-paid gross-up covers Stripe processing, the platform margin, and a
-Connect-account overhead that now SCALES with the cart (capped at $2), so
-micro-purchases no longer carry a ~50% fee; carts ≥ $40 price exactly as
-before. The seller always nets the listed price.
+| Surface | Route | Source |
+| --- | --- | --- |
+| Listing index | `/marketplace` | `src/app/marketplace/page.tsx` |
+| Listing detail | `/marketplace/[id]` | `src/app/marketplace/[id]/page.tsx` |
+| Purchase | `/marketplace/[id]/purchase` | `src/app/marketplace/[id]/purchase/{page,purchase-client}.tsx` |
+| Confirmation | `/marketplace/[id]/confirmed` | `src/app/marketplace/[id]/confirmed/page.tsx` |
+| Receipt | `/marketplace/[id]/receipt/[receiptId]` | `src/app/marketplace/[id]/receipt/[receiptId]/page.tsx` |
+| Purchase history | `/profile/purchases` | `src/app/(main)/profile/purchases/page.tsx` |
+| Membership products | `/products/membership-*` | `src/app/products/**` |
 
-## Cross-links
+- **Fee engine:** `src/lib/checkout-fees.ts` (`calculateCheckoutFees`,
+  `estimateStripeProcessingFeeCents`, `grossUpForStripeCents`); constants in
+  `src/lib/wallet-constants.ts`. Legacy breakdown shape for offerings/tickets:
+  `src/lib/fees.ts`. Dues pricing: `src/lib/group-subscription-pricing.ts`.
+- **Tax:** `src/lib/stripe-tax.ts` (`buildAutomaticTax`,
+  `taxCodeForListingMetadata`, `RIVR_TAX_BEHAVIOR`).
+- **Checkout:** `src/app/api/stripe/marketplace-checkout/route.ts`;
+  wallet-paid purchases in `src/app/actions/wallet/purchases.ts`.
+- **Booking:** `src/components/booking-week-scheduler.tsx`; schedule persists as
+  `metadata.serviceDetails.bookingDates`.
+- **Crypto:** `src/lib/crypto-splitter.ts` (`splitterCheckoutEnabled`), env
+  `CRYPTO_NETWORK` / `CRYPTO_PLATFORM_WALLET`.
+- **Mirror redirect:** `src/lib/federation/sovereign-resource-redirect.ts`.
+- Fee tests: `src/lib/__tests__/checkout-fees.test.ts`;
+  tax tests: `src/lib/__tests__/stripe-tax.test.ts`.
 
-- API/MCP: [Offerings tools](/docs/api) · [Mutual Economy tools](/docs/api) (thanks, points) · [`rivr.thanks.send`](/docs/api) · [`/api/stripe` REST](/docs/api) · [`/api/billing` REST](/docs/api)
-- Wiki: [Wallet & treasury](/docs/wiki/wallet-treasury) · [Account & settings](/docs/wiki/account-settings)
+Related: [Wallet & treasury](/docs/wiki/wallet-treasury) ·
+[Groups & subgroups](/docs/wiki/groups) ·
+[Account & settings](/docs/wiki/account-settings)

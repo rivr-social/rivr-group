@@ -2,88 +2,263 @@
 
 ## What it is
 
-The value surfaces: a wallet with balances and transaction history, a points
-balance (contribution rewards), subscription/membership management, and purchase
-history. Some flows involve EVM wallet integration; thanks-tokens carry a
-demurrage (decay) mechanic.
+Two different pots of money.
 
-## Where it lives
+**Your wallet** is personal: an internal Rivr balance (a platform IOU — instant
+and fee-free between Rivr accounts), your purchase and sales history, and — if
+you sell — your Stripe Connect balance and the controls to turn Rivr credit into
+real dollars in your bank.
 
-- `/wallet` — wallet · `src/app/(main)/wallet/page.tsx`
-- `/points` — points balance · `src/app/(main)/points/page.tsx`
-- `/subscribe` — memberships · `src/app/(main)/subscribe/page.tsx`
-- `/profile/purchases` — purchase history · `src/app/(main)/profile/purchases/page.tsx`
+**The group treasury** is collective: the group's balance, named funds, project
+wallets, subgroup wallets, budgets, and reports. Money enters from dues, sales,
+and grants; it flows out to projects, subgroups, and worker payouts.
 
-## Every interaction
+<Callout type="warning" title="There is no /wallet or /points page">
+  Your wallet lives at <code>/profile?tab=wallet</code>. The group treasury lives
+  on the group page's <strong>Treasury</strong> tab. Earlier docs listed
+  <code>/wallet</code> and <code>/points</code> routes — they do not exist in this
+  codebase.
+</Callout>
 
-- **Allocations flow chart** — the Treasury tab's Allocations sub-tab draws
-  how funds flow among the entities: project wallets through expenses into
-  the group treasury (completion sweeps), treasury into funds and member
-  payouts, subgroup treasuries cascading upward, and the configured
-  net-allocation splits. Solid arrows are realized transfers; dashed are
-  configured/pending flows. Visible to group members.
+## How to check your wallet
 
-- **Fund a project / return residue** — the project page's Treasury tab has a
-  Move money control (treasury managers): apportion group treasury → project
-  wallet to give a project a spendable budget (expenses require a funded
-  wallet), or return unspent balance to the treasury. Completed projects
-  refuse new funding — their residue belongs to the completion sweep. Project
-  wallets also fill from sales of project-bound offerings.
-- **View balances & transactions** — wallet balance and transaction history.
-- **View points** — points balance sums active `earn` ledger rows credited to
-  the actor; balance equals lifetime (no spend surface yet).
-- **Manage subscription** — subscribe/upgrade membership tiers; open the Stripe
-  billing portal.
-- **Send thanks tokens** — gift thanks (see [Marketplace & gifts](/docs/wiki/marketplace)); balances decay via demurrage.
-- **Deposit / transfer** — wallet deposit/transfer flows where enabled. _TODO(verify): confirm live EVM deposit/transfer affordances._
+1. Go to **`/profile`** and open the **Wallet** tab
+   (`/profile?tab=wallet`).
+2. Pick a sub-tab — the URL tracks it as `&walletTab=…`:
+   - **Transactions** (`walletTab=transactions`) — your internal Rivr balance and
+     its ledger.
+   - **Purchases** (`walletTab=purchases`) — what you have bought.
+   - **Sales** (`walletTab=sales`) — what you have sold, plus the seller
+     payment controls below.
 
-## Permissions / gating
+> 📸 **Screenshot:** _the wallet tab's three sub-tabs with the transactions ledger showing_ — capture at `/profile?tab=wallet&walletTab=transactions`. _(placeholder — remove when image added)_
 
-- All wallet/points/subscription surfaces require a session.
-- Billing actions derive the subject from the session; membership entitlements
-  gate certain create/sell capabilities (seller/host/organizer/steward tiers).
+## How to get paid out (seller cash-out)
+
+Everything here is on the **Sales** sub-tab.
+
+1. Go to **`/profile?tab=wallet&walletTab=sales`**.
+2. If you have no payment account yet, click **Set up payments** — you are sent
+   to Stripe onboarding and returned to this same sub-tab. If onboarding is
+   partial, the card shows **Charges / Payouts / Details** badges and a
+   **Complete Setup** button.
+3. Once onboarded you see your **Connect balance** (available and pending), your
+   Rivr wallet balance, and — where enabled — your treasury and linked-bank
+   balances. **Link bank** appears when Financial Connections is available.
+4. To convert internal Rivr credit into real money: type an amount in the
+   **Move Rivr wallet balance to Stripe** field and click **Move to Stripe**.
+5. To send real money to your bank, click **Bank payout (1-3 days)** or
+   **Instant payout**. These only appear when your Connect available balance is
+   above zero.
+6. **Seller Dashboard** opens your Stripe express/custom dashboard.
+
+> 📸 **Screenshot:** _the Sales sub-tab showing the Connect balance cards, the "Move to Stripe" field, and the payout buttons_ — capture at `/profile?tab=wallet&walletTab=sales` (as an onboarded seller). _(placeholder — remove when image added)_
+
+### What "Move to Stripe" actually does
+
+Your Rivr wallet is a platform IOU. Converting it means real dollars move.
+
+- The action runs as a **saga**: debit the wallet and write a `pending` ledger
+  row in one locked transaction → request the federated transfer, keyed on that
+  row's id so retries are safe → mark it `completed`.
+- Anything other than a `paid` result **refunds the wallet** and marks the row
+  `failed`. Money is never lost and never minted.
+- On this sovereign instance the real transfer is fulfilled by **GLOBAL**, the
+  single Connect authority — it resolves your globally-held connected account
+  and performs the Stripe Transfer there.
+- In Stripe test mode a **Release Test Sales To Wallet** button also appears.
+
+## How the group gets money to a worker ("Release payment")
+
+Paying for finished work is deliberately two steps, so nobody's card is charged
+by an accident of workflow.
+
+1. An admin marks the job **done** on `/jobs/<id>`. That records the internal
+   obligation: a contribution edge per assignee and a `transferP2P` from the
+   **project's wallet** (if the job belongs to a project) or the group
+   settlement wallet. The payout receipt is stamped **`awaiting_attestation`**.
+2. The admin then clicks **Release payment** on the job admin panel. This attests
+   the payout and asks GLOBAL to make the real Stripe transfer.
+3. The button is **idempotent and re-runnable** — re-clicking retries only the
+   payees that failed. Once every payout receipt has settled, the button becomes
+   a **Paid ✓** indicator.
+
+Each attempt records one of six verdicts on the receipt:
+
+| Verdict | Meaning |
+| --- | --- |
+| `awaiting_attestation` | job marked done; an admin still has to release |
+| `paid` | global settled a real Stripe transfer to the payee's connected account |
+| `disabled` | `STRIPE_CONNECT_PAYOUTS_ENABLED` is off |
+| `needs_onboarding` | payee has a global connected account that can't receive transfers yet |
+| `insufficient_funds` | global's platform balance can't cover the transfer |
+| `error` | global rejected the request or was unreachable (message captured) |
+
+**How the two instances talk:** this instance POSTs to global's
+`/api/federation/connect/payout` with peer auth (`x-peer-slug` +
+`x-peer-secret`, falling back to `x-node-admin-key`), 15-second timeout,
+best-effort — it never throws, so a slow global can never break a job payout.
+**GLOBAL holds every connected account; this instance holds none.**
+
+## How to use the group treasury
+
+1. Open the group page and choose the **Treasury** tab
+   (`/groups/<id>?tab=treasury`). It is **members**-visible by default.
+2. The header cards always show **Current Balance**, **Monthly Revenue**,
+   **Monthly Expenses**, and **Net Income (this month)**.
+3. Then pick one of the **five sub-tabs**:
+
+| Sub-tab | What's in it |
+| --- | --- |
+| **Overview** | revenue streams and expense breakdown for the group |
+| **Allocations** | the flow chart of how money moves between entities (see below) |
+| **Transactions** | the consolidated treasury ledger — recent activity and the full list |
+| **Budget** | committed vs. spent vs. authored budget, rolled up project → subgroup → group |
+| **Reports** | financial reports (This month / Last month / YTD / All-time) with CSV + JSON export |
+
+> 📸 **Screenshot:** _the Treasury tab header cards with the five sub-tabs beneath_ — capture at `/groups/<id>?tab=treasury` (Overview selected). _(placeholder — remove when image added)_
+
+> 📸 **Screenshot:** _the Allocations flow chart showing project wallets, funds, and subgroup treasuries_ — capture at `/groups/<id>?tab=treasury` (open the **Allocations** sub-tab). _(placeholder — remove when image added)_
+
+> 📸 **Screenshot:** _the Budget roll-up card, committed vs. spent per project_ — capture at `/groups/<id>?tab=treasury` (open the **Budget** sub-tab). _(placeholder — remove when image added)_
+
+> 📸 **Screenshot:** _the Reports card with the date presets and the CSV/JSON export buttons_ — capture at `/groups/<id>?tab=treasury` (open the **Reports** sub-tab). _(placeholder — remove when image added)_
+
+### Reading the Allocations chart
+
+It draws how funds flow among entities: project wallets through expenses into
+the group treasury (completion sweeps), treasury into funds and member payouts,
+subgroup treasuries cascading upward, and the configured net-allocation splits.
+**Solid arrows are realized transfers; dashed arrows are configured or pending
+flows.**
+
+### The consolidated ledger
+
+The Transactions sub-tab resolves the group's **whole treasury tree** — main
+settlement wallet, named funds, project wallets, and subgroup wallets (recursive
+`parent_id`) — and classifies every leg as external inflow, external outflow, or
+internal move, attributing it to the wallet that moved it. Internal moves are
+net-zero, so funding a project never double-counts as revenue.
+
+- **Treasury managers** see the full tree. **Members** see only the group
+  settlement wallet's legs.
+- This replaced an older version that read the *viewer's personal* wallet and
+  therefore never showed job payouts (which debit the project wallet).
+
+## Moving money around inside the group
+
+- **Group → subgroup:** the Subgroup banking card lists each subgroup with a
+  **Fund** control. This is an internal transfer and works with **no Stripe
+  configuration at all**; it is gated on parent-group manage authority and a
+  child-of-parent check.
+- **Group/subgroup → project:** the project page's Treasury tab has a **Move
+  money** control for treasury managers — apportion treasury into the project
+  wallet to give it a spendable budget (expenses require a funded wallet), or
+  return unspent balance. **Completed projects refuse new funding** — their
+  residue belongs to the completion sweep. Project wallets also fill from sales
+  of project-bound offerings.
+- **Project → worker:** mark a job done, then Release payment (above).
+- **Named funds:** create sub-pools of the main treasury ("Operations Fund",
+  "Land Fund"), assign each subgroup to at most one fund, and move money
+  main ↔ fund. Each move is capped by `MAX_TRANSFER_CENTS`.
 
 ## Membership dues pricing
 
-This group's paid membership plans (dues) are priced with a **gross-up**: the
-member's recurring charge is the plan price plus the platform fee plus
-card-processing costs, so the group nets the full plan price it set (shown at
-Stripe Checkout before paying). Federated members — people homed on another
-RIVR instance — can pay dues, subscribe, deposit, and buy here with their
-verified identity.
+This group's paid membership plans are priced with a **gross-up**: the member's
+recurring charge is the plan price plus RIVR's margin plus card-processing cost,
+so **the group nets the full plan price it set**. The buyer sees the total at
+Stripe Checkout before paying.
+
+- Dues run with **zero flat Connect overhead** — that stays a marketplace-only
+  policy. They still carry the gross-up over Stripe's 2.9% + 30¢.
+- On the Connect rail the `application_fee_percent` is derived from the gross-up
+  (fee ÷ buyer total), so after Stripe's cut the group still nets face value.
+  A flat percentage of face value used to net RIVR **negative** on small dues.
+- An admin-configured Stripe price id is honored **only** when it already covers
+  the grossed-up total, matching currency and interval; otherwise the code falls
+  back to dynamic pricing and logs why.
+- Federated members — people homed on another RIVR instance — can pay dues,
+  subscribe, deposit, and buy here with their verified identity.
 
 ## Crypto treasury (USDC on Base)
 
-This group can hold a digital-dollar treasury in a **Safe multisig its
-officers control** — the platform never holds a key. From the Treasury tab,
-admins bind or deploy the officer Safe (2-of-N); officers approve treasury
-actions by signing **in the app** with their own wallets, and the platform
-submits execution (officers need no gas). Officers approve a per-lead spending
-**budget** once, and the lead then pays recipients within it with a single
-signature — no per-payment officer sign-off, remaining budget enforced
-on-chain. USDC marketplace sales settle to the treasury atomically. Current
-posture: Base Sepolia (testnet).
+The group can hold a digital-dollar treasury in a **Safe multisig its officers
+control** — the platform never holds a key.
 
-## Group treasury banking (flag-gated, not yet live)
+1. From the Treasury tab, an admin binds or deploys the officer Safe (2-of-N).
+2. Officers approve treasury actions by signing **in the app** with their own
+   wallets; the platform submits execution, so officers need no gas.
+3. Officers approve a per-lead spending **budget** once; the lead then pays
+   recipients within it with a single signature — no per-payment officer
+   sign-off, remaining budget enforced on-chain.
+4. USDC marketplace sales settle to the treasury atomically.
 
-Group admins will find a **Banking** area in the group Treasury tab once the
-platform's Stripe Treasury/Issuing programs are enabled. Built and shipped
-dormant; until the `STRIPE_TREASURY_ENABLED` / `STRIPE_ISSUING_ENABLED` flags
-are on, the tab explains the state instead of showing dead controls.
+Current posture: **Base Sepolia (testnet)**.
 
-- **Group payment account** — a group can hold its own Stripe Connect account
-  (set up from the Treasury tab's payments card by an admin).
+## Banking (built, dormant behind flags)
+
+Group admins will find a **Banking** area in the Treasury tab once the
+platform's Stripe Treasury/Issuing programs are approved. Until
+`STRIPE_TREASURY_ENABLED` / `STRIPE_ISSUING_ENABLED` are on, the card explains
+the state instead of showing dead controls. What is built:
+
+- **Group payment account** — the group holds its own Stripe Connect account.
 - **Per-subgroup financial accounts** — each subgroup treasury can get its own
   Stripe Treasury financial account, hosted on the parent group's payment
   account, with its own balance.
-- **Subgroup cards** — a spending-limited virtual card can be issued per
-  subgroup, funded only by that subgroup's financial account (default cap
-  $500/month; admins set the limit).
-- **Connected bank balances** — a group can link its real-world bank account
-  (Financial Connections) and see its live external balance alongside the
-  Stripe balances in the Treasury tab.
+- **Per-project and per-fund financial accounts** — the same lane for projects
+  and named funds.
+- **Spending cards** — a spending-limited virtual card per subgroup / project /
+  fund, funded only by that entity's financial account (default cap
+  **$500/month**; admins set the limit).
+- **Connected bank balances** — link a real-world bank account (Financial
+  Connections) and see the live external balance alongside the Stripe balances.
 
-## Cross-links
+## Good to know
 
-- API/MCP: [Wallet tools](/docs/api) · [Mutual Economy tools](/docs/api) · [`rivr.points.balance`](/docs/api) · [`/api/billing` REST](/docs/api) · [`/api/stripe` REST](/docs/api)
-- Wiki: [Marketplace & gifts](/docs/wiki/marketplace) · [Badges & stake](/docs/wiki/badges-stake) · [Account & settings](/docs/wiki/account-settings)
+- **Points are not money.** Stake points come from attested task work and are
+  shown on the group's **Stake** tab, not in the wallet. See
+  [Badges & stake](/docs/wiki/badges-stake).
+- **Thanks tokens** are a gift/mutual-aid instrument, transferred (never minted)
+  and subject to demurrage. Volunteer job payouts redeem Thanks the group
+  actually holds. See [Projects & jobs](/docs/wiki/projects-jobs).
+- All wallet, subscription, and treasury surfaces require a session. Billing
+  actions derive the subject from the session — never from client input.
+- Admin surfaces gate on **server-computed** authority passed as props; the
+  client user-context cannot see federated remote-viewer sessions.
+
+## Under the hood
+
+| Surface | Route | Source |
+| --- | --- | --- |
+| Personal wallet | `/profile?tab=wallet&walletTab=…` | `src/app/(main)/profile/profile-client.tsx` (`WALLET_VIEW_TABS`, `ConnectBalanceSection`) |
+| Purchase history | `/profile/purchases` | `src/app/(main)/profile/purchases/page.tsx` |
+| Group dues plans | `/subscribe` | `src/app/(main)/subscribe/page.tsx` |
+| Group treasury | `/groups/[id]?tab=treasury` | `src/components/treasury-tab.tsx` |
+
+- **Cash-out:** `resolveWalletToConnectAction`, `requestPayoutAction`,
+  `setupConnectAccountAction` in `src/app/actions/wallet/seller.ts`.
+- **Connect payout leg:** `src/lib/connect-payout.ts` — `settleConnectPayout`,
+  `ConnectPayoutStatus`, `isConnectPayoutsEnabled`
+  (`STRIPE_CONNECT_PAYOUTS_ENABLED`); target
+  `GLOBAL/api/federation/connect/payout`.
+- **Release payment UI:** `src/components/job-admin-panel.tsx`.
+- **Consolidated ledger:** `src/app/actions/wallet/treasury-ledger.ts` +
+  pure `src/lib/treasury-ledger.ts`.
+- **Budgets / reports:** `src/lib/budget-rollup.ts`,
+  `src/app/actions/wallet/project-budget.ts`,
+  `src/app/actions/wallet/financial-report.ts`;
+  UI `budget-rollup-card.tsx`, `financial-reports-card.tsx`.
+- **Funds / subgroup funding / banking:**
+  `src/app/actions/wallet/{treasury-funds,subgroup-funding,treasury-banking,project-banking}.ts`;
+  UI `treasury-funds-card.tsx`, `subgroup-banking-card.tsx`.
+- **Share classes:** `src/app/actions/wallet/share-classes.ts`,
+  `src/components/share-classes-card.tsx`.
+- **Dues pricing:** `src/lib/group-subscription-pricing.ts`,
+  `src/lib/group-subscriptions.ts`.
+- **Stripe Treasury/Issuing helpers:** `src/lib/stripe-treasury.ts`.
+
+Related: [Marketplace & fees](/docs/wiki/marketplace) ·
+[Projects & jobs](/docs/wiki/projects-jobs) ·
+[Groups & subgroups](/docs/wiki/groups) ·
+[Badges & stake](/docs/wiki/badges-stake)
