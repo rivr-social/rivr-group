@@ -55,3 +55,25 @@ export function buildAutomaticTax(opts?: {
     ...(opts?.platformLiable ? { liability: { type: 'self' as const } } : {}),
   };
 }
+
+/**
+ * Product tax code for a marketplace listing, resolved from its metadata.
+ *
+ * Tangible GOODS means an EXPLICIT `listingType: "product"` that is not an
+ * event ticket in product clothing (`productKind`/`offeringType: "ticket"`
+ * — see graph-adapters' mart reclassification). Everything else — offerings,
+ * services, vouchers, tickets, and legacy listings with no listingType —
+ * stays on the services code: the conservative failure mode is
+ * under-collection, never a wrong charge to a buyer.
+ */
+export function taxCodeForListingMetadata(
+  metadata: Record<string, unknown>,
+): string {
+  const isProduct = metadata.listingType === 'product';
+  const isTicket =
+    String(metadata.productKind ?? '').toLowerCase() === 'ticket' ||
+    String(metadata.offeringType ?? '').toLowerCase() === 'ticket';
+  return isProduct && !isTicket
+    ? STRIPE_TAX_CODE_GENERAL_GOODS
+    : STRIPE_TAX_CODE_DEFAULT;
+}

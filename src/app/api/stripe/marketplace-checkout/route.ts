@@ -28,7 +28,7 @@ import { db } from '@/db';
 import { resources, ledger, agents } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getStripe } from '@/lib/billing';
-import { buildAutomaticTax, STRIPE_TAX_CODE_DEFAULT, RIVR_TAX_BEHAVIOR } from '@/lib/stripe-tax';
+import { buildAutomaticTax, taxCodeForListingMetadata, RIVR_TAX_BEHAVIOR } from '@/lib/stripe-tax';
 import { calculateCheckoutFees } from '@/lib/checkout-fees';
 import { resolveMarketplaceFeePolicy } from '@/lib/marketplace-fees';
 import { resolvePostOfferingDeal } from '@/lib/post-offer-deals';
@@ -309,7 +309,7 @@ export async function POST(request: NextRequest) {
                 quantity * hours > 1
                   ? `${listing.name} x${quantity * hours}`
                   : listing.name,
-              tax_code: STRIPE_TAX_CODE_DEFAULT,
+              tax_code: taxCodeForListingMetadata(listingMeta),
             },
             tax_behavior: RIVR_TAX_BEHAVIOR,
             unit_amount: fees.buyerTotalCents,
