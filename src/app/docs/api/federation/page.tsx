@@ -3,8 +3,9 @@
  *
  * The hosted global app renders a GENERATED endpoint table here (from
  * `tools/docs-gen-api.ts`); this sovereign build ships the prose trust model
- * only. The live endpoint list is the `/api/federation/**` +
- * `/api/universal-manifest` + `/.well-known/**` route tree on this instance.
+ * only. The live endpoint list is the `/api/federation/**` + `/.well-known/**`
+ * route tree on this instance (there is no `/api/universal-manifest` here —
+ * the manifest is served only at `/.well-known/universal-manifest.json`).
  */
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -68,10 +69,12 @@ export default function FederationPage() {
       <p className="my-3 max-w-2xl leading-7 text-foreground/85">
         The federation surface lives under{" "}
         <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">/api/federation/**</code> (registry,
-        mutations, sync, remote-auth), the Universal Manifest at{" "}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">/api/universal-manifest</code> and{" "}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">/.well-known/universal-manifest.json</code>,
-        and discovery under <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">/.well-known/**</code>.
+        mutations, sync, remote-auth), with the Universal Manifest served at{" "}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">/.well-known/universal-manifest.json</code>{" "}
+        only — there is no{" "}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">/api/universal-manifest</code> route on this
+        instance — alongside the rest of discovery under{" "}
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">/.well-known/**</code>.
         These prefixes are auth-optional (peer signatures gate the mutating routes) per{" "}
         <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">PUBLIC_API_PREFIXES</code> in{" "}
         <code className="rounded bg-muted px-1 py-0.5 font-mono text-sm">src/lib/route-access.ts</code>.

@@ -15,8 +15,8 @@ codebase.** Any earlier wiki page claiming otherwise was inherited fiction.
 1. Use the **search bar** in the app header to look for things **within this
    group** — its members, posts, events, and listings.
 2. To search all of RIVR, use the search bar's "search everything" / "see all
-   results" action, or the bottom nav's Explore and Map buttons. Both open the
-   **global hub** in a new tab (`getGlobalUrl()` → `…/explore?q=…`), because
+   results" action, or the bottom nav's Explore and Map buttons. Both navigate
+   this tab to the **global hub** (`getGlobalUrl()` → `…/explore?q=…`), because
    there is no local results page to land on.
 3. Use the **command palette** (the launcher next to the bottom nav) to jump
    between this instance's own surfaces — Members, Documents, Governance,
@@ -37,7 +37,7 @@ codebase.** Any earlier wiki page claiming otherwise was inherited fiction.
 
 ## Under the hood
 
-- Outward links: `src/lib/global-base-url.ts` (`getGlobalUrl`), used by
+- Outward links: `src/lib/federation/global-url.ts` (`getGlobalUrl`), used by
   `src/components/bottom-nav.tsx`, `search-bar.tsx`, `search-header.tsx`.
 - Local jump targets: `src/components/CommandBar.tsx`.
 - Root-tab forwarding: `src/lib/home-tabs.ts` (`ALLOWED_HOME_TABS`,

@@ -112,10 +112,13 @@ already names the speaker.
   works.
 - Room names are **deterministic**: `evt-<eventId>`. Default cap is **100
   participants**; join tokens live 6 hours.
-- Google Calendar events are pulled in by the `gcal-pull` cron where a Google
-  Workspace connector is linked (Settings → Connectors).
+- Google Calendar events are pulled in by the `/api/cron/google-calendar-sync`
+  cron where a Google Workspace connector is linked (Settings → Connectors).
 - Events can carry a linked transcript document even outside the virtual-meeting
-  lane (`rivr.events.append_transcript`).
+  lane: `POST /api/events/[id]/transcribe` accepts an audio upload, transcribes
+  it, and appends the text to the event's transcript document. It requires a
+  session and returns 503 when transcription is not configured on the
+  deployment.
 
 ## Under the hood
 

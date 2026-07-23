@@ -90,8 +90,8 @@ gate that redirects non-admins. There are **twelve** tabs:
 
 | Tab | What you set |
 | --- | --- |
-| **Profile** | name, description, avatar/cover, social links, Mart commission (%) — and the *Upgrade to Organization* action |
-| **Memberships** | the group's paid dues plans (name, description, monthly/yearly amounts, perks, default plan) |
+| **Profile** | name, description, avatar/cover, social links, Mart commission (%) |
+| **Memberships** | the group's paid dues plans (name, description, monthly/yearly amounts, perks, default plan) — plus, on a basic group, the **Upgrade To Organization** card and its **Change Group Type To Org** button |
 | **Join Settings** | discovery (public/hidden), join type, invite link, application instructions, approval required, password challenge, require-active-subscription, application questions |
 | **Requests** | the pending join-request queue — approve or deny |
 | **Tab Visibility** | per-tab Public / Members / Admin / Hidden |
@@ -128,14 +128,21 @@ Details: [Wallet & treasury](/docs/wiki/wallet-treasury#membership-dues-pricing)
 
 ## Press, gallery and announcements
 
-The **Press** tab is the group's outward-facing media surface:
+The **Press** tab is the group's outward-facing media surface. Its sub-tab strip
+carries **five** entries for admins and **three** for everyone else:
 
-- **External sources** — the admin configures feeds (Instagram, video, article
-  sources) that are fetched and rendered as a press feed.
+- **Featured** — internal press and gallery highlights drawn from the group's
+  own content.
+- **Articles** — public posts imported from the configured Substack source.
 - **Media** — the group's own gallery, built from its posts and its image/video,
   listing, and event resources. It has a **Grid / List** toggle; grid is a dense,
   gapless, square wall with a lightbox.
-- **Newsletter** — compose and send to members.
+- **Newsletter** *(admins only)* — compose and send to members.
+- **Canvas** *(admins only)* — a design editor scoped to this group's media.
+
+Above the strip, admins also get a **Press Sources** card for the external feeds:
+Substack and YouTube import their latest public items, and an Instagram handle is
+linked as a live profile source.
 
 **Announcements** (Settings → Announcements) is the email broadcast to members.
 Both the broadcast and the newsletter **honor each member's email opt-out** and
@@ -161,8 +168,9 @@ Full walkthrough: [Projects & jobs → Stock](/docs/wiki/projects-jobs#stock-inv
 ## Good to know
 
 - **Admin authority cascades.** An admin of a parent org administers its
-  subgroups (`isGroupAdminCascade`). Parent admins bypass badge gates on job
-  claims.
+  subgroups — `isGroupAdmin` in `src/app/actions/group-admin.ts` (the group page
+  imports it under the local alias `isGroupAdminCascade`). Parent admins bypass
+  badge gates on job claims.
 - **The group is an agent.** It can own resources, author posts, hold a wallet,
   and be a persona's parent.
 - **Hidden groups are actually hidden** — the discovery setting is honored.

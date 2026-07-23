@@ -41,8 +41,9 @@ Running this instance is split three ways:
   that is pinned by the mailer so a peer admin cannot redirect authentication
   mail. The UI says so inline.
 - Group admin authority **cascades**: an admin of a parent org administers its
-  subgroups (`isGroupAdminCascade`). There is no separate "platform admin" role
-  with a UI here.
+  subgroups — `isGroupAdmin` in `src/app/actions/group-admin.ts` (the group page
+  imports it under the local alias `isGroupAdminCascade`). There is no separate
+  "platform admin" role with a UI here.
 - The page-level redirect is a convenience, not the security boundary — each API
   route re-checks authority server-side.
 

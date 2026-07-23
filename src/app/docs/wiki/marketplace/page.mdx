@@ -161,8 +161,8 @@ sells **this group's own** dues plans, never the cooperative tiers.
 - **Federated mirror listings redirect.** Checkout for a listing that is
   sovereign-homed elsewhere is bounced to the source instance, so price,
   inventory, fee config, and Stripe settlement all run where the listing lives.
-- Order numbers on the confirmation page are the last 8 alphanumerics of the
-  per-purchase order/session id.
+- Order numbers on the confirmation page read `ORD-XXXXXXXX`: the last 8
+  alphanumerics of the per-purchase order/session id, uppercased.
 - Marketplace products and event tickets settle through the **platform
   capital-accounts** model (internal ledger credit to the group plus a separate
   Connect payout rail), not a destination charge. Offerings and group
@@ -182,7 +182,9 @@ sells **this group's own** dues plans, never the cooperative tiers.
 | Membership products | `/products/membership-*` | `src/app/products/**` |
 
 - **Fee engine:** `src/lib/checkout-fees.ts` (`calculateCheckoutFees`,
-  `estimateStripeProcessingFeeCents`, `grossUpForStripeCents`); constants in
+  `estimateStripeProcessingFeeCents`, `grossUpForStripeCents`); the margin,
+  Connect-overhead, Stripe-card, and corridor constants are declared in that
+  same file, while `MARKETPLACE_FEE_BPS` and the transfer caps live in
   `src/lib/wallet-constants.ts`. Legacy breakdown shape for offerings/tickets:
   `src/lib/fees.ts`. Dues pricing: `src/lib/group-subscription-pricing.ts`.
 - **Tax:** `src/lib/stripe-tax.ts` (`buildAutomaticTax`,

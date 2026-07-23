@@ -105,7 +105,9 @@ elsewhere, this instance resolves their home and projects the membership to it.
 - **No-op when the member is homed locally.**
 - **Fire-and-forget by design** — the membership write must never fail because
   the member's home is unreachable. It never throws.
-- A **backfill script** reconciles projections that were missed.
+- **Emitted at write time only.** This instance ships no backfill script; the
+  one that reconciles historical, never-projected memberships lives in the
+  global repo (`src/scripts/backfill-membership-projections.ts` there).
 
 Emitted from every writer that can create or activate a membership:
 
@@ -182,8 +184,8 @@ The complete `src/app/api/federation` route set:
   `canonicalMutationType`) — manifest-shared, byte-identical across repos.
 - **Receiver:** `src/app/api/federation/mutations/route.ts`.
 - **Back-projection:** `src/lib/federation/membership-projection.ts`
-  (`projectMembershipToMemberHome`); backfill
-  `src/scripts/backfill-membership-projections.ts`.
+  (`projectMembershipToMemberHome`), called from the five writers listed above.
+  The backfill script is global-repo only (not present in `src/scripts/` here).
 - **Session resolution:** `src/lib/server-auth.ts`,
   `src/lib/federation-remote-session.ts`.
 - **Visitor scope:** `src/lib/federation/visitor-scope.ts`.
