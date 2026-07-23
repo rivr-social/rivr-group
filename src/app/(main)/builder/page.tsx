@@ -25,8 +25,10 @@
  * them out of their own builder in a login loop.
  *
  * Sovereign adaptation: unlike global, this group instance has no A7 DNS
- * connector lane, so custom-domain binding is not offered here — a published
- * site is served under the instance's OWN host at `/groups/<ownerId>/site`.
+ * connector lane (auto-DNS), but custom-domain binding IS offered via the
+ * manual-DNS lane (CustomDomainPanel + /api/builder/domain — verify→bind);
+ * a published site is also served under the instance's OWN host at
+ * `/groups/<ownerId>/site`.
  *
  * @module builder/page
  */

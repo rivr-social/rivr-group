@@ -28,6 +28,7 @@ export const ALLOWED_HOME_TABS: ReadonlySet<string> = new Set([
   "badges",
   "stake",
   "press",
+  "stock",
   "treasury",
 ])
 

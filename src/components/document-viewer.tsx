@@ -223,9 +223,6 @@ export function DocumentViewer({ document, onBack, onDocumentUpdated, members = 
               Edit
             </Button>
           )}
-          <Button variant="outline" size="sm">
-            Share
-          </Button>
         </div>
       </div>
 
