@@ -47,7 +47,9 @@ Members, Docs.
 `gallery` is a real registry key with its own visibility setting, but it is
 **not a top-level tab** — the media gallery renders inside **Press → Media**.
 
-> 📸 **Screenshot:** _the full org tab strip on the group page_ — capture at `/groups/<id>` (signed in as a member). _(placeholder — remove when image added)_
+![A group page seen by a member: the cover, name and member count above the full tab strip — About, Feed, Events, Groups, Members, Docs, Jobs, Mart, Governance, Badges, Stake, Press, Treasury, Stock — with About open](/wiki/groups/group-10-org-tab-strip.png)
+
+_The full org tab strip on the group page, signed in as a member._
 
 <Callout type="tip" title="Why org tabs default to members, not admins">
   Until 2026-07-19 the org-grade tabs defaulted to <strong>admin</strong>, which
@@ -103,7 +105,11 @@ gate that redirects non-admins. There are **twelve** tabs:
 | **Connectors** | Google Workspace OAuth (calendar sync, group SMTP) plus the 13-provider connector catalog |
 | **Map Marker** | the group's place — search or enter lat/lng — plus an optional GLB 3D marker model |
 
-> 📸 **Screenshot:** _the group settings tab strip showing all twelve tabs_ — capture at `/groups/<id>/settings` (signed in as an admin). _(placeholder — remove when image added)_
+![The group settings page as an admin: a horizontally scrolling tab strip (Join Settings, Requests, Tab Visibility, Chat, Assistant, Personas, Site, Announcements) above the Profile form with cover image, name, description, location and tags](/wiki/groups/group-11-group-settings-twelve-tabs.png)
+
+_`/groups/<id>/settings` with the **Profile** tab open. The tab strip scrolls
+horizontally — the shot is mid-scroll, so the entries before Join Settings and
+after Announcements are off-screen._
 
 There is also a standalone page at **`/groups/<id>/settings/connections`** —
 a server-rendered Connectors surface that resolves the group, verifies admin
@@ -149,7 +155,11 @@ Both the broadcast and the newsletter **honor each member's email opt-out** and
 append a non-tracking unsubscribe/preferences footer to the outbound message
 only (the stored body is untouched).
 
-> 📸 **Screenshot:** _the Press tab with the media gallery in grid layout_ — capture at `/groups/<id>?tab=press`. _(placeholder — remove when image added)_
+![The Press tab as an admin: a Press Sources card with Substack URL, YouTube channel and Instagram handle fields above the Featured / Articles / Media / Newsletter / Canvas sub-tab strip](/wiki/groups/group-12-press-tab.png)
+
+_The Press tab — the admin-only **Press Sources** card above the sub-tab strip.
+This group has no internal press or gallery content yet, so **Featured** is
+empty._
 
 ## Stock: inventory and needs lists
 
@@ -163,7 +173,11 @@ materializes it into Inventory server-side.
 
 Full walkthrough: [Projects & jobs → Stock](/docs/wiki/projects-jobs#stock-inventory-and-needs-lists).
 
-> 📸 **Screenshot:** _the Stock tab's Needs sub-tab with several named lists, one connected to a project_ — capture at `/groups/<id>?tab=stock`. _(placeholder — remove when image added)_
+![The Stock tab's Needs sub-tab: an add-item row with Item, Quantity and a List picker set to General, a note field, Add and New list buttons, and the General list below](/wiki/groups/group-13-stock-needs-lists.png)
+
+_The Stock tab's **Needs** sub-tab. The **List** picker chooses which named list
+an item lands in; **New list** creates another. This group only has the legacy
+**General** list so far._
 
 ## Good to know
 
