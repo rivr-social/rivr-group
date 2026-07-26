@@ -140,17 +140,14 @@ export function TreasuryFlowChart({ groupId }: { groupId: string }) {
   }
   const memberBox: Box = { x: COL_X.right, y: ry, label: "Member payouts", sub: fmt(data.toMembersCents), tone: "member" }
   ry += NODE_H + GAP_Y
-  const allocBoxes: Box[] = data.allocations.slice(0, 5).map((a) => {
-    const box: Box = {
-      x: COL_X.right,
-      y: ry,
-      label: a.label,
-      sub: `${(a.bps / 100).toFixed(1)}% of net`,
-      tone: "alloc",
-    }
-    ry += NODE_H + GAP_Y
-    return box
-  })
+  const allocationStartY = ry
+  const allocBoxes: Box[] = data.allocations.slice(0, 5).map((a, index) => ({
+    x: COL_X.right,
+    y: allocationStartY + index * (NODE_H + GAP_Y),
+    label: a.label,
+    sub: `${(a.bps / 100).toFixed(1)}% of net`,
+    tone: "alloc",
+  }))
 
   const subgroupStartY = Math.max(
     treasuryBox.y + NODE_H + GAP_Y * 2,

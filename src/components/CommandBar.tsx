@@ -640,7 +640,7 @@ export function CommandBar({
           placeholder={placeholder}
         />
         <CommandList>
-          <CommandEmpty>No matching command. Press Enter on "Run" to execute freeform.</CommandEmpty>
+          <CommandEmpty>No matching command. Press Enter on &quot;Run&quot; to execute freeform.</CommandEmpty>
 
           {input.trim().length > 0 ? (
             <>
@@ -654,7 +654,7 @@ export function CommandBar({
                 >
                   <span className="mr-2 font-mono text-xs text-muted-foreground">$</span>
                   <div className="flex flex-col">
-                    <span>Run "{input.trim()}"</span>
+                    <span>Run &quot;{input.trim()}&quot;</span>
                     <span className="text-xs text-muted-foreground">
                       Execute as a natural-language command.
                     </span>

@@ -295,9 +295,7 @@ describe("POST /api/admin/smtp-config", () => {
     setAdminSession();
     // First select is the admin gate, second is the "existing?" check,
     // third is the re-read after insert. We have to queue rows in order.
-    let call = 0;
     dbController.selectRows = [{ metadata: { siteRole: "admin" } }];
-    const origRows = dbController.selectRows;
     // Override the select mock to vary per call.
     // We do it by swapping selectRows between invocations via a Proxy-ish
     // approach: we re-assign before each select the handler triggers.
@@ -311,8 +309,6 @@ describe("POST /api/admin/smtp-config", () => {
     // already returned admin row for the gate; the rest of this test is
     // about happy path flow not the exact branch. Assert at least one
     // insert OR update happened.
-    void call;
-    void origRows;
     const res = await POST(jsonReq("POST", goodBody));
     expect(res.status).toBe(200);
     const wrote =

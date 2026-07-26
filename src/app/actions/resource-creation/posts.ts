@@ -534,7 +534,7 @@ export async function createPostCommerceResource(input: {
     };
   }
 
-  let linkedOfferingId = input.linkedOfferingId ?? null;
+  const linkedOfferingId = input.linkedOfferingId ?? null;
   let linkedOfferingMeta: Record<string, unknown> | null = null;
   const validatedOfferingItems: Array<{
     resourceId: string;

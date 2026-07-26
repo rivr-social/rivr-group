@@ -11,6 +11,22 @@ import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from "@/lib/wallet-constants";
 
 const STRIPE_CARD_PERCENT_BPS = 290;
 const STRIPE_CARD_FIXED_CENTS = 30;
+/**
+ * International-card buffer (fee-audit #2b/#3). Stripe charges MORE on
+ * cross-border cards (~+1.5% cross-border + ~+1% currency conversion) than the
+ * 2.9%+30¢ domestic rate, and the card's origin isn't known at checkout. Applied
+ * ONLY to the ZERO-MARGIN gross-up (`grossUpForStripeCents`, e.g. the wallet
+ * deposit) — the one path that actually goes NEGATIVE on an int'l card. The
+ * margin-bearing marketplace paths (`calculateCheckoutFees`) already profit on
+ * int'l cards (the 3.3%+$1.49 margin absorbs it), so they are deliberately NOT
+ * buffered — doing so would reprice every domestic buyer and break the
+ * "carts ≥ $40 price exactly as before" invariant. Fully covering the int'l
+ * fee on the margin paths (to protect margin, not prevent loss) is a separate
+ * PRICING decision for Cameron. Covers cross-border + FX worst case.
+ */
+const STRIPE_INTERNATIONAL_SURCHARGE_BPS = 250;
+/** Effective card percent for the zero-margin gross-up — domestic + int'l buffer. */
+const STRIPE_EFFECTIVE_PERCENT_BPS = STRIPE_CARD_PERCENT_BPS + STRIPE_INTERNATIONAL_SURCHARGE_BPS;
 /** Flat RIVR margin component ($1.49), on top of the % margin — see calculateCheckoutFees. */
 export const PLATFORM_MARGIN_FIXED_CENTS = 149;
 const STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS = 200;
@@ -113,8 +129,10 @@ export function estimateStripeProcessingFeeCents(chargedTotalCents: number): num
  */
 export function grossUpForStripeCents(netCents: number): number {
   if (!Number.isInteger(netCents) || netCents <= 0) return 0;
+  // Effective rate (domestic + int'l buffer) so a zero-margin gross-up (e.g. the
+  // wallet deposit) can never go negative on an international card (fee-audit #3/#2b).
   return Math.ceil(
-    (netCents + STRIPE_CARD_FIXED_CENTS) / (1 - STRIPE_CARD_PERCENT_BPS / BPS_DIVISOR),
+    (netCents + STRIPE_CARD_FIXED_CENTS) / (1 - STRIPE_EFFECTIVE_PERCENT_BPS / BPS_DIVISOR),
   );
 }
 

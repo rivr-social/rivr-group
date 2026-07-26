@@ -84,7 +84,7 @@ export function GroupSubscribePlans({
       }
 
       if (data.url) {
-        window.location.href = data.url;
+        window.location.assign(data.url);
         return;
       }
 

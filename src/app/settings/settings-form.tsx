@@ -15,6 +15,7 @@ import { setupConnectAccountAction, getConnectBalanceAction, getConnectStatusAct
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PayoutCountryDialog } from "@/components/payout-country-dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
@@ -1808,6 +1809,7 @@ function SellerAccountSection() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [setupLoading, setSetupLoading] = useState(false);
+  const [payoutCountryOpen, setPayoutCountryOpen] = useState(false);
   const [status, setStatus] = useState<{
     hasAccount: boolean;
     chargesEnabled: boolean;
@@ -1852,10 +1854,10 @@ function SellerAccountSection() {
     loadStatus();
   }, [loadStatus]);
 
-  async function handleSetup() {
+  async function handleSetup(country?: string) {
     setSetupLoading(true);
     try {
-      const result = await setupConnectAccountAction();
+      const result = await setupConnectAccountAction(undefined, undefined, country);
       if (result.success && result.url) {
         window.location.href = result.url;
       } else {
@@ -1908,7 +1910,11 @@ function SellerAccountSection() {
               <StatusRow label="Payouts enabled" done={status.payoutsEnabled} />
             </div>
           )}
-          <Button onClick={handleSetup} disabled={setupLoading} className="w-full">
+          <Button
+            onClick={() => status?.hasAccount ? void handleSetup() : setPayoutCountryOpen(true)}
+            disabled={setupLoading}
+            className="w-full"
+          >
             {setupLoading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -1920,6 +1926,12 @@ function SellerAccountSection() {
               "Set Up Stripe USD Wallet"
             )}
           </Button>
+          <PayoutCountryDialog
+            open={payoutCountryOpen}
+            onOpenChange={setPayoutCountryOpen}
+            onConfirm={(country) => void handleSetup(country)}
+            disabled={setupLoading}
+          />
         </CardContent>
       </Card>
     );
@@ -1981,7 +1993,7 @@ function SellerAccountSection() {
         )}
 
         {!isFullyActive && (
-          <Button onClick={handleSetup} disabled={setupLoading} variant="secondary" className="w-full">
+          <Button onClick={() => void handleSetup()} disabled={setupLoading} variant="secondary" className="w-full">
             {setupLoading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />

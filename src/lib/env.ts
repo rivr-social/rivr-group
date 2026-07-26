@@ -207,6 +207,53 @@ export function getAllEnv(): EnvConfig {
   };
 }
 
+export type StripeRuntimeMode = 'disabled' | 'test' | 'live';
+
+export function validateStripeConfiguration(input?: {
+  secretKey?: string;
+  publishableKey?: string;
+  legacyPublishableKey?: string;
+  liveReady?: string;
+}): StripeRuntimeMode {
+  const secretKey = input ? input.secretKey : readEnvWithSecret('STRIPE_SECRET_KEY');
+  const publicKey = input ? input.publishableKey : process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+  const legacyPublicKey = input ? input.legacyPublishableKey : readEnvWithSecret('STRIPE_PUBLISHABLE_KEY');
+  const liveReady = input ? input.liveReady : process.env.STRIPE_LIVE_READY;
+
+  if (publicKey && legacyPublicKey && publicKey !== legacyPublicKey) {
+    throw new Error('Stripe publishable key variables do not match');
+  }
+
+  const publishableKey = publicKey || legacyPublicKey;
+  if (!secretKey && !publishableKey) return 'disabled';
+  if (!secretKey || !publishableKey) {
+    throw new Error('Stripe configuration requires both secret and publishable keys');
+  }
+
+  const secretMode = secretKey.startsWith('sk_test_')
+    ? 'test'
+    : secretKey.startsWith('sk_live_')
+      ? 'live'
+      : null;
+  const publishableMode = publishableKey.startsWith('pk_test_')
+    ? 'test'
+    : publishableKey.startsWith('pk_live_')
+      ? 'live'
+      : null;
+
+  if (!secretMode || !publishableMode) {
+    throw new Error('Stripe keys must use recognized sk_test/sk_live and pk_test/pk_live prefixes');
+  }
+  if (secretMode !== publishableMode) {
+    throw new Error('Stripe secret and publishable keys must use the same test/live mode');
+  }
+  if (secretMode === 'live' && liveReady !== 'true') {
+    throw new Error('Live Stripe keys require STRIPE_LIVE_READY=true');
+  }
+
+  return secretMode;
+}
+
 /**
  * Validates that all required environment variables are set.
  * Throws on any missing required variable in production.
@@ -237,6 +284,8 @@ export function validateEnv(): void {
         `Missing required environment variables in production: ${missingRequired.join(', ')}`
       );
     }
+
+    validateStripeConfiguration();
 
     const missingOptional: string[] = [];
     for (const key of OPTIONAL_IN_PRODUCTION) {

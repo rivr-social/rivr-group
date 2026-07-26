@@ -155,11 +155,16 @@ describe("matrix-admin", () => {
   });
 
   describe("createDirectMessageRoom", () => {
-    it("creates a DM room and returns room ID", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ room_id: "!newroom:test.local" }),
-      });
+    it("creates a DM room as the inviter via the client-server API", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ access_token: "syt_inviter_token" }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ room_id: "!newroom:test.local" }),
+        });
 
       const result = await createDirectMessageRoom({
         inviterUserId: "@alice:test.local",
@@ -167,16 +172,12 @@ describe("matrix-admin", () => {
       });
 
       expect(result.roomId).toBe("!newroom:test.local");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
 
-      const [url, opts] = mockFetch.mock.calls[0];
-      expect(url).toContain("/_synapse/admin/v1/rooms");
-      expect(opts.method).toBe("POST");
-      expect(JSON.parse(opts.body)).toEqual({
-        creator: "@alice:test.local",
-        invite: ["@bob:test.local"],
-        is_direct: true,
-        preset: "trusted_private_chat",
-      });
+      const [createUrl, createOpts] = mockFetch.mock.calls[1];
+      expect(createUrl).toContain("/_matrix/client/v3/createRoom");
+      expect(createOpts.headers.Authorization).toBe("Bearer syt_inviter_token");
+      expect(JSON.parse(createOpts.body).invite).toEqual(["@bob:test.local"]);
     });
   });
 });

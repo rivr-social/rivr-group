@@ -177,7 +177,7 @@ export async function federatedLoginAction(
     await forwardSetCookieToCurrentResponse(setCookieHeader);
   }
 
-  let summary: {
+  const summary: {
     homeBaseUrl?: string;
     globalIssuerBaseUrl?: string;
   } = {};

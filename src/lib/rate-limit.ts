@@ -15,6 +15,7 @@
  */
 
 import Redis from "ioredis";
+import { readFileSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
 // Tier-based rate limit configuration
@@ -64,8 +65,7 @@ function getRedisUrl(): string | undefined {
   if (process.env.REDIS_URL) return process.env.REDIS_URL;
   if (process.env.REDIS_URL_FILE) {
     try {
-      const { readFileSync } = require("fs");
-      return (readFileSync(process.env.REDIS_URL_FILE, "utf-8") as string).trim();
+      return readFileSync(process.env.REDIS_URL_FILE, "utf-8").trim();
     } catch {
       return undefined;
     }

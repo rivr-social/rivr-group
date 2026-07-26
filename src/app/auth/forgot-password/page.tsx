@@ -60,7 +60,7 @@ export default function ForgotPasswordPage() {
               <div className="flex items-start gap-2 rounded-md bg-green-500/10 p-3">
                 <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
                 <p className="text-sm text-green-600">
-                  If an account exists for {email}, you'll receive a password reset email shortly.
+                  If an account exists for {email}, you&apos;ll receive a password reset email shortly.
                 </p>
               </div>
             ) : (

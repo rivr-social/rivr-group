@@ -50,6 +50,8 @@ vi.mock("@/lib/wallet", () => ({
 import { auth } from "@/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import { getConnectBalance, createPayout } from "@/lib/stripe-connect";
+
+const PAYOUT_REQUEST_ID = "123e4567-e89b-42d3-a456-426614174000";
 import {
   setupConnectAccountAction,
   getConnectStatusAction,
@@ -177,7 +179,7 @@ describe("seller actions", () => {
       withTestTransaction(async () => {
         vi.mocked(auth).mockResolvedValue(mockUnauthenticated());
 
-        const result = await requestPayoutAction(5000);
+        const result = await requestPayoutAction(5000, "standard", undefined, PAYOUT_REQUEST_ID);
 
         expect(result.success).toBe(false);
         expect(result.error).toContain("logged in");
@@ -188,7 +190,7 @@ describe("seller actions", () => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
 
-        const result = await requestPayoutAction(0);
+        const result = await requestPayoutAction(0, "standard", undefined, PAYOUT_REQUEST_ID);
 
         expect(result.success).toBe(false);
         expect(result.error).toContain("positive integer");
@@ -200,7 +202,7 @@ describe("seller actions", () => {
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
         vi.mocked(rateLimit).mockResolvedValueOnce({ success: false, remaining: 0, resetMs: 60000 });
 
-        const result = await requestPayoutAction(5000);
+        const result = await requestPayoutAction(5000, "standard", undefined, PAYOUT_REQUEST_ID);
 
         expect(result.success).toBe(false);
         expect(result.error).toContain("Rate limit");
@@ -215,7 +217,7 @@ describe("seller actions", () => {
           pendingCents: 0,
         });
 
-        const result = await requestPayoutAction(5000);
+        const result = await requestPayoutAction(5000, "standard", undefined, PAYOUT_REQUEST_ID);
 
         expect(result.success).toBe(false);
         expect(result.error).toContain("Insufficient");
@@ -226,11 +228,14 @@ describe("seller actions", () => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
 
-        const result = await requestPayoutAction(3000);
+        const result = await requestPayoutAction(3000, "standard", undefined, PAYOUT_REQUEST_ID);
 
         expect(result.success).toBe(true);
         expect(result.payoutId).toBe("po_test_123");
-        expect(createPayout).toHaveBeenCalledWith("acct_test_123", 3000, "standard");
+        expect(createPayout).toHaveBeenCalledWith(
+          "acct_test_123", 3000, "standard",
+          expect.objectContaining({ idempotencyKey: `connect-bank-payout:${PAYOUT_REQUEST_ID}` }),
+        );
       }));
 
     it("passes instant speed to createPayout", () =>
@@ -238,10 +243,13 @@ describe("seller actions", () => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
 
-        const result = await requestPayoutAction(2000, "instant");
+        const result = await requestPayoutAction(2000, "instant", undefined, PAYOUT_REQUEST_ID);
 
         expect(result.success).toBe(true);
-        expect(createPayout).toHaveBeenCalledWith("acct_test_123", 2000, "instant");
+        expect(createPayout).toHaveBeenCalledWith(
+          "acct_test_123", 2000, "instant",
+          expect.objectContaining({ idempotencyKey: `connect-bank-payout:${PAYOUT_REQUEST_ID}` }),
+        );
       }));
   });
 });

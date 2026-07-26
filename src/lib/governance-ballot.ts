@@ -267,7 +267,7 @@ export function instantRunoffWinner(
   /** P3: per-ballot weights aligned with `ballots` (defaults to 1 each). */
   weights?: number[],
 ): string | undefined {
-  let remaining = new Set(optionIds);
+  const remaining = new Set(optionIds);
   const active: Array<{ ranking: string[]; weight: number }> = [];
   ballots.forEach((b, i) => {
     const ranking = b.filter((id) => optionIds.includes(id));

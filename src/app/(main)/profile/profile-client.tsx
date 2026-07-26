@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PayoutCountryDialog } from "@/components/payout-country-dialog";
 import Image from "next/image";
 import Link from "next/link";
 import { CanonicalLink } from "@/components/canonical-link";
@@ -124,6 +125,7 @@ function ConnectBalanceSection() {
   const [moveLoading, setMoveLoading] = useState(false);
   const [releaseLoading, setReleaseLoading] = useState(false);
   const [setupLoading, setSetupLoading] = useState(false);
+  const [payoutCountryOpen, setPayoutCountryOpen] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -156,9 +158,11 @@ function ConnectBalanceSection() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleSetupSeller = async () => {
+  const handleSetupSeller = () => setPayoutCountryOpen(true);
+
+  const runSellerSetup = async (country: string) => {
     setSetupLoading(true);
-    const result = await setupConnectAccountAction(undefined, "/profile?tab=wallet&walletTab=sales");
+    const result = await setupConnectAccountAction(undefined, "/profile?tab=wallet&walletTab=sales", country);
     setSetupLoading(false);
     if (result.success && result.url) {
       window.location.assign(result.url);
@@ -206,6 +210,12 @@ function ConnectBalanceSection() {
           <Button disabled={setupLoading} onClick={handleSetupSeller}>
             {setupLoading ? "Setting up..." : "Set Up Payout Account"}
           </Button>
+          <PayoutCountryDialog
+            open={payoutCountryOpen}
+            onOpenChange={setPayoutCountryOpen}
+            onConfirm={runSellerSetup}
+            disabled={setupLoading}
+          />
         </CardContent>
       </Card>
     );
@@ -245,7 +255,12 @@ function ConnectBalanceSection() {
   const handlePayout = async (speed: "standard" | "instant") => {
     if (!connectBalance || connectBalance.availableCents <= 0) return;
     setPayoutLoading(true);
-    const result = await requestPayoutAction(connectBalance.availableCents, speed);
+    const result = await requestPayoutAction(
+      connectBalance.availableCents,
+      speed,
+      undefined,
+      crypto.randomUUID(),
+    );
     setPayoutLoading(false);
     if (result.success) {
       toast({ title: "Payout initiated", description: `${speed === "instant" ? "Instant" : "Standard (1-3 days)"} payout started.` });

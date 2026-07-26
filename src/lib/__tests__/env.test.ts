@@ -210,7 +210,7 @@ describe('env.ts', () => {
       process.env.MINIO_SECRET_KEY = 'secret-key';
       process.env.AUTH_SECRET = 'auth-secret';
       process.env.ANTHROPIC_API_KEY = 'anthropic-key';
-      process.env.STRIPE_SECRET_KEY = 'stripe-secret-key';
+      delete process.env.STRIPE_SECRET_KEY;
       process.env.STRIPE_WEBHOOK_SECRET = 'whsec-test';
 
       // Act & Assert
@@ -251,7 +251,7 @@ describe('env.ts', () => {
       process.env.MINIO_SECRET_KEY = 'secret-key';
       process.env.AUTH_SECRET = 'auth-secret';
       process.env.ANTHROPIC_API_KEY = 'anthropic-key';
-      process.env.STRIPE_SECRET_KEY = 'stripe-secret-key';
+      delete process.env.STRIPE_SECRET_KEY;
       process.env.STRIPE_WEBHOOK_SECRET = 'whsec-test';
 
       // Act & Assert

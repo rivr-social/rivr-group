@@ -1,6 +1,7 @@
 // src/lib/federation/sso-assertion.ts
 
 import { eq } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
 
 import { db } from "@/db";
 import { nodes } from "@/db/schema";
@@ -359,10 +360,6 @@ function clampLifetime(requested: number | undefined): number {
  * without additional encoding.
  */
 function generateNonce(): string {
-  // Lazy require so this module stays tree-shakeable in environments that
-  // don't hit the signer (e.g. target-side verifiers importing only the
-  // canonicalize helper in tests).
-  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
   return randomBytes(SSO_ASSERTION_NONCE_BYTES)
     .toString("base64")
     .replace(/\+/g, "-")

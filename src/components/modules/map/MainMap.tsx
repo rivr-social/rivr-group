@@ -1228,6 +1228,8 @@ const MainMap: React.FC<MainMapProps> = ({
     for (const [id, ds] of loadedMap) {
       const baseId = id.includes(":") ? id.slice(0, id.indexOf(":")) : id;
       if (!activeIds.has(baseId)) {
+        // Cesium data sources are mutable objects owned by this ref-backed registry.
+        // eslint-disable-next-line react-hooks/immutability
         ds.show = false;
       }
     }

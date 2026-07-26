@@ -34,15 +34,13 @@ import { decodeRemoteViewerSessionEdge } from "@/lib/federation/remote-viewer-se
 /**
  * Builds a Content-Security-Policy header string with a per-request nonce.
  *
- * `'unsafe-eval'` and `'wasm-unsafe-eval'` are always included in `script-src`
- * because CesiumJS requires eval for dynamic module loading and WebAssembly
- * compilation for geospatial computations.
- *
  * @param nonce - A Base64-encoded UUID unique to this request.
+ * @param pathname - Request path used to scope Cesium's dynamic-code allowance.
  * @returns The complete CSP header value.
  */
-function buildCspHeader(nonce: string): string {
+function buildCspHeader(nonce: string, pathname: string): string {
   const isDev = process.env.NODE_ENV === "development";
+  const allowsCesium = pathname === "/map" || pathname.startsWith("/map/");
   const matrixUrl = process.env.NEXT_PUBLIC_MATRIX_HOMESERVER_URL;
   const matrixWss = matrixUrl?.replace(/^https:\/\//, "wss://");
   const publicDomain = process.env.NEXT_PUBLIC_DOMAIN?.trim();
@@ -66,7 +64,7 @@ function buildCspHeader(nonce: string): string {
     "'self'",
     "data:",
     "blob:",
-    "http://localhost:9000",
+    ...(isDev ? ["http://localhost:9000"] : []),
     ...(minioPublicUrl ? [minioPublicUrl] : []),
     ...(publicDomain ? [`https://s3.${publicDomain}`] : []),
     ...(federatedAssetSource ? [federatedAssetSource] : []),
@@ -133,12 +131,14 @@ function buildCspHeader(nonce: string): string {
 
   const connectSources = [
     "'self'",
-    "ws://localhost:*",
-    "wss://localhost:*",
-    "http://localhost:*",
-    "https://localhost:*",
-    "http://127.0.0.1:*",
-    "https://127.0.0.1:*",
+    ...(isDev ? [
+      "ws://localhost:*",
+      "wss://localhost:*",
+      "http://localhost:*",
+      "https://localhost:*",
+      "http://127.0.0.1:*",
+      "https://127.0.0.1:*",
+    ] : []),
     ...(appUrl ? [appUrl] : []),
     ...(appWss ? [appWss] : []),
     ...(globalBase ? [globalBase, globalWss] : []),
@@ -174,7 +174,7 @@ function buildCspHeader(nonce: string): string {
   // (recompute if either script's exact text changes).
   const scriptSrc = isDev
     ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://js.stripe.com`
-    : `script-src 'self' 'nonce-${nonce}' 'sha256-n46vPwSWuMC0W703pBofImv82Z26xo4LXymv0E9caPk=' 'sha256-4lN0Nms+eLyEuxG3yC9cHcVuEbIxGjeYo4BkqFxl1oE=' 'unsafe-eval' 'wasm-unsafe-eval' https://js.stripe.com`;
+    : `script-src 'self' 'nonce-${nonce}' 'sha256-n46vPwSWuMC0W703pBofImv82Z26xo4LXymv0E9caPk=' 'sha256-4lN0Nms+eLyEuxG3yC9cHcVuEbIxGjeYo4BkqFxl1oE='${allowsCesium ? " 'unsafe-eval' 'wasm-unsafe-eval'" : ""} https://js.stripe.com`;
 
   return [
     "default-src 'self'",
@@ -296,7 +296,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const nonce = btoa(crypto.randomUUID());
-  const cspHeader = buildCspHeader(nonce);
+  const cspHeader = buildCspHeader(nonce, pathname);
   const method = request.method.toUpperCase();
 
   // Root redirect: `/` → the primary group's page as a REAL HTTP 307. The

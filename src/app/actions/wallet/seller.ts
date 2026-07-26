@@ -8,7 +8,6 @@ import {
   getConnectBalance,
   createAccountLink,
   getAccountStatus,
-  createPayout,
   createLoginLink,
 } from '@/lib/stripe-connect';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
@@ -25,6 +24,7 @@ import {
   isTreasuryEnabled,
   retrieveFinancialConnectionsAccount,
 } from '@/lib/stripe-treasury';
+import { executeConnectBankPayout } from '@/lib/connect-bank-payout';
 
 export async function releaseTestConnectBalanceToWalletInternal(
   currentUserId: string,
@@ -117,7 +117,8 @@ export async function releaseTestConnectBalanceToWalletInternal(
  */
 export async function setupConnectAccountAction(
   ownerId?: string,
-  returnPath?: string
+  returnPath?: string,
+  accountCountry?: string,
 ): Promise<{
   success: boolean;
   url?: string;
@@ -133,7 +134,7 @@ export async function setupConnectAccountAction(
       type: 'setupConnectAccountAction',
       actorId: currentUserId,
       targetAgentId: currentUserId,
-      payload: { ownerId, returnPath },
+      payload: { ownerId, returnPath, accountCountry },
     },
     async () => {
       const target = await resolveManagedWalletTarget(currentUserId, ownerId);
@@ -147,6 +148,7 @@ export async function setupConnectAccountAction(
         ownerId: target.ownerId,
         ownerEmail: target.email,
         walletType: target.walletType,
+        accountCountry,
         accountMetadata: {
           returnPath: ownerId ? `/groups/${ownerId}?tab=treasury` : '/settings',
         },
@@ -506,7 +508,8 @@ export async function resolveWalletToConnectAction(
 export async function requestPayoutAction(
   amountCents: number,
   speed: 'standard' | 'instant' = 'standard',
-  ownerId?: string
+  ownerId?: string,
+  requestId?: string,
 ): Promise<{ success: boolean; payoutId?: string; error?: string }> {
   const currentUserId = await getCurrentUserId();
   if (!currentUserId) {
@@ -516,6 +519,7 @@ export async function requestPayoutAction(
   if (!isPositiveInteger(amountCents)) {
     return { success: false, error: 'Amount must be a positive integer (in cents).' };
   }
+  if (!requestId) return { success: false, error: 'A payout request ID is required.' };
 
   const check = await rateLimit(
     `wallet:${currentUserId}`,
@@ -531,7 +535,8 @@ export async function requestPayoutAction(
       type: 'requestPayoutAction',
       actorId: currentUserId,
       targetAgentId: currentUserId,
-      payload: { amountCents, speed, ownerId },
+      payload: { amountCents, speed, ownerId, requestId },
+      idempotencyKey: requestId,
     },
     async () => {
       const target = await resolveManagedWalletTarget(currentUserId, ownerId);
@@ -552,32 +557,11 @@ export async function requestPayoutAction(
         throw new Error('No payment account found. Set up payments first.');
       }
 
-      // Verify sufficient balance
-      const balance = await getConnectBalance(connectAccountId);
-      if (balance.availableCents < amountCents) {
-        throw new Error('Insufficient available balance for payout.');
-      }
-
-      const payout = await createPayout(connectAccountId, amountCents, speed);
-
-      // Record the payout in wallet transactions for audit
-      await db.insert(walletTransactions).values({
-        type: 'connect_payout',
-        fromWalletId: wallet.id,
-        amountCents,
-        feeCents: 0,
-        currency: 'usd',
-        description: `Payout to bank (${speed})`,
-        status: 'pending',
-        metadata: {
-          stripePayoutId: payout.id,
-          connectAccountId,
-          speed,
-          ownerId: target.ownerId,
-        },
+      const payout = await executeConnectBankPayout({
+        requestId, walletId: wallet.id, ownerId: target.ownerId,
+        connectAccountId, amountCents, speed,
       });
-
-      return { success: true, payoutId: payout.id } as { success: boolean; payoutId?: string; error?: string };
+      return { success: true, payoutId: payout.payoutId } as { success: boolean; payoutId?: string; error?: string };
     },
   );
 

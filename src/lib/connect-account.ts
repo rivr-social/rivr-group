@@ -42,6 +42,8 @@ export interface EnsureConnectAccountForWalletInput {
   ownerId: string;
   /** Email to attach to the Stripe account, when known. */
   ownerEmail?: string | null;
+  /** ISO alpha-2 country required when a new account must be created. */
+  accountCountry?: string;
   /** The wallet's type ('personal' | 'group' | 'project') — recorded on the Stripe account metadata. */
   walletType: string;
   /** Extra string metadata merged onto the Stripe account (e.g. an onboarding returnPath). */
@@ -77,6 +79,10 @@ export async function ensureConnectAccountForWallet(
   if (typeof existingAccountId === 'string' && existingAccountId.length > 0) {
     return { connectAccountId: existingAccountId, created: false };
   }
+  const country = input.accountCountry?.trim().toUpperCase();
+  if (!country || !/^[A-Z]{2}$/.test(country)) {
+    throw new Error('Bank country is required before creating a connected account.');
+  }
 
   const accountMetadata: Record<string, string> = {
     walletId: wallet.id,
@@ -88,13 +94,16 @@ export async function ensureConnectAccountForWallet(
   // Default account type: Custom (controller-based) when enabled — the only
   // type that can host Treasury/Issuing + platform bank-balance reads.
   // Hosted Account-Links onboarding works for both, so downstream flows are shared.
-  const account = isCustomConnectEnabled()
+  const account = isCustomConnectEnabled() && country === 'US'
     ? await createCustomConnectAccount({
         agentId: input.ownerId,
         email: input.ownerEmail ?? undefined,
+        country,
         metadata: accountMetadata,
       })
-    : await createConnectAccount(input.ownerId, input.ownerEmail ?? undefined, accountMetadata);
+    : await createConnectAccount(input.ownerId, input.ownerEmail ?? undefined, accountMetadata, {
+        country,
+      });
 
   await db
     .update(wallets)

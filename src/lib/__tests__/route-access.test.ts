@@ -97,6 +97,7 @@ describe("route-access", () => {
 
     it("prefix list matches exported PUBLIC_PAGE_PREFIXES", () => {
       const EXPECTED_PREFIXES = [
+        "/docs",
         "/auth/signup",
         "/auth/reset-password",
         "/auth/forgot-password",

@@ -12,6 +12,7 @@ import {
   setupConnectAccountAction,
 } from "@/app/actions/wallet"
 import { LinkBankAccountButton } from "@/components/link-bank-account-button"
+import { PayoutCountryDialog } from "@/components/payout-country-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -60,6 +61,7 @@ export function TreasuryPaymentsCard({
   } | null>(null)
   const [payoutAmount, setPayoutAmount] = useState("")
   const [initializing, setInitializing] = useState(true)
+  const [payoutCountryOpen, setPayoutCountryOpen] = useState(false)
   const [isLoading, startLoading] = useTransition()
 
   useEffect(() => {
@@ -113,9 +115,9 @@ export function TreasuryPaymentsCard({
   const formatCents = (amountCents: number) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amountCents / 100)
 
-  const handleSetup = () => {
+  const handleSetup = (country?: string) => {
     startLoading(async () => {
-      const result = await setupConnectAccountAction(ownerId, returnPath)
+      const result = await setupConnectAccountAction(ownerId, returnPath, country)
       if (result.success && result.url) {
         window.location.href = result.url
         return
@@ -141,7 +143,7 @@ export function TreasuryPaymentsCard({
     }
 
     startLoading(async () => {
-      const result = await requestPayoutAction(amountCents, speed, ownerId)
+      const result = await requestPayoutAction(amountCents, speed, ownerId, crypto.randomUUID())
       if (!result.success) {
         toast({
           title: "Couldn't send the payout",
@@ -243,7 +245,7 @@ export function TreasuryPaymentsCard({
         ) : null}
 
         {!status?.hasAccount ? (
-          <Button onClick={handleSetup} disabled={isLoading}>
+          <Button onClick={() => setPayoutCountryOpen(true)} disabled={isLoading}>
             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}
             Set up payments
           </Button>
@@ -284,7 +286,7 @@ export function TreasuryPaymentsCard({
             </details>
 
             {!status.chargesEnabled || !status.payoutsEnabled ? (
-              <Button variant="outline" onClick={handleSetup} disabled={isLoading}>
+              <Button variant="outline" onClick={() => handleSetup()} disabled={isLoading}>
                 Finish verifying your account
               </Button>
             ) : null}
@@ -334,6 +336,12 @@ export function TreasuryPaymentsCard({
             ) : null}
           </>
         )}
+        <PayoutCountryDialog
+          open={payoutCountryOpen}
+          onOpenChange={setPayoutCountryOpen}
+          onConfirm={handleSetup}
+          disabled={isLoading}
+        />
       </CardContent>
     </Card>
   )

@@ -21,7 +21,7 @@
  * - `STRIPE_PUBLISHABLE_KEY` is safe for browser usage.
  */
 
-import { getEnv } from '@/lib/env';
+import { getEnv, validateStripeConfiguration } from '@/lib/env';
 
 /**
  * Stripe API version pin used to prevent behavior drift when Stripe introduces
@@ -93,7 +93,7 @@ export function toDollars(cents: number): number {
  * ```
  */
 export function getStripeSecretKey(): string {
-  // Centralized env lookup keeps validation/throw behavior consistent across callers.
+  validateStripeConfiguration();
   return getEnv('STRIPE_SECRET_KEY');
 }
 
@@ -110,7 +110,8 @@ export function getStripeSecretKey(): string {
  * ```
  */
 export function getStripePublishableKey(): string {
-  return getEnv('STRIPE_PUBLISHABLE_KEY');
+  validateStripeConfiguration();
+  return process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || getEnv('STRIPE_PUBLISHABLE_KEY');
 }
 
 /**
@@ -127,9 +128,5 @@ export function getStripePublishableKey(): string {
  * ```
  */
 export function isStripeConfigured(): boolean {
-  // Existence check avoids throwing and supports feature gating where partial config is expected.
-  return !!(
-    process.env.STRIPE_SECRET_KEY &&
-    process.env.STRIPE_PUBLISHABLE_KEY
-  );
+  return validateStripeConfiguration() !== 'disabled';
 }

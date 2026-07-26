@@ -15,6 +15,12 @@
  */
 import { getStripe } from '@/lib/billing';
 
+export const CROSS_BORDER_PAYOUT_COUNTRIES = new Set([
+  'US', 'GB', 'CA', 'CH', 'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE',
+  'FI', 'FR', 'DE', 'GR', 'HU', 'IS', 'IE', 'IT', 'LV', 'LI', 'LT', 'LU',
+  'MT', 'NL', 'NO', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
+]);
+
 /**
  * Creates a new Stripe Connect Express account for the given agent.
  * The account is configured with card_payments and transfers capabilities,
@@ -32,18 +38,26 @@ import { getStripe } from '@/lib/billing';
  */
 export async function createConnectAccount(
   agentId: string,
-  email?: string,
-  metadata?: Record<string, string>
+  email: string | undefined,
+  metadata: Record<string, string> | undefined,
+  options: { country: string },
 ) {
   const stripe = getStripe();
+  const country = options.country.trim().toUpperCase();
+  if (!country) throw new Error('Bank country is required before creating a connected account.');
+  if (!CROSS_BORDER_PAYOUT_COUNTRIES.has(country)) {
+    throw new Error(`Payouts to a bank in ${country} require the Global Payouts rail.`);
+  }
+  const crossBorder = country !== 'US';
   const account = await stripe.accounts.create({
     type: 'express',
+    country,
     ...(email ? { email } : {}),
-    metadata: { agentId, ...(metadata ?? {}) },
-    capabilities: {
-      card_payments: { requested: true },
-      transfers: { requested: true },
-    },
+    metadata: { agentId, accountCountry: country, ...(metadata ?? {}) },
+    capabilities: crossBorder
+      ? { transfers: { requested: true } }
+      : { card_payments: { requested: true }, transfers: { requested: true } },
+    ...(crossBorder ? { tos_acceptance: { service_agreement: 'recipient' as const } } : {}),
   });
   return account;
 }
@@ -165,7 +179,8 @@ export async function getConnectBalance(
 export async function createPayout(
   connectAccountId: string,
   amountCents: number,
-  speed: 'standard' | 'instant'
+  speed: 'standard' | 'instant',
+  opts: { idempotencyKey: string; metadata?: Record<string, string> },
 ) {
   const stripe = getStripe();
   const payout = await stripe.payouts.create(
@@ -173,8 +188,9 @@ export async function createPayout(
       amount: amountCents,
       currency: 'usd',
       method: speed === 'instant' ? 'instant' : 'standard',
+      ...(opts.metadata ? { metadata: opts.metadata } : {}),
     },
-    { stripeAccount: connectAccountId }
+    { stripeAccount: connectAccountId, idempotencyKey: opts.idempotencyKey }
   );
   return payout;
 }
