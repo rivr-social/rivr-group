@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { withTestTransaction } from "@/test/db";
-import { createTestAgent } from "@/test/fixtures";
+import { createTestAgent, createTestWallet } from "@/test/fixtures";
 import { mockAuthSession, mockUnauthenticated } from "@/test/auth-helpers";
 
 // =============================================================================
@@ -44,12 +44,37 @@ vi.mock("@/lib/wallet", () => ({
     type: "personal",
     metadata: { stripeConnectAccountId: "acct_test_123" },
   }),
+  consumeWalletCapital: vi.fn().mockResolvedValue([
+    {
+      entryId: "capital-1",
+      amountCents: 500,
+      settlementStatus: "cleared",
+      availableOn: null,
+      metadata: {},
+    },
+  ]),
+  restoreWalletCapitalFromConsumptions: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/lib/connect-payout", () => ({
+  settleConnectPayout: vi.fn().mockResolvedValue({
+    status: "paid",
+    transferId: "tr_global_123",
+  }),
 }));
 
 // Import AFTER mocks
 import { auth } from "@/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import { getConnectBalance, createPayout } from "@/lib/stripe-connect";
+import {
+  consumeWalletCapital,
+  getSettlementWalletForAgent,
+  restoreWalletCapitalFromConsumptions,
+} from "@/lib/wallet";
+import { settleConnectPayout } from "@/lib/connect-payout";
+import { wallets, walletTransactions } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 const PAYOUT_REQUEST_ID = "123e4567-e89b-42d3-a456-426614174000";
 import {
@@ -57,6 +82,7 @@ import {
   getConnectStatusAction,
   getConnectBalanceAction,
   releaseTestConnectBalanceToWalletAction,
+  resolveWalletToConnectAction,
   requestPayoutAction,
 } from "../seller";
 
@@ -84,15 +110,15 @@ describe("seller actions", () => {
         expect(result.error).toContain("logged in");
       }));
 
-    it("returns onboarding URL on success", () =>
+    it("rejects local onboarding because Global owns connected accounts", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
 
         const result = await setupConnectAccountAction();
 
-        expect(result.success).toBe(true);
-        expect(result.url).toBeDefined();
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/through Global/i);
       }));
   });
 
@@ -170,6 +196,67 @@ describe("seller actions", () => {
       }));
   });
 
+  describe("resolveWalletToConnectAction", () => {
+    it("submits a corridor-neutral obligation to Global using cleared capital", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        const wallet = await createTestWallet(db, user.id, { balanceCents: 1000 });
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getSettlementWalletForAgent).mockResolvedValueOnce(wallet);
+
+        const result = await resolveWalletToConnectAction(500);
+
+        expect(result.success).toBe(true);
+        expect(consumeWalletCapital).toHaveBeenCalledWith(
+          expect.anything(),
+          wallet.id,
+          1000,
+          500,
+          { clearedOnly: true },
+        );
+        expect(settleConnectPayout).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payeeAgentId: user.id,
+            amountCents: 500,
+            metadata: expect.objectContaining({ corridor: "auto" }),
+          }),
+        );
+        const [walletAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, wallet.id));
+        expect(walletAfter.balanceCents).toBe(500);
+      }));
+
+    it("does not compensate an ambiguous Global submission", () =>
+      withTestTransaction(async (db) => {
+        const user = await createTestAgent(db);
+        const wallet = await createTestWallet(db, user.id, { balanceCents: 1000 });
+        vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
+        vi.mocked(getSettlementWalletForAgent).mockResolvedValueOnce(wallet);
+        vi.mocked(settleConnectPayout).mockResolvedValueOnce({
+          status: "error",
+          detail: "timeout",
+        });
+
+        const result = await resolveWalletToConnectAction(500);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/awaiting reconciliation/i);
+        expect(restoreWalletCapitalFromConsumptions).not.toHaveBeenCalled();
+        const [walletAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, wallet.id));
+        expect(walletAfter.balanceCents).toBe(500);
+        const [payoutRow] = await db
+          .select()
+          .from(walletTransactions)
+          .where(eq(walletTransactions.fromWalletId, wallet.id));
+        expect(payoutRow.status).toBe("submission_unknown");
+      }));
+  });
+
   // ===========================================================================
   // requestPayoutAction
   // ===========================================================================
@@ -208,7 +295,7 @@ describe("seller actions", () => {
         expect(result.error).toContain("Rate limit");
       }));
 
-    it("returns error when insufficient available balance", () =>
+    it("does not inspect a local Connect balance before rejecting direct payout", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
@@ -220,36 +307,32 @@ describe("seller actions", () => {
         const result = await requestPayoutAction(5000, "standard", undefined, PAYOUT_REQUEST_ID);
 
         expect(result.success).toBe(false);
-        expect(result.error).toContain("Insufficient");
+        expect(result.error).toMatch(/owned by Global/i);
+        expect(getConnectBalance).not.toHaveBeenCalled();
       }));
 
-    it("returns payoutId on successful payout", () =>
+    it("rejects direct bank payout execution on Group", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
 
         const result = await requestPayoutAction(3000, "standard", undefined, PAYOUT_REQUEST_ID);
 
-        expect(result.success).toBe(true);
-        expect(result.payoutId).toBe("po_test_123");
-        expect(createPayout).toHaveBeenCalledWith(
-          "acct_test_123", 3000, "standard",
-          expect.objectContaining({ idempotencyKey: `connect-bank-payout:${PAYOUT_REQUEST_ID}` }),
-        );
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/owned by Global/i);
+        expect(createPayout).not.toHaveBeenCalled();
       }));
 
-    it("passes instant speed to createPayout", () =>
+    it("does not use a local Stripe payout for instant requests", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
 
         const result = await requestPayoutAction(2000, "instant", undefined, PAYOUT_REQUEST_ID);
 
-        expect(result.success).toBe(true);
-        expect(createPayout).toHaveBeenCalledWith(
-          "acct_test_123", 2000, "instant",
-          expect.objectContaining({ idempotencyKey: `connect-bank-payout:${PAYOUT_REQUEST_ID}` }),
-        );
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/owned by Global/i);
+        expect(createPayout).not.toHaveBeenCalled();
       }));
   });
 });

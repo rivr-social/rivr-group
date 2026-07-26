@@ -9,7 +9,8 @@
  * settles; we record the returned verdict on the payout receipt.
  *
  * BEST-EFFORT: never throws; a failed/unreachable global returns a verdict the
- * caller records. Gated behind `STRIPE_CONNECT_PAYOUTS_ENABLED` (TEST posture).
+ * caller records. Gated behind both the sovereign Global-payments switch and
+ * the payout-specific switch.
  */
 import { getGlobalUrl } from '@/lib/federation/global-url';
 
@@ -17,7 +18,7 @@ import { getGlobalUrl } from '@/lib/federation/global-url';
 export type ConnectPayoutStatus =
   | 'awaiting_attestation' // job marked done; a group admin must attest to release the real payout
   | 'paid' // global settled a real Stripe transfer to the payee's connected account
-  | 'disabled' // the STRIPE_CONNECT_PAYOUTS_ENABLED flag is off
+  | 'disabled' // a required Global/payout feature flag is off
   | 'needs_onboarding' // payee has a connected account on global but it can't receive transfers yet
   | 'insufficient_funds' // global's platform balance can't cover the transfer
   | 'error'; // global rejected/unreachable (message captured)
@@ -44,28 +45,33 @@ export interface SettleConnectPayoutInput {
 /** Path of the global Connect payout authority endpoint. */
 const GLOBAL_PAYOUT_PATH = '/api/federation/connect/payout';
 const REQUEST_TIMEOUT_MS = 15_000;
+const PAYOUT_RESPONSE_STATUSES = new Set<ConnectPayoutStatus>([
+  'awaiting_attestation',
+  'paid',
+  'disabled',
+  'needs_onboarding',
+  'insufficient_funds',
+  'error',
+]);
 
-/** True when the operator has enabled real Connect payouts (TEST key expected). */
+/** True only when Global mediation and its payout lane are explicitly enabled. */
 export function isConnectPayoutsEnabled(): boolean {
-  return process.env.STRIPE_CONNECT_PAYOUTS_ENABLED === 'true';
+  return (
+    process.env.GLOBAL_PAYMENTS_ENABLED === 'true' &&
+    process.env.STRIPE_CONNECT_PAYOUTS_ENABLED === 'true'
+  );
 }
 
 /**
- * Peer-auth headers for the sovereign→global call. Mirrors the federation-sync
- * cron's `resolvePeerAuthHeaders`: `x-peer-slug` identifies US (our instance
- * slug), `x-peer-secret` is the shared secret for the global peer
- * (`FEDERATION_PEER_SECRET_GLOBAL`); falls back to `x-node-admin-key`. Returns
- * null when no credential is configured (caller reports needs-config).
+ * Peer-auth headers for the sovereign→global call. Money movement requires the
+ * dedicated Global peer secret; the broad node-admin credential is not accepted
+ * as a fallback.
  */
 function buildPeerAuthHeaders(): Record<string, string> | null {
   const localSlug = process.env.INSTANCE_SLUG?.trim();
   const peerSecret = process.env.FEDERATION_PEER_SECRET_GLOBAL?.trim();
   if (localSlug && peerSecret) {
     return { 'x-peer-slug': localSlug, 'x-peer-secret': peerSecret };
-  }
-  const adminKey = process.env.NODE_ADMIN_KEY?.trim();
-  if (adminKey) {
-    return { 'x-node-admin-key': adminKey };
   }
   return null;
 }
@@ -89,7 +95,7 @@ export async function settleConnectPayout(
   if (!authHeaders) {
     return {
       status: 'error',
-      detail: 'No federation peer credential configured (FEDERATION_PEER_SECRET_GLOBAL / NODE_ADMIN_KEY).',
+      detail: 'No dedicated Global federation peer credential configured (INSTANCE_SLUG / FEDERATION_PEER_SECRET_GLOBAL).',
     };
   }
 
@@ -122,8 +128,21 @@ export async function settleConnectPayout(
     }
 
     const data = (await response.json()) as ConnectPayoutResult;
-    if (!data || typeof data.status !== 'string') {
+    if (
+      !data ||
+      typeof data.status !== 'string' ||
+      !PAYOUT_RESPONSE_STATUSES.has(data.status as ConnectPayoutStatus)
+    ) {
       return { status: 'error', detail: 'Malformed response from global payout endpoint.' };
+    }
+    if (
+      data.status === 'paid' &&
+      (typeof data.transferId !== 'string' || data.transferId.length === 0)
+    ) {
+      return {
+        status: 'error',
+        detail: 'Global reported a paid payout without a settlement reference.',
+      };
     }
     return data;
   } catch (error) {

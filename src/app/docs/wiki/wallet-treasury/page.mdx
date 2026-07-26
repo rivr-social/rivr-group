@@ -64,8 +64,10 @@ Your Rivr wallet is a platform IOU. Converting it means real dollars move.
 - The action runs as a **saga**: debit the wallet and write a `pending` ledger
   row in one locked transaction → request the federated transfer, keyed on that
   row's id so retries are safe → mark it `completed`.
-- Anything other than a `paid` result **refunds the wallet** and marks the row
-  `failed`. Money is never lost and never minted.
+- A definitive rejection **refunds the wallet** and marks the row `failed`.
+  An ambiguous timeout/server result remains reserved as `submission_unknown`
+  until reconciliation, avoiding a compensating credit after GLOBAL may already
+  have accepted the idempotent payout.
 - On this sovereign instance the real transfer is fulfilled by **GLOBAL**, the
   single Connect authority — it resolves your globally-held connected account
   and performs the Stripe Transfer there.
@@ -92,14 +94,14 @@ Each attempt records one of six verdicts on the receipt:
 | --- | --- |
 | `awaiting_attestation` | job marked done; an admin still has to release |
 | `paid` | global settled a real Stripe transfer to the payee's connected account |
-| `disabled` | `STRIPE_CONNECT_PAYOUTS_ENABLED` is off |
+| `disabled` | `GLOBAL_PAYMENTS_ENABLED` or `STRIPE_CONNECT_PAYOUTS_ENABLED` is off |
 | `needs_onboarding` | payee has a global connected account that can't receive transfers yet |
 | `insufficient_funds` | global's platform balance can't cover the transfer |
 | `error` | global rejected the request or was unreachable (message captured) |
 
 **How the two instances talk:** this instance POSTs to global's
-`/api/federation/connect/payout` with peer auth (`x-peer-slug` +
-`x-peer-secret`, falling back to `x-node-admin-key`), 15-second timeout,
+`/api/federation/connect/payout` with dedicated peer auth (`x-peer-slug` +
+`x-peer-secret` from `FEDERATION_PEER_SECRET_GLOBAL`), 15-second timeout,
 best-effort — it never throws, so a slow global can never break a job payout.
 **GLOBAL holds every connected account; this instance holds none.**
 
@@ -230,6 +232,20 @@ the state instead of showing dead controls. What is built:
   **$500/month**; admins set the limit).
 - **Connected bank balances** — link a real-world bank account (Financial
   Connections) and see the live external balance alongside the Stripe balances.
+
+## Refunds and chargebacks
+
+When a buyer is refunded or wins a dispute, the money is recovered from the
+wallets that the original sale credited — the seller, any project or fund split,
+and the group's own share — in proportion to what each was paid. A dispute also
+recovers **Stripe's $15 dispute fee**; a refund also recovers the processing fee
+Stripe keeps on refunds.
+
+If the proceeds were already spent or cashed out, the balance goes **negative**
+and stands as a debt that nets against future sales. **Cash-out is blocked while
+a balance is negative.** Partial refunds recover only the new portion, so a sale
+refunded in stages is never over-recovered, and a reversed dispute puts every
+recovered split back.
 
 ## Good to know
 

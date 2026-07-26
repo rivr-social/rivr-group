@@ -6,13 +6,15 @@ import { wallets, walletTransactions } from '@/db/schema';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 import {
   getConnectBalance,
-  createAccountLink,
   getAccountStatus,
   createLoginLink,
 } from '@/lib/stripe-connect';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
-import { ensureConnectAccountForWallet } from '@/lib/connect-account';
 import { settleConnectPayout } from '@/lib/connect-payout';
+import {
+  consumeWalletCapital,
+  restoreWalletCapitalFromConsumptions,
+} from '@/lib/wallet';
 import { getCurrentUserId, resolveManagedWalletTarget } from './helpers';
 import { isPositiveInteger } from './types';
 import {
@@ -24,7 +26,6 @@ import {
   isTreasuryEnabled,
   retrieveFinancialConnectionsAccount,
 } from '@/lib/stripe-treasury';
-import { executeConnectBankPayout } from '@/lib/connect-bank-payout';
 
 export async function releaseTestConnectBalanceToWalletInternal(
   currentUserId: string,
@@ -105,7 +106,8 @@ export async function releaseTestConnectBalanceToWalletInternal(
 }
 
 /**
- * Sets up a Stripe Connect Express account for the current user and returns the onboarding URL.
+ * Legacy local onboarding entry point. Global owns account creation and
+ * onboarding, so Group authenticates/routs the request and fails closed locally.
  *
  * @returns {Promise<{ success: boolean; url?: string; error?: string }>} Onboarding URL on success.
  * @throws {Error} Can throw if Stripe or DB dependencies fail unexpectedly.
@@ -137,32 +139,9 @@ export async function setupConnectAccountAction(
       payload: { ownerId, returnPath, accountCountry },
     },
     async () => {
-      const target = await resolveManagedWalletTarget(currentUserId, ownerId);
-
-      // Account-creation core shared with the backfill lane: Custom
-      // (controller-based) account when enabled — the only type that can host
-      // Treasury/Issuing + platform bank-balance reads — else Express.
-      // Idempotent: an existing wallet-metadata id short-circuits Stripe.
-      const { connectAccountId } = await ensureConnectAccountForWallet({
-        walletId: target.walletId,
-        ownerId: target.ownerId,
-        ownerEmail: target.email,
-        walletType: target.walletType,
-        accountCountry,
-        accountMetadata: {
-          returnPath: ownerId ? `/groups/${ownerId}?tab=treasury` : '/settings',
-        },
-      });
-
-      const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-      const targetPath = returnPath || (ownerId ? `/groups/${ownerId}?tab=treasury` : '/settings');
-      const url = await createAccountLink(
-        connectAccountId,
-        `${baseUrl}/api/stripe/connect?account_id=${connectAccountId}&owner_id=${target.ownerId}&return_path=${encodeURIComponent(targetPath)}`,
-        `${baseUrl}/api/stripe/connect?account_id=${connectAccountId}&owner_id=${target.ownerId}&return_path=${encodeURIComponent(targetPath)}`
+      throw new Error(
+        'Payment onboarding must be completed through Global. Local Group Stripe account creation is disabled.',
       );
-
-      return { success: true, url } as { success: boolean; url?: string; error?: string };
     },
   );
 
@@ -352,8 +331,8 @@ export async function releaseTestConnectBalanceToWalletAction(ownerId?: string):
  *
  * Saga: debit the wallet + write a `pending` ledger row in one locked tx, request
  * the federated transfer keyed on that row's id (retry-safe), then mark it
- * `completed`; anything other than a `paid` result refunds the wallet and marks
- * the row `failed` — money is never lost or minted.
+ * `completed`. Definitive rejections compensate the wallet; ambiguous transport
+ * outcomes remain reserved as `submission_unknown` for reconciliation.
  */
 export async function resolveWalletToConnectAction(
   amountCents: number,
@@ -386,23 +365,18 @@ export async function resolveWalletToConnectAction(
     async () => {
       const target = await resolveManagedWalletTarget(currentUserId, ownerId);
       const [wallet] = await db
-        .select({ id: wallets.id, balanceCents: wallets.balanceCents, metadata: wallets.metadata })
+        .select({ id: wallets.id, balanceCents: wallets.balanceCents })
         .from(wallets)
         .where(eq(wallets.id, target.walletId))
         .limit(1);
       if (!wallet) throw new Error('Wallet not found.');
 
-      const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
-      const connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
-      if (!connectAccountId) {
-        throw new Error('No payment account found. Set up payments first.');
-      }
       if (wallet.balanceCents < amountCents) {
         throw new Error('Insufficient Rivr wallet balance.');
       }
 
       // 1) Debit the wallet + pending ledger row in ONE locked tx.
-      const txnId = await db.transaction(async (tx) => {
+      const pendingPayout = await db.transaction(async (tx) => {
         await tx.execute(sql`SELECT id FROM wallets WHERE id = ${wallet.id} FOR UPDATE`);
         const [locked] = await tx
           .select({ balanceCents: wallets.balanceCents })
@@ -412,6 +386,13 @@ export async function resolveWalletToConnectAction(
         if (!locked || locked.balanceCents < amountCents) {
           throw new Error('Insufficient Rivr wallet balance.');
         }
+        const capitalConsumptions = await consumeWalletCapital(
+          tx,
+          wallet.id,
+          locked.balanceCents,
+          amountCents,
+          { clearedOnly: true },
+        );
         await tx
           .update(wallets)
           .set({ balanceCents: sql`${wallets.balanceCents} - ${amountCents}`, updatedAt: new Date() })
@@ -424,46 +405,97 @@ export async function resolveWalletToConnectAction(
             amountCents,
             feeCents: 0,
             currency: 'usd',
-            description: 'Moved Rivr wallet balance to Stripe',
+            description: 'Submitted payout obligation to Global',
             status: 'pending',
-            metadata: { source: 'wallet_to_connect', connectAccountId, ownerId: target.ownerId },
+            metadata: {
+              source: 'global_payout_obligation',
+              ownerId: target.ownerId,
+              corridor: 'auto',
+            },
           })
           .returning({ id: walletTransactions.id });
-        return row.id;
+        return { txnId: row.id, capitalConsumptions };
       });
+      const { txnId, capitalConsumptions } = pendingPayout;
 
-      // 2) Federated transfer via GLOBAL (the single Connect authority).
+      // 2) Submit the authenticated obligation to GLOBAL. GLOBAL owns recipient
+      // verification and chooses Connect versus Global Payouts by country.
       const settle = await settleConnectPayout({
         payeeAgentId: target.ownerId,
         amountCents,
         idempotencyKey: `wallet-cashout:${txnId}`,
-        metadata: { walletTransactionId: txnId, source: 'wallet_to_connect' },
+        metadata: {
+          walletTransactionId: txnId,
+          source: 'global_payout_obligation',
+          corridor: 'auto',
+        },
       });
 
       if (settle.status !== 'paid') {
-        // 3a) Refund + mark failed. Friendly message per status.
-        await db.transaction(async (tx) => {
-          await tx.execute(sql`SELECT id FROM wallets WHERE id = ${wallet.id} FOR UPDATE`);
-          await tx
-            .update(wallets)
-            .set({ balanceCents: sql`${wallets.balanceCents} + ${amountCents}`, updatedAt: new Date() })
-            .where(eq(wallets.id, wallet.id));
-          await tx
+        const definitivelyRejected =
+          settle.status === 'disabled' ||
+          settle.status === 'needs_onboarding' ||
+          settle.status === 'insufficient_funds';
+        if (definitivelyRejected) {
+          await db.transaction(async (tx) => {
+            await tx.execute(sql`SELECT id FROM wallets WHERE id = ${wallet.id} FOR UPDATE`);
+            await tx
+              .update(wallets)
+              .set({
+                balanceCents: sql`${wallets.balanceCents} + ${amountCents}`,
+                updatedAt: new Date(),
+              })
+              .where(eq(wallets.id, wallet.id));
+            await restoreWalletCapitalFromConsumptions(
+              tx,
+              wallet.id,
+              capitalConsumptions,
+              {
+                sourceType: 'global_payout_compensation',
+                sourceTransactionId: txnId,
+                metadata: { settleStatus: settle.status },
+              },
+            );
+            await tx
+              .update(walletTransactions)
+              .set({
+                status: 'failed',
+                metadata: {
+                  source: 'global_payout_obligation',
+                  ownerId: target.ownerId,
+                  settleStatus: settle.status,
+                  detail: settle.detail,
+                  compensated: true,
+                },
+              })
+              .where(eq(walletTransactions.id, txnId));
+          });
+        } else {
+          // A transport/server error can mean Global accepted the idempotent
+          // request but Group missed the response. Preserve the debit and capital
+          // consumption for reconciliation; compensating here could double-pay.
+          await db
             .update(walletTransactions)
             .set({
-              status: 'failed',
-              metadata: { source: 'wallet_to_connect', connectAccountId, ownerId: target.ownerId, settleStatus: settle.status, detail: settle.detail },
+              status: 'submission_unknown',
+              metadata: {
+                source: 'global_payout_obligation',
+                ownerId: target.ownerId,
+                settleStatus: settle.status,
+                detail: settle.detail,
+                compensated: false,
+              },
             })
             .where(eq(walletTransactions.id, txnId));
-        });
+        }
         const message =
           settle.status === 'needs_onboarding'
             ? 'Finish payment onboarding before moving funds to Stripe.'
             : settle.status === 'insufficient_funds'
               ? 'The platform cannot back this transfer right now — try a smaller amount or try again later.'
               : settle.status === 'disabled'
-                ? 'Connect payouts are not enabled on this instance.'
-                : settle.detail ?? 'Unable to move funds to Stripe.';
+                ? 'Global payouts are not enabled.'
+                : 'Payout submission is awaiting reconciliation. Funds remain reserved and were not returned.';
         throw new Error(message);
       }
 
@@ -472,7 +504,12 @@ export async function resolveWalletToConnectAction(
         .update(walletTransactions)
         .set({
           status: 'completed',
-          metadata: { source: 'wallet_to_connect', connectAccountId, ownerId: target.ownerId, transferId: settle.transferId },
+          metadata: {
+            source: 'global_payout_obligation',
+            ownerId: target.ownerId,
+            transferId: settle.transferId,
+            corridor: 'resolved_by_global',
+          },
         })
         .where(eq(walletTransactions.id, txnId));
 
@@ -507,7 +544,7 @@ export async function resolveWalletToConnectAction(
 
 export async function requestPayoutAction(
   amountCents: number,
-  speed: 'standard' | 'instant' = 'standard',
+  _speed: 'standard' | 'instant' = 'standard',
   ownerId?: string,
   requestId?: string,
 ): Promise<{ success: boolean; payoutId?: string; error?: string }> {
@@ -530,55 +567,11 @@ export async function requestPayoutAction(
     return { success: false, error: 'Rate limit exceeded. Please try again later.' };
   }
 
-  const result = await updateFacade.execute(
-    {
-      type: 'requestPayoutAction',
-      actorId: currentUserId,
-      targetAgentId: currentUserId,
-      payload: { amountCents, speed, ownerId, requestId },
-      idempotencyKey: requestId,
-    },
-    async () => {
-      const target = await resolveManagedWalletTarget(currentUserId, ownerId);
-      const [wallet] = await db
-        .select({ id: wallets.id, metadata: wallets.metadata })
-        .from(wallets)
-        .where(eq(wallets.id, target.walletId))
-        .limit(1);
-
-      if (!wallet) {
-        throw new Error('Treasury wallet not found.');
-      }
-
-      const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
-      const connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
-
-      if (!connectAccountId) {
-        throw new Error('No payment account found. Set up payments first.');
-      }
-
-      const payout = await executeConnectBankPayout({
-        requestId, walletId: wallet.id, ownerId: target.ownerId,
-        connectAccountId, amountCents, speed,
-      });
-      return { success: true, payoutId: payout.payoutId } as { success: boolean; payoutId?: string; error?: string };
-    },
-  );
-
-  if (!result.success) {
-    console.error('requestPayoutAction failed:', result.error);
-    return { success: false, error: result.error ?? 'Payout failed' };
-  }
-
-  emitDomainEvent({
-    eventType: EVENT_TYPES.WALLET_PAYOUT,
-    entityType: 'wallet',
-    entityId: currentUserId,
-    actorId: currentUserId,
-    payload: { amountCents, speed, payoutId: result.data?.payoutId },
-  }).catch(() => {});
-
-  return result.data ?? { success: true };
+  return {
+    success: false,
+    error:
+      'Bank payout execution is owned by Global. This Group instance cannot create a Stripe payout directly.',
+  };
 }
 
 /**

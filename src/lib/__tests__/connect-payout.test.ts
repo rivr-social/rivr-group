@@ -26,25 +26,39 @@ function stubFetch(body: unknown, ok = true, status = 200) {
 }
 
 describe("settleConnectPayout (sovereign → global client)", () => {
+  const prevGlobalFlag = process.env.GLOBAL_PAYMENTS_ENABLED;
   const prevFlag = process.env.STRIPE_CONNECT_PAYOUTS_ENABLED;
   const prevSlug = process.env.INSTANCE_SLUG;
   const prevSecret = process.env.FEDERATION_PEER_SECRET_GLOBAL;
+  const prevAdminKey = process.env.NODE_ADMIN_KEY;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.GLOBAL_PAYMENTS_ENABLED = "true";
     process.env.STRIPE_CONNECT_PAYOUTS_ENABLED = "true";
     process.env.INSTANCE_SLUG = "mutual-aid-boulder";
     process.env.FEDERATION_PEER_SECRET_GLOBAL = "s3cr3t";
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    process.env.GLOBAL_PAYMENTS_ENABLED = prevGlobalFlag;
     process.env.STRIPE_CONNECT_PAYOUTS_ENABLED = prevFlag;
     process.env.INSTANCE_SLUG = prevSlug;
     process.env.FEDERATION_PEER_SECRET_GLOBAL = prevSecret;
+    process.env.NODE_ADMIN_KEY = prevAdminKey;
   });
 
   it("is disabled when the flag is off", async () => {
     process.env.STRIPE_CONNECT_PAYOUTS_ENABLED = "false";
+    const fetchFn = stubFetch({});
+    expect(isConnectPayoutsEnabled()).toBe(false);
+    const r = await settleConnectPayout(BASE);
+    expect(r.status).toBe("disabled");
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("is disabled when Global payment mediation is off", async () => {
+    process.env.GLOBAL_PAYMENTS_ENABLED = "false";
     const fetchFn = stubFetch({});
     expect(isConnectPayoutsEnabled()).toBe(false);
     const r = await settleConnectPayout(BASE);
@@ -70,14 +84,14 @@ describe("settleConnectPayout (sovereign → global client)", () => {
     });
   });
 
-  it("falls back to x-node-admin-key when no peer secret is set", async () => {
+  it("rejects the broad node-admin key when no dedicated peer secret is set", async () => {
     delete process.env.FEDERATION_PEER_SECRET_GLOBAL;
     process.env.NODE_ADMIN_KEY = "admin-key";
-    const fetchFn = stubFetch({ status: "paid", transferId: "tr_9" });
+    const fetchFn = stubFetch({});
     const r = await settleConnectPayout(BASE);
-    expect(r.status).toBe("paid");
-    expect(fetchFn.mock.calls[0][1].headers["x-node-admin-key"]).toBe("admin-key");
-    delete process.env.NODE_ADMIN_KEY;
+    expect(r.status).toBe("error");
+    expect(r.detail).toContain("dedicated Global federation peer credential");
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("returns error (no transfer) when no peer credential is configured", async () => {
@@ -95,6 +109,16 @@ describe("settleConnectPayout (sovereign → global client)", () => {
     const r = await settleConnectPayout(BASE);
     expect(r.status).toBe("error");
     expect(r.detail).toContain("Peer is not trusted");
+  });
+
+  it.each([
+    [{ status: "paid" }, "without a settlement reference"],
+    [{ status: "unexpected", transferId: "tr_123" }, "Malformed response"],
+  ])("rejects a malformed Global verdict", async (body, expectedDetail) => {
+    stubFetch(body);
+    const r = await settleConnectPayout(BASE);
+    expect(r.status).toBe("error");
+    expect(r.detail).toContain(expectedDetail);
   });
 
   it("rejects a non-positive amount before any call", async () => {

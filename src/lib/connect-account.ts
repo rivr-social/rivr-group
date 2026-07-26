@@ -1,71 +1,62 @@
 /**
- * Stripe Connect account provisioning core — the single "make sure this
- * treasury has a connected account" primitive shared by the seller onboarding
- * flow (`actions/wallet/seller.ts` → `setupConnectAccountAction`), the
- * instance-wide backfill (`actions/wallet/connect-backfill.ts`), and the
- * `rivr.payments.backfill_connect_accounts` MCP tool.
+ * Sovereign-instance connected-account lookup guard.
  *
- * Account model (payments architecture doc §2): Custom controller-based
- * connected accounts (`createCustomConnectAccount`) when
- * STRIPE_CUSTOM_ACCOUNTS_ENABLED=true — the only type that can host
- * Treasury/Issuing + platform bank-balance reads — falling back to Express
- * (`createConnectAccount`) otherwise. Both paths stamp `metadata.agentId` on
- * the Stripe account.
+ * Global is the ecosystem's only Stripe platform and the only service allowed
+ * to provision connected accounts. Group may reuse a globally-issued account
+ * reference already mirrored onto a local settlement wallet, but it fails
+ * closed when that reference is absent.
  *
  * Persistence contract: the account id lives on the owner's SETTLEMENT wallet
  * at `metadata.stripeConnectAccountId` — exactly where every existing reader
  * (seller actions, treasury-banking, checkout capability checks) looks.
  *
- * Idempotency: the wallet row is re-read at call time; an existing
- * `stripeConnectAccountId` short-circuits without touching Stripe, so callers
- * (and batch re-runs) are safe to invoke unconditionally.
+ * This deliberately performs no Stripe API calls.
  */
 
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '@/db';
 import { agents, wallets } from '@/db/schema';
-import { createConnectAccount } from '@/lib/stripe-connect';
-import { createCustomConnectAccount, isCustomConnectEnabled } from '@/lib/stripe-treasury';
-import { getSettlementWalletForAgent } from '@/lib/wallet';
+import { isGroupAgentType } from '@/lib/agent-types';
 
 export interface EnsureConnectAccountResult {
   /** The Stripe Connect account id now recorded on the settlement wallet. */
   connectAccountId: string;
-  /** True when this call created the account; false when one already existed. */
+  /** Always false on Group; only Global may create an account. */
   created: boolean;
 }
 
 export interface EnsureConnectAccountForWalletInput {
   /** The settlement wallet the account id persists on. */
   walletId: string;
-  /** The agent the account belongs to (stamped as `metadata.agentId` on Stripe). */
+  /** The agent that must own the settlement wallet. */
   ownerId: string;
-  /** Email to attach to the Stripe account, when known. */
+  /** Retained for call-site compatibility; Group never sends it to Stripe. */
   ownerEmail?: string | null;
-  /** ISO alpha-2 country required when a new account must be created. */
+  /** Retained for call-site compatibility; Global owns country verification. */
   accountCountry?: string;
-  /** The wallet's type ('personal' | 'group' | 'project') — recorded on the Stripe account metadata. */
+  /** The wallet type expected by the caller. */
   walletType: string;
-  /** Extra string metadata merged onto the Stripe account (e.g. an onboarding returnPath). */
+  /** Retained for call-site compatibility; Group never sends it to Stripe. */
   accountMetadata?: Record<string, string>;
 }
 
 /**
- * Ensure the given settlement wallet has a Stripe Connect account, creating
- * one when missing and persisting its id at `metadata.stripeConnectAccountId`.
+ * Return a Global-issued account reference already mirrored on a settlement
+ * wallet. Group never provisions an account or writes wallet metadata here.
  *
- * This is the account-creation core extracted from `setupConnectAccountAction`
- * — Custom (controller) account when {@link isCustomConnectEnabled}, Express
- * otherwise, with `agentId`/`walletId`/`ownerId`/`walletType` metadata on the
- * Stripe account.
- *
- * @throws {Error} When the wallet row does not exist or Stripe account creation fails.
+ * @throws {Error} When the wallet is missing, does not belong to the expected
+ * owner/type, or has no Global-issued account reference.
  */
 export async function ensureConnectAccountForWallet(
   input: EnsureConnectAccountForWalletInput,
 ): Promise<EnsureConnectAccountResult> {
   const [wallet] = await db
-    .select({ id: wallets.id, metadata: wallets.metadata })
+    .select({
+      id: wallets.id,
+      ownerId: wallets.ownerId,
+      type: wallets.type,
+      metadata: wallets.metadata,
+    })
     .from(wallets)
     .where(eq(wallets.id, input.walletId))
     .limit(1);
@@ -73,62 +64,33 @@ export async function ensureConnectAccountForWallet(
   if (!wallet) {
     throw new Error('Treasury wallet not found.');
   }
+  if (wallet.ownerId !== input.ownerId || wallet.type !== input.walletType) {
+    throw new Error('Treasury wallet does not match the requested owner and type.');
+  }
 
   const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
   const existingAccountId = walletMeta.stripeConnectAccountId;
   if (typeof existingAccountId === 'string' && existingAccountId.length > 0) {
     return { connectAccountId: existingAccountId, created: false };
   }
-  const country = input.accountCountry?.trim().toUpperCase();
-  if (!country || !/^[A-Z]{2}$/.test(country)) {
-    throw new Error('Bank country is required before creating a connected account.');
-  }
-
-  const accountMetadata: Record<string, string> = {
-    walletId: wallet.id,
-    ownerId: input.ownerId,
-    walletType: input.walletType,
-    ...(input.accountMetadata ?? {}),
-  };
-
-  // Default account type: Custom (controller-based) when enabled — the only
-  // type that can host Treasury/Issuing + platform bank-balance reads.
-  // Hosted Account-Links onboarding works for both, so downstream flows are shared.
-  const account = isCustomConnectEnabled() && country === 'US'
-    ? await createCustomConnectAccount({
-        agentId: input.ownerId,
-        email: input.ownerEmail ?? undefined,
-        country,
-        metadata: accountMetadata,
-      })
-    : await createConnectAccount(input.ownerId, input.ownerEmail ?? undefined, accountMetadata, {
-        country,
-      });
-
-  await db
-    .update(wallets)
-    .set({
-      metadata: { ...walletMeta, stripeConnectAccountId: account.id },
-      updatedAt: new Date(),
-    })
-    .where(eq(wallets.id, wallet.id));
-
-  return { connectAccountId: account.id, created: true };
+  throw new Error(
+    'Connected accounts are provisioned by Global, the ecosystem Stripe authority. This Group instance cannot create one locally.',
+  );
 }
 
 /**
- * Ensure `agentId`'s settlement wallet has a Stripe Connect account — the
- * agent-addressed form of {@link ensureConnectAccountForWallet}. Resolves (or
- * creates) the agent's settlement wallet via {@link getSettlementWalletForAgent},
- * then delegates. Idempotent and safe to re-run.
+ * Read `agentId`'s owner-scoped settlement wallet and return its mirrored
+ * Global-issued account reference. This lookup never creates a wallet because
+ * personal-wallet creation can create a Stripe Customer.
  *
- * @throws {Error} When the agent does not exist (or is soft-deleted) or Stripe creation fails.
+ * @throws {Error} When the agent/wallet is missing or no Global-issued account
+ * reference has been mirrored locally.
  */
 export async function ensureConnectAccountForAgent(
   agentId: string,
 ): Promise<EnsureConnectAccountResult> {
   const [agent] = await db
-    .select({ id: agents.id, email: agents.email, deletedAt: agents.deletedAt })
+    .select({ id: agents.id, type: agents.type, deletedAt: agents.deletedAt })
     .from(agents)
     .where(eq(agents.id, agentId))
     .limit(1);
@@ -137,12 +99,28 @@ export async function ensureConnectAccountForAgent(
     throw new Error(`Agent not found: ${agentId}`);
   }
 
-  const wallet = await getSettlementWalletForAgent(agentId);
+  const walletType = isGroupAgentType(agent.type) ? 'group' : 'personal';
+  const [wallet] = await db
+    .select({ id: wallets.id })
+    .from(wallets)
+    .where(
+      and(
+        eq(wallets.ownerId, agentId),
+        eq(wallets.type, walletType),
+        isNull(wallets.resourceId),
+      ),
+    )
+    .limit(1);
+
+  if (!wallet) {
+    throw new Error(
+      'Connected accounts are provisioned by Global, the ecosystem Stripe authority. No mirrored payment account is available locally.',
+    );
+  }
 
   return ensureConnectAccountForWallet({
     walletId: wallet.id,
     ownerId: agentId,
-    ownerEmail: agent.email,
-    walletType: wallet.type,
+    walletType,
   });
 }

@@ -27,13 +27,24 @@ import {
 // vi.hoisted — set env vars before module evaluation
 // ---------------------------------------------------------------------------
 
-const { mockConstructEvent, mockSubscriptionsRetrieve, mockTierForPriceId, mockTransfersCreate } =
+const {
+  mockConstructEvent,
+  mockSubscriptionsRetrieve,
+  mockInvoicesRetrieve,
+  mockPaymentIntentsRetrieve,
+  mockChargesRetrieve,
+  mockTierForPriceId,
+  mockTransfersCreate,
+} =
   vi.hoisted(() => {
     process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
 
     return {
       mockConstructEvent: vi.fn(),
       mockSubscriptionsRetrieve: vi.fn(),
+      mockInvoicesRetrieve: vi.fn(),
+      mockPaymentIntentsRetrieve: vi.fn(),
+      mockChargesRetrieve: vi.fn(),
       mockTierForPriceId: vi.fn(),
       mockTransfersCreate: vi.fn(),
     };
@@ -53,7 +64,9 @@ vi.mock("stripe", () => {
     return {
       webhooks: { constructEvent: mockConstructEvent },
       subscriptions: { retrieve: mockSubscriptionsRetrieve },
-      paymentIntents: { retrieve: vi.fn().mockResolvedValue({ id: 'pi_test', transfer_data: null }) },
+      invoices: { retrieve: mockInvoicesRetrieve },
+      charges: { retrieve: mockChargesRetrieve },
+      paymentIntents: { retrieve: mockPaymentIntentsRetrieve },
     };
   }
   return { default: StripeMock };
@@ -63,8 +76,10 @@ vi.mock("@/lib/billing", () => ({
   getStripe: () => ({
     webhooks: { constructEvent: mockConstructEvent },
     subscriptions: { retrieve: mockSubscriptionsRetrieve },
+    invoices: { retrieve: mockInvoicesRetrieve },
+    charges: { retrieve: mockChargesRetrieve },
     transfers: { create: mockTransfersCreate },
-    paymentIntents: { retrieve: vi.fn().mockResolvedValue({ id: 'pi_test', transfer_data: null }) },
+    paymentIntents: { retrieve: mockPaymentIntentsRetrieve },
   }),
   tierForPriceId: (...args: unknown[]) => mockTierForPriceId(...args),
   getOrCreateStripeCustomer: vi.fn().mockResolvedValue('cus_test'),
@@ -123,8 +138,8 @@ function makeStripeSubscription(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeStripeEvent(type: string, dataObject: unknown) {
-  return { type, data: { object: dataObject } };
+function makeStripeEvent(type: string, dataObject: unknown, id = `evt_${type.replaceAll('.', '_')}`) {
+  return { id, type, data: { object: dataObject } };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +149,12 @@ function makeStripeEvent(type: string, dataObject: unknown) {
 describe("POST /api/stripe/webhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPaymentIntentsRetrieve.mockResolvedValue({
+      id: 'pi_test',
+      transfer_data: null,
+      latest_charge: null,
+    });
+    mockChargesRetrieve.mockResolvedValue({ id: 'ch_test', amount: 1000 });
   });
 
   // -----------------------------------------------------------------------
@@ -703,6 +724,133 @@ describe("POST /api/stripe/webhook", () => {
     });
   });
 
+  describe("invoice.paid (group membership capital)", () => {
+    it("settles only the paid pre-tax invoice amount and is idempotent by invoice id", () =>
+      withTestTransaction(async (db) => {
+        const member = await createTestAgent(db);
+        const group = await createTestGroup(db);
+        const groupWallet = await createTestWallet(db, group.id, { type: "group" });
+        const stripeSub = makeStripeSubscription({
+          id: "sub_group_paid",
+          currency: "usd",
+          metadata: {
+            groupSubscription: "true",
+            memberAgentId: member.id,
+            groupId: group.id,
+            planId: "plan_monthly",
+            settlementRail: "platform_capital",
+            applicationFeeCents: "0",
+          },
+        });
+        mockSubscriptionsRetrieve.mockResolvedValue(stripeSub);
+        mockConstructEvent.mockReturnValue(
+          makeStripeEvent("customer.subscription.updated", stripeSub),
+        );
+        let response = await POST(
+          makeWebhookRequest("{}", { "stripe-signature": VALID_SIGNATURE }),
+        );
+        expect(response.status).toBe(STATUS_OK);
+
+        const invoice = {
+          id: "in_group_paid",
+          status: "paid",
+          amount_paid: 1080,
+          subtotal: 1000,
+          subtotal_excluding_tax: 1000,
+          total_excluding_tax: 1000,
+          currency: "usd",
+          parent: {
+            subscription_details: { subscription: "sub_group_paid" },
+          },
+          payments: {
+            data: [
+              {
+                status: "paid",
+                payment: { payment_intent: "pi_group_paid", type: "payment_intent" },
+              },
+            ],
+          },
+        };
+
+        mockConstructEvent.mockReturnValue(
+          makeStripeEvent("invoice.paid", invoice, "evt_invoice_paid_1"),
+        );
+        response = await POST(
+          makeWebhookRequest("{}", { "stripe-signature": VALID_SIGNATURE }),
+        );
+        expect(response.status).toBe(STATUS_OK);
+
+        mockConstructEvent.mockReturnValue(
+          makeStripeEvent("invoice.paid", invoice, "evt_invoice_paid_retry"),
+        );
+        response = await POST(
+          makeWebhookRequest("{}", { "stripe-signature": VALID_SIGNATURE }),
+        );
+        expect(response.status).toBe(STATUS_OK);
+
+        const [walletAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, groupWallet.id));
+        expect(walletAfter.balanceCents).toBe(1000);
+
+        const deposits = (await db.select().from(walletTransactions)).filter(
+          (row) =>
+            row.type === "group_deposit" &&
+            (row.metadata as Record<string, unknown>)?.stripeInvoiceId === "in_group_paid",
+        );
+        expect(deposits).toHaveLength(1);
+        expect(deposits[0].amountCents).toBe(1000);
+
+        const capital = await db
+          .select()
+          .from(capitalEntries)
+          .where(eq(capitalEntries.walletId, groupWallet.id));
+        expect(capital).toHaveLength(1);
+        expect(capital[0].settlementStatus).toBe("pending");
+        expect(capital[0].availableOn).toBeNull();
+      }));
+
+    it("does not mint group capital from a trialing subscription event", () =>
+      withTestTransaction(async (db) => {
+        const member = await createTestAgent(db);
+        const group = await createTestGroup(db);
+        const groupWallet = await createTestWallet(db, group.id, { type: "group" });
+        const stripeSub = makeStripeSubscription({
+          id: "sub_group_trial",
+          status: "trialing",
+          metadata: {
+            groupSubscription: "true",
+            memberAgentId: member.id,
+            groupId: group.id,
+            planId: "plan_trial",
+            settlementRail: "platform_capital",
+            applicationFeeCents: "0",
+          },
+        });
+        mockConstructEvent.mockReturnValue(
+          makeStripeEvent("customer.subscription.updated", stripeSub),
+        );
+
+        const response = await POST(
+          makeWebhookRequest("{}", { "stripe-signature": VALID_SIGNATURE }),
+        );
+        expect(response.status).toBe(STATUS_OK);
+
+        const [walletAfter] = await db
+          .select()
+          .from(wallets)
+          .where(eq(wallets.id, groupWallet.id));
+        expect(walletAfter.balanceCents).toBe(0);
+        expect(
+          await db
+            .select()
+            .from(capitalEntries)
+            .where(eq(capitalEntries.walletId, groupWallet.id)),
+        ).toHaveLength(0);
+      }));
+  });
+
   // -----------------------------------------------------------------------
   // 12. payment_intent.succeeded — wallet deposit (real DB)
   // -----------------------------------------------------------------------
@@ -871,8 +1019,12 @@ describe("POST /api/stripe/webhook", () => {
         const session = {
           id: "cs_ticket_session",
           mode: "payment",
+          payment_status: "paid",
           payment_intent: "pi_ticket_123",
           currency: "usd",
+          amount_subtotal: 1000,
+          amount_total: 1080,
+          total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 80 },
           metadata: {
             purchaseType: "event_ticket",
             eventId: "evt_concert_abc",
@@ -910,9 +1062,9 @@ describe("POST /api/stripe/webhook", () => {
           .limit(1);
 
         expect(tx).toBeDefined();
-        expect(tx.type).toBe("event_ticket");
-        expect(tx.amountCents).toBe(1000);
-        expect(tx.feeCents).toBe(100); // 50 + 30 + 20
+        expect(tx.type).toBe("marketplace_purchase");
+        expect(tx.amountCents).toBe(1080);
+        expect(tx.feeCents).toBe(180); // 100 pre-tax fees + 80 Stripe Tax
         expect(tx.status).toBe("completed");
 
         const [updatedOrganizerWallet] = await db
@@ -950,6 +1102,11 @@ describe("POST /api/stripe/webhook", () => {
               row.amountCents === 100,
           ),
         ).toBe(true);
+
+        const capital = await db.select().from(capitalEntries);
+        expect(capital).toHaveLength(2);
+        expect(capital.every((entry) => entry.settlementStatus === "pending")).toBe(true);
+        expect(capital.every((entry) => entry.availableOn === null)).toBe(true);
       }));
 
     it("is idempotent — does not duplicate wallet transaction", () =>
@@ -978,8 +1135,12 @@ describe("POST /api/stripe/webhook", () => {
         const session = {
           id: "cs_ticket_dup",
           mode: "payment",
+          payment_status: "paid",
           payment_intent: "pi_ticket_dup",
           currency: "usd",
+          amount_subtotal: 1000,
+          amount_total: 1000,
+          total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 0 },
           metadata: {
             purchaseType: "event_ticket",
             eventId: "evt_abc",
@@ -991,7 +1152,7 @@ describe("POST /api/stripe/webhook", () => {
         };
 
         mockConstructEvent.mockReturnValue(
-          makeStripeEvent("checkout.session.completed", session)
+          makeStripeEvent("checkout.session.async_payment_succeeded", session)
         );
 
         const request = makeWebhookRequest("{}", {
@@ -1016,6 +1177,7 @@ describe("POST /api/stripe/webhook", () => {
       const session = {
         id: "cs_generic_payment",
         mode: "payment",
+        payment_status: "paid",
         payment_intent: "pi_generic",
         metadata: { purchaseType: "donation" },
       };
@@ -1030,6 +1192,26 @@ describe("POST /api/stripe/webhook", () => {
       const response = await POST(request);
 
       expect(response.status).toBe(STATUS_OK);
+    });
+
+    it("does not fulfill an unpaid completed Checkout session", async () => {
+      const session = {
+        id: "cs_unpaid",
+        mode: "payment",
+        payment_status: "unpaid",
+        payment_intent: "pi_unpaid",
+        metadata: { purchaseType: "event_ticket" },
+      };
+      mockConstructEvent.mockReturnValue(
+        makeStripeEvent("checkout.session.completed", session),
+      );
+
+      const response = await POST(
+        makeWebhookRequest("{}", { "stripe-signature": VALID_SIGNATURE }),
+      );
+
+      expect(response.status).toBe(STATUS_OK);
+      expect(mockPaymentIntentsRetrieve).not.toHaveBeenCalled();
     });
   });
 
@@ -1046,8 +1228,12 @@ describe("POST /api/stripe/webhook", () => {
         const session = {
           id: "cs_marketplace_guest",
           mode: "payment",
+          payment_status: "paid",
           payment_intent: "pi_marketplace_guest",
           currency: "usd",
+          amount_subtotal: 1575,
+          amount_total: 1575,
+          total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 0 },
           customer_details: {
             email: "guest-buyer@example.com",
             name: "Guest Buyer",
@@ -1062,6 +1248,8 @@ describe("POST /api/stripe/webhook", () => {
             orgCommissionCents: "0",
             platformFeeCents: "75",
             priceCents: "1500",
+            buyerPlatformFeeCents: "75",
+            buyerTotalCents: "1575",
           },
         };
 
@@ -1083,7 +1271,7 @@ describe("POST /api/stripe/webhook", () => {
           .limit(1);
 
         expect(tx?.type).toBe("marketplace_purchase");
-        expect(tx?.amountCents).toBe(1500);
+        expect(tx?.amountCents).toBe(1575);
         expect(tx?.feeCents).toBe(75);
 
         const [guestReceipt] = await db

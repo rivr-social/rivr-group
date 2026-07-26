@@ -50,7 +50,12 @@ import {
 import { STATUS_BAD_REQUEST, STATUS_INTERNAL_ERROR } from '@/lib/http-status';
 import { consumeBookingSlot, isBookingSlotAvailable } from '@/lib/booking-slots';
 import { assertAmountReconciled } from '@/lib/stripe-reconcile';
-import { ensureConnectAccountForAgent } from '@/lib/connect-account';
+import { reconcileTaxExclusiveCheckout } from '@/lib/stripe-checkout-settlement';
+import {
+  clawbackChargeback,
+  clawbackRefund,
+  reverseChargebackClawback,
+} from '@/lib/chargeback';
 
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const MONTHLY_SUBSCRIPTION_THANKS_GRANT = 100;
@@ -359,6 +364,7 @@ export async function POST(request: NextRequest) {
   try {
     switch (event.type) {
       case 'checkout.session.completed':
+      case 'checkout.session.async_payment_succeeded':
         await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
         break;
 
@@ -369,6 +375,10 @@ export async function POST(request: NextRequest) {
 
       case 'customer.subscription.deleted':
         await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        break;
+
+      case 'invoice.paid':
+        await handlePaidInvoice(event.data.object as Stripe.Invoice);
         break;
 
       case 'payment_intent.succeeded': {
@@ -410,6 +420,13 @@ export async function POST(request: NextRequest) {
             : charge.payment_intent?.id;
 
         if (refundPiId) {
+          await clawbackRefund({
+            eventId: event.id,
+            paymentIntentId: refundPiId,
+            chargeAmountCents: charge.amount,
+            totalRefundedCents: charge.amount_refunded,
+          });
+
           const [matchedReceipt] = await db
             .select({ id: resources.id, metadata: resources.metadata })
             .from(resources)
@@ -431,6 +448,48 @@ export async function POST(request: NextRequest) {
               .where(eq(resources.id, matchedReceipt.id));
           }
         }
+        break;
+      }
+
+      case 'charge.dispute.created': {
+        const dispute = event.data.object as Stripe.Dispute;
+        const paymentIntentId =
+          typeof dispute.payment_intent === 'string'
+            ? dispute.payment_intent
+            : dispute.payment_intent?.id;
+        if (!paymentIntentId) {
+          throw new Error(`Dispute ${dispute.id} has no payment intent`);
+        }
+        if (typeof dispute.charge === 'string') {
+          throw new Error(
+            `Dispute ${dispute.id} must be forwarded by Global with an expanded charge`,
+          );
+        }
+        const charge = dispute.charge;
+        await clawbackChargeback({
+          eventId: event.id,
+          paymentIntentId,
+          disputeId: dispute.id,
+          chargeAmountCents: charge.amount,
+          disputeAmountCents: dispute.amount,
+        });
+        break;
+      }
+
+      case 'charge.dispute.funds_reinstated': {
+        const dispute = event.data.object as Stripe.Dispute;
+        const paymentIntentId =
+          typeof dispute.payment_intent === 'string'
+            ? dispute.payment_intent
+            : dispute.payment_intent?.id;
+        if (!paymentIntentId) {
+          throw new Error(`Reinstated dispute ${dispute.id} has no payment intent`);
+        }
+        await reverseChargebackClawback({
+          eventId: event.id,
+          paymentIntentId,
+          disputeId: dispute.id,
+        });
         break;
       }
 
@@ -523,6 +582,10 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
  * Idempotent by stripePaymentIntentId unique key.
  */
 async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) {
+  if (session.payment_status !== 'paid') {
+    return;
+  }
+
   const metadata = session.metadata ?? {};
 
   if (metadata.purchaseType === 'marketplace_purchase') {
@@ -566,13 +629,16 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
 
   const totalCents = Number(metadata.totalCents ?? 0);
   const platformFeeCents = Number(metadata.platformFeeCents ?? 0);
-  const salesTaxCents = Number(metadata.salesTaxCents ?? 0);
+  const legacySalesTaxCents = Number(metadata.salesTaxCents ?? 0);
   const paymentFeeCents = Number(metadata.paymentFeeCents ?? 0);
-  const feeCents = platformFeeCents + salesTaxCents + paymentFeeCents;
-  const sellerNetCents = totalCents - feeCents;
+  const preTaxFeeCents = platformFeeCents + legacySalesTaxCents + paymentFeeCents;
+  const sellerNetCents = totalCents - preTaxFeeCents;
 
-  // Reconcile metadata amounts against Stripe's authoritative charge
-  assertAmountReconciled(session.amount_total ?? 0, totalCents, `event-ticket:${session.id}`);
+  const checkoutAmounts = reconcileTaxExclusiveCheckout(
+    session,
+    totalCents,
+    `event-ticket:${session.id}`,
+  );
 
   // Idempotency guard: check once before opening a transaction to short-circuit duplicates.
   const [existingTx] = await db
@@ -587,7 +653,7 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
 
   const payoutEligibleAt = await getPaymentIntentPayoutEligibleAt(paymentIntentId);
   const organizerWallet = await getSettlementWalletForAgent(organizerAgentId);
-  const platformWallet = feeCents > 0 ? await getPlatformWallet() : null;
+  const platformWallet = preTaxFeeCents > 0 ? await getPlatformWallet() : null;
   const ticketSelections = parsedSelections.length > 0
     ? parsedSelections
         .map((selection) => ({
@@ -635,17 +701,19 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
           ticketProductId,
           subtotalCents: Number(metadata.subtotalCents ?? 0),
           platformFeeCents,
-          salesTaxCents,
+          salesTaxCents: checkoutAmounts.taxCents,
+          legacySalesTaxCents,
           paymentFeeCents,
-          totalCents,
+          preTaxTotalCents: totalCents,
+          totalCents: checkoutAmounts.chargedTotalCents,
         },
       } as NewLedgerEntry)
       .returning({ id: ledger.id });
 
     await tx.insert(walletTransactions).values({
       type: 'marketplace_purchase',
-      amountCents: totalCents,
-      feeCents,
+      amountCents: checkoutAmounts.chargedTotalCents,
+      feeCents: preTaxFeeCents + checkoutAmounts.taxCents,
       currency: session.currency ?? 'usd',
       // Business traceability: description helps with back-office reconciliation.
       description: `Event ticket purchase for event ${eventId}`,
@@ -663,12 +731,12 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
       },
     });
 
-    let remainingFeeCents = feeCents;
+    let remainingFeeCents = preTaxFeeCents;
     for (const [index, selection] of ticketSelections.entries()) {
       const lineFeeCents =
         index === ticketSelections.length - 1
           ? remainingFeeCents
-          : Math.floor((feeCents * selection.subtotalCents) / Math.max(1, Number(metadata.subtotalCents ?? totalCents)));
+          : Math.floor((preTaxFeeCents * selection.subtotalCents) / Math.max(1, Number(metadata.subtotalCents ?? totalCents)));
       remainingFeeCents -= lineFeeCents;
 
       await tx.insert(walletTransactions).values({
@@ -722,7 +790,7 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
       }).returning({ id: walletTransactions.id });
 
       await creditWalletCapital(tx, organizerWallet.id, sellerNetCents, {
-        settlementStatus: payoutEligibleAt ? 'pending' : 'cleared',
+        settlementStatus: 'pending',
         availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
         sourceType: 'stripe_event_ticket',
         sourceTransactionId: sellerPayoutTx.id,
@@ -733,11 +801,11 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
       });
     }
 
-    if (feeCents > 0 && platformWallet) {
+    if (preTaxFeeCents > 0 && platformWallet) {
       await tx
         .update(wallets)
         .set({
-          balanceCents: sql`${wallets.balanceCents} + ${feeCents}`,
+          balanceCents: sql`${wallets.balanceCents} + ${preTaxFeeCents}`,
           updatedAt: new Date(),
         })
         .where(eq(wallets.id, platformWallet.id));
@@ -745,7 +813,7 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
       const [platformFeeTx] = await tx.insert(walletTransactions).values({
         type: 'service_fee',
         toWalletId: platformWallet.id,
-        amountCents: feeCents,
+        amountCents: preTaxFeeCents,
         feeCents: 0,
         currency: session.currency ?? 'usd',
         description: `Service fee for event ticket ${eventId}`,
@@ -762,8 +830,8 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
         },
       }).returning({ id: walletTransactions.id });
 
-      await creditWalletCapital(tx, platformWallet.id, feeCents, {
-        settlementStatus: payoutEligibleAt ? 'pending' : 'cleared',
+      await creditWalletCapital(tx, platformWallet.id, preTaxFeeCents, {
+        settlementStatus: 'pending',
         availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
         sourceType: 'stripe_event_ticket_fee',
         sourceTransactionId: platformFeeTx.id,
@@ -803,8 +871,11 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
 
   let buyerAgentId = metadata.buyerAgentId || null;
 
-  // Reconcile metadata amounts against Stripe's authoritative charge
-  assertAmountReconciled(session.amount_total ?? 0, buyerTotalCents, `marketplace:${session.id}`);
+  const checkoutAmounts = reconcileTaxExclusiveCheckout(
+    session,
+    buyerTotalCents,
+    `marketplace:${session.id}`,
+  );
 
   if (!listingId || !sellerAgentId) {
     console.warn('Marketplace purchase checkout missing required metadata:', session.id);
@@ -876,8 +947,6 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
     }
   }
 
-  const totalFeeCents = platformFeeCents + orgCommissionCents;
-
   // Resolve how the seller-net is distributed. When the listing is bound to a
   // project (server-trusted `metadata.projectId`), the seller-net cascades to
   // the project treasury + configured downstream recipients; otherwise it is a
@@ -935,8 +1004,8 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
     // Record wallet transaction
     await tx.insert(walletTransactions).values({
       type: 'marketplace_purchase',
-      amountCents: buyerTotalCents,
-      feeCents: buyerTotalCents - sellerCreditCents,
+      amountCents: checkoutAmounts.chargedTotalCents,
+      feeCents: checkoutAmounts.chargedTotalCents - sellerCreditCents,
       currency: session.currency ?? 'usd',
       description: `Marketplace purchase: ${listingId}`,
       stripePaymentIntentId: paymentIntentId,
@@ -953,7 +1022,9 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
         bookingDate: bookingSelection?.date ?? null,
         bookingSlot: bookingSelection?.slot ?? null,
         orgId,
-        purchaseType: 'marketplace_purchase',
+          purchaseType: 'marketplace_purchase',
+          stripeTaxCents: checkoutAmounts.taxCents,
+          preTaxTotalCents: buyerTotalCents,
       },
     });
 
@@ -1087,8 +1158,10 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
           platformFeeCents: buyerPlatformFeeCents,
           platformMarginCents: platformFeeCents,
           orgCommissionCents,
-          totalCents: buyerTotalCents,
-          feeCents: buyerPlatformFeeCents,
+          preTaxTotalCents: buyerTotalCents,
+          salesTaxCents: checkoutAmounts.taxCents,
+          totalCents: checkoutAmounts.chargedTotalCents,
+          feeCents: buyerPlatformFeeCents + checkoutAmounts.taxCents,
           quantity: requestedQuantity,
           bookingDate: bookingSelection?.date ?? null,
           bookingSlot: bookingSelection?.slot ?? null,
@@ -1181,22 +1254,6 @@ async function handleSubscriptionUpsert(stripeSub: Stripe.Subscription) {
     }
   });
 
-  // Every SUBSCRIBING member gets a Stripe Connect account: provision it the
-  // moment the membership subscription is live. Idempotent (an existing
-  // wallet-metadata id short-circuits Stripe) and deliberately NON-FATAL —
-  // the subscription upsert above is already committed, so a Stripe hiccup
-  // here must not make the webhook 500/retry; `backfillConnectAccountsAction`
-  // re-covers any agent this call misses.
-  if (stripeSub.status === 'active' || stripeSub.status === 'trialing') {
-    try {
-      await ensureConnectAccountForAgent(agentId);
-    } catch (error) {
-      console.error(
-        `[stripe-webhook] ensureConnectAccountForAgent failed for subscriber ${agentId} (subscription ${stripeSub.id}):`,
-        error,
-      );
-    }
-  }
 }
 
 async function mintSubscriptionThanksGrant(
@@ -1375,38 +1432,104 @@ async function handleGroupSubscriptionUpsert(stripeSub: Stripe.Subscription) {
       stripeSubscriptionId: stripeSub.id,
     });
 
-    if (settlementRail === 'platform_capital') {
-      await settleGroupSubscriptionCapital({
-        stripeSub,
-        groupId,
-        applicationFeeCents,
-        periodStartUnix,
-      });
-    }
-
-    // The paying member's own record of the dues charge. Rail-independent (a
-    // member pays dues whether the group settles via connect or platform
-    // capital). Non-fatal + idempotent: a bookkeeping failure here must not
-    // 500 the webhook and unwind the already-committed membership grant and
-    // group-side settlement, and Stripe retries re-run it safely.
-    try {
-      await recordMemberDuesReceipt({
-        stripeSub,
-        memberAgentId,
-        groupId,
-        planId,
-        applicationFeeCents,
-        periodStartUnix,
-      });
-    } catch (error) {
-      console.error(
-        `[stripe-webhook] member dues receipt failed for ${memberAgentId} (subscription ${stripeSub.id}):`,
-        error,
-      );
-    }
   } else {
     await revokeGroupMembership({ memberAgentId, groupId });
   }
+}
+
+function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+  const parentSubscription = invoice.parent?.subscription_details?.subscription;
+  if (typeof parentSubscription === 'string') return parentSubscription;
+  if (parentSubscription && typeof parentSubscription === 'object') {
+    return parentSubscription.id;
+  }
+
+  const legacySubscription = (
+    invoice as Stripe.Invoice & {
+      subscription?: string | Stripe.Subscription | null;
+    }
+  ).subscription;
+  if (typeof legacySubscription === 'string') return legacySubscription;
+  return legacySubscription?.id ?? null;
+}
+
+function getInvoicePaymentIntentId(invoice: Stripe.Invoice): string | null {
+  for (const payment of invoice.payments?.data ?? []) {
+    if (payment.status !== 'paid') continue;
+    const paymentIntent = payment.payment.payment_intent;
+    if (typeof paymentIntent === 'string') return paymentIntent;
+    if (paymentIntent && typeof paymentIntent === 'object') return paymentIntent.id;
+  }
+  return null;
+}
+
+async function handlePaidInvoice(invoice: Stripe.Invoice): Promise<void> {
+  if (invoice.status !== 'paid' || invoice.amount_paid <= 0) return;
+
+  const subscriptionId = getInvoiceSubscriptionId(invoice);
+  if (!subscriptionId) return;
+  const [subscription] = await db
+    .select({
+      memberAgentId: groupMembershipSubscriptions.agentId,
+      groupId: groupMembershipSubscriptions.groupId,
+      planId: groupMembershipSubscriptions.planId,
+      settlementRail: groupMembershipSubscriptions.settlementRail,
+      applicationFeeCents: groupMembershipSubscriptions.applicationFeeCents,
+    })
+    .from(groupMembershipSubscriptions)
+    .where(eq(groupMembershipSubscriptions.stripeSubscriptionId, subscriptionId))
+    .limit(1);
+  if (!subscription) {
+    throw new Error(
+      `Paid invoice ${invoice.id} arrived before its local group subscription record`,
+    );
+  }
+
+  const canonicalInvoice = invoice;
+  const paymentIntentId = getInvoicePaymentIntentId(canonicalInvoice);
+  if (!paymentIntentId) {
+    throw new Error(
+      `Paid invoice ${invoice.id} must be forwarded by Global with its payment intent`,
+    );
+  }
+  const payoutEligibleAt = await getPaymentIntentPayoutEligibleAt(paymentIntentId);
+  const preTaxInvoiceCents =
+    canonicalInvoice.total_excluding_tax ??
+    canonicalInvoice.subtotal_excluding_tax ??
+    canonicalInvoice.subtotal;
+  const grossCents = Math.max(
+    0,
+    Math.min(canonicalInvoice.amount_paid, preTaxInvoiceCents),
+  );
+  if (grossCents <= 0) return;
+
+  const applicationFeeCents = Math.min(
+    grossCents,
+    Math.max(0, subscription.applicationFeeCents),
+  );
+
+  if (subscription.settlementRail === 'platform_capital') {
+    await settleGroupSubscriptionCapital({
+      invoice: canonicalInvoice,
+      subscriptionId,
+      groupId: subscription.groupId,
+      grossCents,
+      applicationFeeCents,
+      paymentIntentId,
+      payoutEligibleAt,
+    });
+  }
+
+  await recordMemberDuesReceipt({
+    invoice: canonicalInvoice,
+    subscriptionId,
+    memberAgentId: subscription.memberAgentId,
+    groupId: subscription.groupId,
+    planId: subscription.planId,
+    grossCents,
+    applicationFeeCents,
+    paymentIntentId,
+  });
 }
 
 /**
@@ -1430,33 +1553,25 @@ async function handleGroupSubscriptionUpsert(stripeSub: Stripe.Subscription) {
  * card-funded, so this is a history/receipt log row, never an internal debit.
  */
 async function recordMemberDuesReceipt(params: {
-  stripeSub: Stripe.Subscription;
+  invoice: Stripe.Invoice;
+  subscriptionId: string;
   memberAgentId: string;
   groupId: string;
   planId: string;
+  grossCents: number;
   applicationFeeCents: number;
-  periodStartUnix: number;
+  paymentIntentId: string | null;
 }): Promise<void> {
-  const { stripeSub, memberAgentId, groupId, planId, applicationFeeCents, periodStartUnix } =
-    params;
-
-  // Only a genuinely paid, active cycle produces a dues receipt; a `trialing`
-  // subscription has not charged the member yet, so it writes nothing.
-  if (stripeSub.status !== 'active') return;
-
-  const grossCents = stripeSub.items.data[0]?.price?.unit_amount ?? 0;
-  if (grossCents <= 0) return;
-
-  const cycleKey = `${stripeSub.id}:${periodStartUnix}`;
-
-  // Idempotency: one member receipt per billing cycle, tolerant of webhook
-  // retries and repeated `customer.subscription.updated` events within a period.
-  const [existing] = await db
-    .select({ id: walletTransactions.id })
-    .from(walletTransactions)
-    .where(sql`${walletTransactions.metadata}->>'duesReceiptCycleKey' = ${cycleKey}`)
-    .limit(1);
-  if (existing) return;
+  const {
+    invoice,
+    subscriptionId,
+    memberAgentId,
+    groupId,
+    planId,
+    grossCents,
+    applicationFeeCents,
+    paymentIntentId,
+  } = params;
 
   const memberWallet = await getOrCreateWallet(memberAgentId, 'personal');
 
@@ -1467,59 +1582,58 @@ async function recordMemberDuesReceipt(params: {
     .limit(1);
   const groupLabel = group?.name ?? 'group';
 
-  const invoiceId =
-    typeof stripeSub.latest_invoice === 'string'
-      ? stripeSub.latest_invoice
-      : stripeSub.latest_invoice?.id ?? null;
-
-  await db.insert(walletTransactions).values({
-    type: 'marketplace_purchase',
-    fromWalletId: memberWallet.id,
-    amountCents: grossCents,
-    feeCents: applicationFeeCents,
-    currency: stripeSub.currency ?? 'usd',
-    description: `Membership dues — ${groupLabel}`,
-    referenceType: 'agent',
-    referenceId: groupId,
-    status: 'completed',
-    metadata: {
-      source: 'group_membership_dues',
-      duesReceiptCycleKey: cycleKey,
-      stripeSubscriptionId: stripeSub.id,
-      stripeInvoiceId: invoiceId,
-      groupId,
-      planId,
-      memberAgentId,
-    },
-  });
+  await db
+    .insert(walletTransactions)
+    .values({
+      type: 'marketplace_purchase',
+      fromWalletId: memberWallet.id,
+      amountCents: invoice.amount_paid,
+      feeCents: applicationFeeCents,
+      currency: invoice.currency,
+      stripePaymentIntentId: `stripe-invoice-receipt:${invoice.id}`,
+      description: `Membership dues — ${groupLabel}`,
+      referenceType: 'agent',
+      referenceId: groupId,
+      status: 'completed',
+      metadata: {
+        source: 'group_membership_dues',
+        stripeSubscriptionId: subscriptionId,
+        stripeInvoiceId: invoice.id,
+        paymentIntentId,
+        grossCents,
+        taxCents: Math.max(0, invoice.amount_paid - grossCents),
+        groupId,
+        planId,
+        memberAgentId,
+      },
+    })
+    .onConflictDoNothing({ target: walletTransactions.stripePaymentIntentId });
 }
 
 /**
  * Internal settlement for the platform-capital fallback rail. Credits the
  * group's settlement wallet with the net (gross minus platform fee) and the
  * platform wallet with the fee, mirroring the marketplace capital pattern.
- * Idempotent per billing period via a cycle key on the capital entries.
+ * Idempotent per paid invoice via durable invoice identifiers on the entries.
  */
 async function settleGroupSubscriptionCapital(params: {
-  stripeSub: Stripe.Subscription;
+  invoice: Stripe.Invoice;
+  subscriptionId: string;
   groupId: string;
+  grossCents: number;
   applicationFeeCents: number;
-  periodStartUnix: number;
+  paymentIntentId: string | null;
+  payoutEligibleAt: string | null;
 }): Promise<void> {
-  const { stripeSub, groupId, applicationFeeCents, periodStartUnix } = params;
-
-  const grossCents = stripeSub.items.data[0]?.price?.unit_amount ?? 0;
-  if (grossCents <= 0) return;
-
-  const cycleKey = `${stripeSub.id}:${periodStartUnix}`;
-
-  // Idempotency: skip if this period was already settled.
-  const [existingEntry] = await db
-    .select({ id: capitalEntries.id })
-    .from(capitalEntries)
-    .where(sql`${capitalEntries.metadata}->>'groupSubscriptionCycleKey' = ${cycleKey}`)
-    .limit(1);
-  if (existingEntry) return;
+  const {
+    invoice,
+    subscriptionId,
+    groupId,
+    grossCents,
+    applicationFeeCents,
+    paymentIntentId,
+    payoutEligibleAt,
+  } = params;
 
   const groupWallet = await getSettlementWalletForAgent(groupId);
   // A self-hosted SOVEREIGN group settling its OWN dues has no hosted-platform
@@ -1532,9 +1646,47 @@ async function settleGroupSubscriptionCapital(params: {
   const platformWallet = applicationFeeCents > 0 ? await getPlatformWalletOrNull() : null;
   const effectiveFeeCents = platformWallet ? applicationFeeCents : 0;
   const groupNetCents = Math.max(0, grossCents - effectiveFeeCents);
-  const currency = stripeSub.currency ?? 'usd';
+  const currency = invoice.currency;
 
   await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${invoice.id}, 0))`);
+    const [existingSettlement] = await tx
+      .select({ id: walletTransactions.id })
+      .from(walletTransactions)
+      .where(
+        eq(
+          walletTransactions.stripePaymentIntentId,
+          `stripe-invoice-settlement:${invoice.id}`,
+        ),
+      )
+      .limit(1);
+    if (existingSettlement) return;
+
+    await lockWallets(tx, [groupWallet.id, platformWallet?.id]);
+
+    const [groupTx] = await tx
+      .insert(walletTransactions)
+      .values({
+        type: 'group_deposit',
+        toWalletId: groupWallet.id,
+        amountCents: groupNetCents,
+        feeCents: effectiveFeeCents,
+        currency,
+        stripePaymentIntentId: `stripe-invoice-settlement:${invoice.id}`,
+        description: `Paid group membership invoice ${invoice.id}`,
+        referenceType: 'agent',
+        referenceId: groupId,
+        status: 'completed',
+        metadata: {
+          source: 'group_membership_subscription',
+          stripeInvoiceId: invoice.id,
+          stripeSubscriptionId: subscriptionId,
+          paymentIntentId,
+          groupId,
+        },
+      })
+      .returning({ id: walletTransactions.id });
+
     if (groupNetCents > 0) {
       await tx
         .update(wallets)
@@ -1544,34 +1696,15 @@ async function settleGroupSubscriptionCapital(params: {
         })
         .where(eq(wallets.id, groupWallet.id));
 
-      const [groupTx] = await tx
-        .insert(walletTransactions)
-        .values({
-          type: 'group_deposit',
-          toWalletId: groupWallet.id,
-          amountCents: groupNetCents,
-          feeCents: effectiveFeeCents,
-          currency,
-          description: `Group membership subscription ${stripeSub.id}`,
-          referenceType: 'agent',
-          referenceId: groupId,
-          status: 'completed',
-          metadata: {
-            source: 'group_membership_subscription',
-            groupSubscriptionCycleKey: cycleKey,
-            stripeSubscriptionId: stripeSub.id,
-            groupId,
-          },
-        })
-        .returning({ id: walletTransactions.id });
-
       await creditWalletCapital(tx, groupWallet.id, groupNetCents, {
         settlementStatus: 'pending',
+        availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
         sourceType: 'group_membership_subscription',
         sourceTransactionId: groupTx.id,
         metadata: {
-          groupSubscriptionCycleKey: cycleKey,
-          stripeSubscriptionId: stripeSub.id,
+          stripeInvoiceId: invoice.id,
+          stripeSubscriptionId: subscriptionId,
+          paymentIntentId,
           groupId,
           side: 'group_net',
         },
@@ -1595,14 +1728,15 @@ async function settleGroupSubscriptionCapital(params: {
           amountCents: effectiveFeeCents,
           feeCents: 0,
           currency,
-          description: `Platform fee for group membership subscription ${stripeSub.id}`,
+          description: `Platform fee for group membership subscription ${subscriptionId}`,
           referenceType: 'agent',
           referenceId: groupId,
           status: 'completed',
           metadata: {
             source: 'group_membership_subscription_platform_fee',
-            groupSubscriptionCycleKey: cycleKey,
-            stripeSubscriptionId: stripeSub.id,
+            stripeInvoiceId: invoice.id,
+            stripeSubscriptionId: subscriptionId,
+            paymentIntentId,
             groupId,
           },
         })
@@ -1610,11 +1744,13 @@ async function settleGroupSubscriptionCapital(params: {
 
       await creditWalletCapital(tx, platformWallet.id, effectiveFeeCents, {
         settlementStatus: 'pending',
+        availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
         sourceType: 'group_membership_subscription_platform_fee',
         sourceTransactionId: feeTx.id,
         metadata: {
-          groupSubscriptionCycleKey: cycleKey,
-          stripeSubscriptionId: stripeSub.id,
+          stripeInvoiceId: invoice.id,
+          stripeSubscriptionId: subscriptionId,
+          paymentIntentId,
           groupId,
           side: 'platform_fee',
         },

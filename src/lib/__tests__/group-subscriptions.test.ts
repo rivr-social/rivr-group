@@ -12,6 +12,7 @@ import {
   chargePricingFromBuyerTotal,
   GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT,
 } from "@/lib/group-subscription-pricing";
+import { PLATFORM_MARGIN_FIXED_CENTS } from "@/lib/checkout-fees";
 import type { GroupMembershipPlan } from "@/lib/group-memberships";
 
 function makePlan(overrides: Partial<GroupMembershipPlan> = {}): GroupMembershipPlan {
@@ -58,8 +59,8 @@ describe("computePlatformFeeCents", () => {
   });
 
   it("rounds fractional cents correctly", () => {
-    // 1999 * 5% = 99.95 -> 100
-    expect(computePlatformFeeCents(1999)).toBe(100);
+    // 1999 * 3.3% = 65.967 -> 66
+    expect(computePlatformFeeCents(1999)).toBe(66);
   });
 
   it("never returns a negative fee", () => {
@@ -83,7 +84,7 @@ describe("computeGroupSubscriptionChargePricing", () => {
     expect(pricing.buyerTotalCents).toBeGreaterThan(1000);
 
     // The application fee must cover Stripe's processing cost on the FULL
-    // buyer total plus RIVR's 5% margin on face value — this is exactly what
+    // buyer total plus RIVR's 3.3% margin on face value — this is exactly what
     // the flat 5%-of-face model violated ($0.50 fee vs ~$0.59 Stripe cost).
     const stripeFee = stripeFeeFor(pricing.buyerTotalCents);
     const platformNet = pricing.applicationFeeCents - stripeFee;
@@ -122,12 +123,15 @@ describe("computeGroupSubscriptionChargePricing", () => {
     expect(Math.abs(reconstructed - pricing.applicationFeeCents)).toBeLessThanOrEqual(1);
   });
 
-  it("adds no flat Connect overhead to dues (gross-up covers Stripe + 5% only)", () => {
+  it("adds no Connect overhead beyond the unified RIVR margin", () => {
     const face = 1000;
     const pricing = computeGroupSubscriptionChargePricing(face);
     const margin = computePlatformFeeCents(face);
-    // buyerTotal = ceil((face + margin + 30) / (1 − 0.029)) — no +$2.00 term.
-    const expected = Math.ceil((face + margin + STRIPE_FIXED_CENTS) / (1 - STRIPE_PERCENT));
+    // Includes the unified flat RIVR margin, but no separate Connect overhead.
+    const expected = Math.ceil(
+      (face + margin + PLATFORM_MARGIN_FIXED_CENTS + STRIPE_FIXED_CENTS) /
+        (1 - STRIPE_PERCENT),
+    );
     expect(pricing.buyerTotalCents).toBe(expected);
   });
 });

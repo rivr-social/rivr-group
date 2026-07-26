@@ -33,6 +33,13 @@ export default defineConfig({
       "src/lib/__tests__/permissions.test.ts",
       "src/lib/__tests__/referral-splits.test.ts",
       "src/lib/__tests__/work-completion.test.ts",
+      // Database-backed suites. Each imports `src/test/db`, which throws
+      // without DATABASE_URL — they belong to `pnpm test:db`, and left here
+      // they crashed the unit run instead of covering the money splits.
+      "src/lib/__tests__/settlement-splits.test.ts",
+      "src/lib/__tests__/lineage-distribution.test.ts",
+      "src/lib/federation/__tests__/group-action-tools.test.ts",
+      "src/__tests__/group-federation-mutations-route.test.ts",
     ],
     testTimeout: 30000,
     hookTimeout: 30000,

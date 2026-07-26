@@ -7,13 +7,14 @@
  */
 import type { GroupMembershipPlan } from '@/lib/group-memberships';
 import { calculateCheckoutFees } from '@/lib/checkout-fees';
+import { BPS_DIVISOR, MARKETPLACE_FEE_BPS } from '@/lib/wallet-constants';
 
 /**
  * RIVR's per-member platform fee on each group membership charge, as a percent
  * of the charge amount. Applied via Stripe `application_fee_percent` on the
  * Connect rail and computed into `applicationFeeCents` on both rails.
  */
-export const GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT = 5;
+export const GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT = MARKETPLACE_FEE_BPS / 100;
 
 export type GroupSubscriptionBillingPeriod = 'monthly' | 'yearly';
 
@@ -33,7 +34,7 @@ export function planAmountCents(
 
 /** Computes the RIVR per-member platform fee (cents) for a charge amount. */
 export function computePlatformFeeCents(amountCents: number): number {
-  return Math.max(0, Math.round((amountCents * GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT) / 100));
+  return Math.max(0, Math.round((amountCents * MARKETPLACE_FEE_BPS) / BPS_DIVISOR));
 }
 
 export interface GroupSubscriptionChargePricing {
@@ -67,7 +68,7 @@ export function computeGroupSubscriptionChargePricing(
   planAmountCentsValue: number,
 ): GroupSubscriptionChargePricing {
   const fees = calculateCheckoutFees(planAmountCentsValue, {
-    platformFeeBps: GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT * 100,
+    platformFeeBps: MARKETPLACE_FEE_BPS,
     connectOverheadCents: 0,
   });
   return chargePricingFromBuyerTotal(planAmountCentsValue, fees.buyerTotalCents);

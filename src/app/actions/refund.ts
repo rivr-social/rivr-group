@@ -3,16 +3,16 @@
 import { getSession } from '@/lib/auth/get-session';
 import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { db } from '@/db';
-import { resources, ledger, type NewLedgerEntry } from '@/db/schema';
+import { resources } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { getStripe } from '@/lib/billing';
 import { headers } from 'next/headers';
 import { getClientIp } from '@/lib/client-ip';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
 
 /**
  * Requests a refund for a receipt. The buyer must own the receipt.
- * Creates a Stripe refund and updates the receipt status.
+ * Validates local receipt ownership, then fails closed until Global's
+ * authenticated refund-obligation contract is available.
  */
 export async function requestRefundAction(receiptId: string): Promise<{ success: boolean; error?: string }> {
   // Unified session: a federated remote-viewer's receipt is owned by their
@@ -54,46 +54,9 @@ export async function requestRefundAction(receiptId: string): Promise<{ success:
   const paymentIntentId = meta.stripePaymentIntentId as string | undefined;
   if (!paymentIntentId) return { success: false, error: 'No payment intent found' };
 
-  try {
-    const stripe = getStripe();
-
-    // Verify the payment intent via Stripe API before issuing refund
-    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-    const receiptTotalCents = Number(meta.totalCents ?? 0);
-    if (receiptTotalCents > 0 && Math.abs(pi.amount - receiptTotalCents) > 1) {
-      console.error('Refund PI amount mismatch', { paymentIntentId, piAmount: pi.amount, receiptTotal: receiptTotalCents });
-      return { success: false, error: 'Payment verification failed' };
-    }
-    if (pi.status !== 'succeeded') {
-      return { success: false, error: 'Payment is not in a refundable state' };
-    }
-
-    await stripe.refunds.create({ payment_intent: paymentIntentId });
-
-    await db
-      .update(resources)
-      .set({
-        metadata: { ...meta, status: 'refund_requested', refundRequestedAt: new Date().toISOString() },
-      })
-      .where(eq(resources.id, receiptId));
-
-    await db.insert(ledger).values({
-      verb: 'refund',
-      subjectId: actorId,
-      objectId: meta.sellerAgentId as string,
-      objectType: 'agent',
-      resourceId: receiptId,
-      metadata: {
-        kind: 'refund-request',
-        originalListingId: meta.originalListingId,
-        paymentIntentId,
-        priceCents: meta.priceCents,
-      },
-    } as NewLedgerEntry);
-
-    return { success: true };
-  } catch (err: unknown) {
-    console.error('requestRefundAction failed:', err);
-    return { success: false, error: 'Refund failed. Please try again later.' };
-  }
+  return {
+    success: false,
+    error:
+      'Refund execution is owned by Global. This Group instance cannot create a Stripe refund directly.',
+  };
 }

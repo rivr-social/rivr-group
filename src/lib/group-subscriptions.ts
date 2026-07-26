@@ -15,7 +15,7 @@
  * Pricing (2026-07-11): the member's recurring charge is grossed up over the
  * plan's face value via `computeGroupSubscriptionChargePricing` (the canonical
  * `calculateCheckoutFees` gross-up, zero flat overhead) so the PAYER covers
- * Stripe's 2.9% + 30¢ and RIVR's 5% margin while the group nets the full plan
+ * Stripe's 2.9% + 30¢ and RIVR's unified 3.3% + $1.49 margin while the group nets the full plan
  * price on either rail. The previous flat-5%-of-face-value model netted the
  * platform NEGATIVE on small dues.
  * - `platform_capital`: fallback when the group is NOT yet onboarded to Connect.
@@ -26,7 +26,7 @@
  * 1. The sovereign group itself is a RIVR subscriber and pays the org fee
  *    through the cooperative `subscriptions` rail (unchanged, out of scope here).
  * 2. Each member subscription contributes a per-member platform fee, computed
- *    here as {@link GROUP_SUBSCRIPTION_PLATFORM_FEE_PERCENT}.
+ *    here through the shared marketplace fee constants.
  *
  * Dependencies:
  * - Stripe SDK + customer lookup from `@/lib/billing`.

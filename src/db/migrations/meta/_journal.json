@@ -239,6 +239,13 @@
       "when": 1782950400000,
       "tag": "0048_sso_nonces",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1782950400001,
+      "tag": "0051_wallet_recovery_debt",
+      "breakpoints": true
     }
   ]
 }

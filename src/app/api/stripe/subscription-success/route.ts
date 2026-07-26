@@ -3,14 +3,9 @@
  *
  * Purpose:
  * After a membership subscription checkout completes, Stripe redirects here.
- * This route checks whether the user already has a Stripe Connect account
- * set up. If not, it provisions one via the shared core
- * (`@/lib/connect-account` — Custom controller account when enabled, else
- * Express) and redirects to Stripe's hosted onboarding flow so the member can
- * receive payments. If Connect is already configured, it redirects to the
- * profile page. The Stripe webhook (`handleSubscriptionUpsert`) provisions
- * the same account server-side on activation; both paths share the
- * idempotent core, so whichever runs first wins and the other reuses it.
+ * Connected-account onboarding is owned by Global, the ecosystem's sole
+ * Stripe platform. This sovereign route only completes the local subscription
+ * redirect and never creates accounts or account links with local credentials.
  *
  * Auth: Requires an authenticated session to look up wallet/Connect state.
  */
@@ -20,20 +15,18 @@ import { getSession } from '@/lib/auth/get-session';
 import { resolveLocalActorId } from '@/lib/federation/resolution';
 import { ensureLocalActorAgent } from '@/lib/federation/actor-projection';
 import { db } from '@/db';
-import { agents } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { createAccountLink } from '@/lib/stripe-connect';
-import { ensureConnectAccountForWallet } from '@/lib/connect-account';
-import { getOrCreateWallet } from '@/lib/wallet';
+import { agents, wallets } from '@/db/schema';
+import { and, eq, isNull } from 'drizzle-orm';
+import { isGroupAgentType } from '@/lib/agent-types';
 
 /**
  * GET handler invoked by Stripe's `success_url` redirect after checkout.
  *
  * Flow:
  * 1. Verify authentication.
- * 2. Check wallet metadata for an existing `stripeConnectAccountId`.
- * 3. If missing, create a Connect Express account and redirect to onboarding.
- * 4. If present, redirect to `/profile?subscription=success`.
+ * 2. Project a federated actor locally when needed.
+ * 3. Preserve the normal success redirect when a Global-issued account is
+ *    already mirrored locally; otherwise add a Global-onboarding marker.
  */
 export async function GET(request: NextRequest) {
   // Unified session: the post-checkout redirect must recognize federated
@@ -58,44 +51,40 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const wallet = await getOrCreateWallet(userId, 'personal');
-    const walletMeta = (wallet.metadata ?? {}) as Record<string, unknown>;
-    const connectAccountId = walletMeta.stripeConnectAccountId as string | undefined;
-
-    // User already has a Connect account — skip onboarding.
-    if (connectAccountId) {
-      return NextResponse.redirect(new URL(resolvedReturnPath, baseUrl));
-    }
-
-    // Look up user email for the new Connect account.
     const [agent] = await db
-      .select({ email: agents.email })
+      .select({ type: agents.type })
       .from(agents)
       .where(eq(agents.id, userId))
       .limit(1);
+    const walletType = isGroupAgentType(agent?.type) ? 'group' : 'personal';
+    const [wallet] = await db
+      .select({ metadata: wallets.metadata })
+      .from(wallets)
+      .where(
+        and(
+          eq(wallets.ownerId, userId),
+          eq(wallets.type, walletType),
+          isNull(wallets.resourceId),
+        ),
+      )
+      .limit(1);
+    const walletMeta = (wallet?.metadata ?? {}) as Record<string, unknown>;
+    if (
+      typeof walletMeta.stripeConnectAccountId === 'string' &&
+      walletMeta.stripeConnectAccountId.length > 0
+    ) {
+      return NextResponse.redirect(new URL(resolvedReturnPath, baseUrl));
+    }
 
-    // Shared provisioning core (Custom controller account when enabled, else
-    // Express) — persists the id on the wallet metadata and is idempotent, so
-    // a webhook-provisioned account is simply reused here.
-    const { connectAccountId: newAccountId } = await ensureConnectAccountForWallet({
-      walletId: wallet.id,
-      ownerId: userId,
-      ownerEmail: agent?.email ?? null,
-      walletType: wallet.type,
-      accountMetadata: { returnPath: resolvedReturnPath },
-    });
-
-    // Redirect to Stripe's hosted onboarding.
-    const onboardingUrl = await createAccountLink(
-      newAccountId,
-      `${baseUrl}/api/stripe/connect?account_id=${newAccountId}&return_path=${encodeURIComponent(resolvedReturnPath)}`,
-      `${baseUrl}/api/stripe/connect?account_id=${newAccountId}&return_path=${encodeURIComponent(resolvedReturnPath)}`,
+    const separator = resolvedReturnPath.includes('?') ? '&' : '?';
+    return NextResponse.redirect(
+      new URL(`${resolvedReturnPath}${separator}connect=global_required`, baseUrl),
     );
-
-    return NextResponse.redirect(onboardingUrl);
   } catch (error) {
-    console.error('[subscription-success] Connect onboarding setup failed:', error);
-    // Fall through to profile even on error — subscription is already active.
-    return NextResponse.redirect(new URL(`${resolvedReturnPath}${resolvedReturnPath.includes("?") ? "&" : "?"}connect=error`, baseUrl));
+    console.error('[subscription-success] Unable to read mirrored payment account:', error);
+    const separator = resolvedReturnPath.includes('?') ? '&' : '?';
+    return NextResponse.redirect(
+      new URL(`${resolvedReturnPath}${separator}connect=error`, baseUrl),
+    );
   }
 }
