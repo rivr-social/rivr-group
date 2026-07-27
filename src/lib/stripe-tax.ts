@@ -164,3 +164,171 @@ export async function assertUntaxedChargePathAllowed(
 export function resetTaxRegistrationCacheForTests(): void {
   registrationCache = null;
 }
+
+/**
+ * Wallet (internal-balance) purchases run no Stripe charge, so no tax can be
+ * computed or remitted through Stripe. While unregistered that matches the
+ * card lanes (nothing collects anywhere). Once registered, letting wallet
+ * balance buy TAX-SENSITIVE items (tangible goods, in-person admissions)
+ * would silently under-collect — those purchases must go through a
+ * tax-computing card lane instead. Services stay wallet-payable: Colorado
+ * does not generally tax services, and under-collection there is the
+ * conservative failure mode already accepted on the card lanes' tax codes.
+ */
+export const WALLET_PURCHASE_TAXABLE_MESSAGE =
+  'This item is taxable and wallet balance cannot collect sales tax — please pay by card instead.';
+
+/** Whether a listing is tax-sensitive for the wallet-purchase guard. */
+export function isTaxSensitiveListingMetadata(
+  metadata: Record<string, unknown>,
+): boolean {
+  return taxCodeForListingMetadata(metadata) === STRIPE_TAX_CODE_GENERAL_GOODS;
+}
+
+// ---------------------------------------------------------------------------
+// Tax for ticket sales — venue (performance-location) sourcing
+// ---------------------------------------------------------------------------
+//
+// Admissions are taxed where the EVENT takes place, not where the buyer lives
+// (entertainment/amusement taxes stack on top of state+local sales tax there).
+// Stripe models this as a `performance` tax location attached per line item;
+// the feature is a public preview behind a preview API version. See
+// docs/active/marketplace-compliance-standards-research-2026-07-27.md §3.4.
+
+/** Preview API version that carries Tax-for-events. Per-request only. */
+export const STRIPE_TAX_EVENTS_API_VERSION = '2026-03-25.preview';
+
+/**
+ * Admission to Amusement, Entertainment & Recreation Venues – Participant.
+ * REQUIRES a performance location on the line item and can never be the
+ * account-default tax code.
+ */
+export const STRIPE_TAX_CODE_EVENT_ADMISSION = 'txcd_50010001';
+
+/** Structured venue address stored at `event.metadata.venueAddress`. */
+export interface VenueAddress {
+  line1: string;
+  line2?: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+}
+
+/**
+ * Reads and validates a structured venue address from event metadata.
+ * Returns null when absent or incomplete — callers decide whether that is a
+ * hard failure (paid in-person tickets) or fine (virtual events, free RSVPs).
+ */
+export function parseVenueAddress(
+  metadata: Record<string, unknown> | null | undefined,
+): VenueAddress | null {
+  const raw = metadata?.venueAddress;
+  if (!raw || typeof raw !== 'object') return null;
+  const a = raw as Record<string, unknown>;
+  const line1 = typeof a.line1 === 'string' ? a.line1.trim() : '';
+  const city = typeof a.city === 'string' ? a.city.trim() : '';
+  const state = typeof a.state === 'string' ? a.state.trim().toUpperCase() : '';
+  const postalCode = typeof a.postalCode === 'string' ? a.postalCode.trim() : '';
+  const country =
+    typeof a.country === 'string' && a.country.trim()
+      ? a.country.trim().toUpperCase()
+      : 'US';
+  if (!line1 || !city || !postalCode || !/^[A-Z]{2}$/.test(country)) return null;
+  // US addresses need a state for jurisdiction resolution.
+  if (country === 'US' && !state) return null;
+  const line2 = typeof a.line2 === 'string' && a.line2.trim() ? a.line2.trim() : undefined;
+  return { line1, ...(line2 ? { line2 } : {}), city, state, postalCode, country };
+}
+
+/**
+ * Whether the event happens online — an online admission is a digital service
+ * sourced to the BUYER's address (regular `automatic_tax` behavior), so it
+ * neither needs nor may use a performance location.
+ */
+export function isVirtualEventMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): boolean {
+  const meta = metadata ?? {};
+  return (
+    meta.meetingKind === 'virtual-meeting' ||
+    String(meta.eventType ?? '').toLowerCase() === 'online' ||
+    String(meta.locationType ?? '').toLowerCase() === 'online' ||
+    meta.isVirtual === true
+  );
+}
+
+/** Stable cache key for a venue address → performance tax location. */
+export function performanceLocationCacheKey(address: VenueAddress): string {
+  return [
+    address.line1,
+    address.line2 ?? '',
+    address.city,
+    address.state,
+    address.postalCode,
+    address.country,
+  ]
+    .join('|')
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Creates (or reuses, via the caller-provided cache) a Stripe `performance`
+ * tax location for a venue. The caller persists the returned id next to the
+ * event (`metadata.stripeTaxLocationId` + `stripeTaxLocationKey`) so repeat
+ * ticket sales for the same venue never re-create it.
+ *
+ * @throws When Stripe rejects the address (invalid / unsupported territory) —
+ *   callers surface that to the organizer, because an uncomputable venue means
+ *   the ticket cannot be taxed lawfully.
+ */
+export async function createPerformanceTaxLocation(
+  stripe: Stripe,
+  address: VenueAddress,
+): Promise<string> {
+  const location = (await stripe.rawRequest(
+    'POST',
+    '/v1/tax/locations',
+    {
+      type: 'performance',
+      address: {
+        line1: address.line1,
+        ...(address.line2 ? { line2: address.line2 } : {}),
+        city: address.city,
+        ...(address.state ? { state: address.state } : {}),
+        postal_code: address.postalCode,
+        country: address.country,
+      },
+    },
+    { apiVersion: STRIPE_TAX_EVENTS_API_VERSION },
+  )) as unknown as { id?: string };
+  if (!location?.id) {
+    throw new Error('Stripe did not return a performance tax location id');
+  }
+  return location.id;
+}
+
+/**
+ * Origin-side refusal for a PAID in-person mediated ticket with no venue
+ * address — Global would otherwise tax the wrong jurisdiction on its books.
+ */
+export const MEDIATED_TICKET_VENUE_REQUIRED_MESSAGE =
+  'This in-person event needs a venue address before paid tickets can be sold — ' +
+  'admissions tax is calculated where the event takes place. Add the venue address ' +
+  'in the event settings, then try again.';
+
+/**
+ * The `product_data.tax_details` block that sources a ticket line item to the
+ * event venue. Only valid together with an event tax code and the preview API
+ * version on the create call.
+ */
+export function ticketLineItemTaxDetails(performanceLocationId: string): {
+  tax_code: string;
+  performance_location: string;
+} {
+  return {
+    tax_code: STRIPE_TAX_CODE_EVENT_ADMISSION,
+    performance_location: performanceLocationId,
+  };
+}

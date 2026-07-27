@@ -24,7 +24,32 @@ import { resolvePostOfferingDeal } from '@/lib/post-offer-deals';
 import { getResource } from '@/lib/queries/resources';
 import { getAgent } from '@/lib/queries/agents';
 import { getOrCreateStripeCustomer, getStripe } from '@/lib/billing';
-import { buildAutomaticTax, STRIPE_TAX_CODE_DEFAULT, RIVR_TAX_BEHAVIOR } from '@/lib/stripe-tax';
+import {
+  buildAutomaticTax,
+  hasActiveTaxRegistrations,
+  isTaxSensitiveListingMetadata,
+  isVirtualEventMetadata,
+  MEDIATED_TICKET_VENUE_REQUIRED_MESSAGE,
+  parseVenueAddress,
+  RIVR_TAX_BEHAVIOR,
+  STRIPE_TAX_CODE_DEFAULT,
+  WALLET_PURCHASE_TAXABLE_MESSAGE,
+} from '@/lib/stripe-tax';
+
+/**
+ * Whether the wallet-purchase tax guard is live. Sovereign instances lose
+ * their Stripe platform-credential copies under convergence — with no local
+ * Stripe there is no local registration to consult, and the tax-computing
+ * card lanes (Global-mediated) own collection, so the guard silently stands
+ * down instead of breaking wallet purchases.
+ */
+async function walletTaxGuardActive(): Promise<boolean> {
+  try {
+    return await hasActiveTaxRegistrations(getStripe());
+  } catch {
+    return false;
+  }
+}
 import { consumeBookingSlot, hasBookableSchedule, isBookingSlotAvailable } from '@/lib/booking-slots';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { getCurrentUserIdForWrite } from './helpers';
@@ -245,6 +270,12 @@ export async function purchaseWithWalletAction(
       const isPurchasable = listingType === 'product' || listingType === 'service' || resourceKind === 'offering';
       if (!isPurchasable) {
         throw new Error('Resource is not a purchasable marketplace listing.');
+      }
+
+      // Wallet balance cannot collect sales tax; once RIVR is registered,
+      // tax-sensitive items must go through a tax-computing card lane.
+      if (isTaxSensitiveListingMetadata(listingMeta) && (await walletTaxGuardActive())) {
+        throw new Error(WALLET_PURCHASE_TAXABLE_MESSAGE);
       }
 
       if (listing.ownerId === agentId) {
@@ -567,6 +598,20 @@ export async function createEventTicketCheckoutAction(
           },
         });
 
+        // Admissions are taxed at the VENUE. For an in-person event the venue
+        // address rides each admission line so Global can source the tax to a
+        // performance location; a PAID in-person ticket without one is refused
+        // (organizer-actionable) — Global would otherwise tax the wrong
+        // jurisdiction on its live books.
+        const eventResourceForTax = await getResource(eventId);
+        const eventTaxMeta = (eventResourceForTax?.metadata ?? {}) as Record<string, unknown>;
+        const eventIsVirtual = isVirtualEventMetadata(eventTaxMeta);
+        const eventVenueAddress = parseVenueAddress(eventTaxMeta);
+        if (!eventIsVirtual && !eventVenueAddress && breakdown.totalCents > 0) {
+          throw new Error(MEDIATED_TICKET_VENUE_REQUIRED_MESSAGE);
+        }
+        const admissionVenue = !eventIsVirtual && eventVenueAddress ? eventVenueAddress : undefined;
+
         const buyer = await getAgent(agentId);
         const mediated = await requestGlobalCheckout({
           obligationId,
@@ -576,6 +621,7 @@ export async function createEventTicketCheckoutAction(
               amountCents: selection.unitPriceCents,
               quantity: selection.quantity,
               taxCode: STRIPE_TAX_CODE_DEFAULT,
+              ...(admissionVenue ? { venueAddress: admissionVenue } : {}),
             })),
             ...(breakdown.totalCents > subtotalCents
               ? [{
@@ -583,6 +629,7 @@ export async function createEventTicketCheckoutAction(
                   amountCents: breakdown.totalCents - subtotalCents,
                   quantity: 1,
                   taxCode: STRIPE_TAX_CODE_DEFAULT,
+                  ...(admissionVenue ? { venueAddress: admissionVenue } : {}),
                 }]
               : []),
           ],
@@ -747,6 +794,16 @@ export async function purchaseEventTicketsWithWalletAction(
   const normalizedSelections = selections.filter((selection) => isUuid(selection.ticketProductId) && isPositiveInteger(selection.quantity));
   if (normalizedSelections.length === 0) {
     return { success: false, error: 'Select at least one ticket.' };
+  }
+
+  // In-person admissions are taxed at the venue; wallet balance cannot collect
+  // that tax, so once RIVR is registered these must be card purchases.
+  {
+    const eventResourceForGuard = await getResource(eventId);
+    const eventGuardMeta = (eventResourceForGuard?.metadata ?? {}) as Record<string, unknown>;
+    if (!isVirtualEventMetadata(eventGuardMeta) && (await walletTaxGuardActive())) {
+      return { success: false, error: WALLET_PURCHASE_TAXABLE_MESSAGE };
+    }
   }
 
   const result = await updateFacade.execute(

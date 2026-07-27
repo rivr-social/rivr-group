@@ -164,6 +164,20 @@ export async function createEventResource(input: {
   endDate?: string | null;
   endTime?: string | null;
   location: string;
+  /**
+   * Structured venue address for in-person events. Admissions tax sources to
+   * the VENUE, so paid tickets for an in-person event require this (mediated
+   * checkout refuses without it — see lib/stripe-tax MEDIATED_TICKET_VENUE_
+   * REQUIRED_MESSAGE).
+   */
+  venueAddress?: {
+    line1: string;
+    line2?: string;
+    city: string;
+    state: string;
+    postalCode: string;
+    country?: string;
+  } | null;
   eventType: "in-person" | "online";
   /**
    * Host a Virtual Meeting on this instance: the event page opens a LiveKit
@@ -346,6 +360,19 @@ export async function createEventResource(input: {
           endDate: input.endDate ?? null,
           endTime: input.endTime ?? null,
           location: input.location,
+          venueAddress:
+            input.venueAddress && input.venueAddress.line1?.trim()
+              ? {
+                  line1: input.venueAddress.line1.trim(),
+                  ...(input.venueAddress.line2?.trim()
+                    ? { line2: input.venueAddress.line2.trim() }
+                    : {}),
+                  city: input.venueAddress.city?.trim() ?? "",
+                  state: input.venueAddress.state?.trim().toUpperCase() ?? "",
+                  postalCode: input.venueAddress.postalCode?.trim() ?? "",
+                  country: input.venueAddress.country?.trim().toUpperCase() || "US",
+                }
+              : null,
           imageUrl: input.imageUrl ?? null,
           images: input.imageUrl ? [input.imageUrl] : [],
           chapterTags: Array.from(new Set([...baseChapterTags, ...(input.scopedLocaleIds ?? []), ...scopedRegionIds])),
