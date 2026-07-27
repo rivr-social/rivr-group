@@ -38,6 +38,14 @@ const {
 } =
   vi.hoisted(() => {
     process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
+    // The route rejects events whose livemode disagrees with this instance's
+    // keys, and fails closed when the mode cannot be determined. Without a key
+    // every event would be rejected as cross-mode.
+    process.env.STRIPE_SECRET_KEY = "sk_test_webhook_route_spec";
+    // Validation rejects a half-configured Stripe; both keys must be present
+    // and agree on mode.
+    process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_webhook_route_spec";
+    process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_test_webhook_route_spec";
 
     return {
       mockConstructEvent: vi.fn(),

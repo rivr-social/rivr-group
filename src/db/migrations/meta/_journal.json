@@ -124,127 +124,267 @@
     {
       "idx": 17,
       "version": "7",
+      "when": 1772200606848,
+      "tag": "0015_resource_taxonomy_alignment",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1772297710272,
+      "tag": "0016_voucher_first_class",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1772346261984,
+      "tag": "0017_location_search_overture",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1772370537840,
+      "tag": "0018_array_indexes_gin",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1772382675768,
+      "tag": "0019_updated_at_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1772388744732,
+      "tag": "0020_schema_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1772391779214,
+      "tag": "0021_connect_payout_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1772393296455,
+      "tag": "0022_thanks_token_resource_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1772394055075,
+      "tag": "0022b_vector_384_dimensions",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
       "when": 1772394813696,
       "tag": "0023_matrix_integration",
       "breakpoints": true
     },
     {
-      "idx": 18,
+      "idx": 27,
+      "version": "7",
+      "when": 1772697406848,
+      "tag": "0024_social_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1772848703424,
+      "tag": "0025_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1772924351712,
+      "tag": "0026_peermesh_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
       "version": "7",
       "when": 1773000000000,
       "tag": "0027_thanks_token_demurrage",
       "breakpoints": true
     },
     {
-      "idx": 19,
+      "idx": 31,
+      "version": "7",
+      "when": 1774519200000,
+      "tag": "0028_basic_membership_tier",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1775278800000,
+      "tag": "0029_contract_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1775658600000,
+      "tag": "0030_personas",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1775848500000,
+      "tag": "0031_capital_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
       "version": "7",
       "when": 1776038400000,
       "tag": "0032_authority_event_cache",
       "breakpoints": true
     },
     {
-      "idx": 20,
+      "idx": 36,
       "version": "7",
       "when": 1776556800000,
       "tag": "0033_link_previews",
       "breakpoints": true
     },
     {
-      "idx": 21,
+      "idx": 37,
       "version": "7",
       "when": 1777118400000,
       "tag": "0034_peer_smtp_config",
       "breakpoints": true
     },
     {
-      "idx": 22,
+      "idx": 38,
       "version": "7",
       "when": 1777747200000,
       "tag": "0035_group_connections",
       "breakpoints": true
     },
     {
-      "idx": 23,
+      "idx": 39,
       "version": "7",
       "when": 1777833600000,
       "tag": "0036_resource_external_sync",
       "breakpoints": true
     },
     {
-      "idx": 24,
+      "idx": 40,
+      "version": "7",
+      "when": 1779873600000,
+      "tag": "0037_federation_entity_map_relationship",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
       "version": "7",
       "when": 1781913600000,
       "tag": "0038_manifest_references",
       "breakpoints": true
     },
     {
-      "idx": 25,
+      "idx": 42,
       "version": "7",
       "when": 1782086400000,
       "tag": "0039_federated_visitor_access",
       "breakpoints": true
     },
     {
-      "idx": 26,
+      "idx": 43,
       "version": "7",
       "when": 1782172800000,
       "tag": "0040_group_membership_subscriptions",
       "breakpoints": true
     },
     {
-      "idx": 27,
+      "idx": 44,
       "version": "7",
       "when": 1782259200000,
       "tag": "0041_user_connectors",
       "breakpoints": true
     },
     {
-      "idx": 28,
+      "idx": 45,
       "version": "7",
       "when": 1782345600000,
       "tag": "0042_project_wallets",
       "breakpoints": true
     },
     {
-      "idx": 29,
+      "idx": 46,
       "version": "7",
       "when": 1782432000000,
       "tag": "0043_project_expense_txn",
       "breakpoints": true
     },
     {
-      "idx": 30,
+      "idx": 47,
       "version": "7",
       "when": 1782518400000,
       "tag": "0044_deliverables_and_outbound_connectors",
       "breakpoints": true
     },
     {
-      "idx": 31,
+      "idx": 48,
       "version": "7",
       "when": 1782604800000,
       "tag": "0045_project_distribution_txn",
       "breakpoints": true
     },
     {
-      "idx": 32,
+      "idx": 49,
       "version": "7",
       "when": 1782691200000,
       "tag": "0046_site_builder",
       "breakpoints": true
     },
     {
-      "idx": 33,
+      "idx": 50,
       "version": "7",
       "when": 1782950400000,
       "tag": "0048_sso_nonces",
       "breakpoints": true
     },
     {
-      "idx": 34,
+      "idx": 51,
       "version": "7",
-      "when": 1782950400001,
+      "when": 1783987200000,
+      "tag": "0049_x402_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1784505600000,
+      "tag": "0050_provider_worker_tiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1785024000000,
       "tag": "0051_wallet_recovery_debt",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1785024000001,
+      "tag": "0052_nodes_instance_columns",
       "breakpoints": true
     }
   ]

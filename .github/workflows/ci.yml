@@ -21,4 +21,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      # A migration file absent from the Drizzle journal is never discovered by
+      # the migrator: it passes review, passes tests against an already-migrated
+      # database, and never runs. This repo had 20+ such files.
+      - run: pnpm check:migrations
       - run: pnpm test:ci

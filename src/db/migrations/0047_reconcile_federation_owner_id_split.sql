@@ -1,4 +1,5 @@
 -- 0047_reconcile_federation_owner_id_split.sql
+-- drizzle-journal: manual
 -- H2 owner-id split backfill (NON-DESTRUCTIVE, idempotent, NOT auto-applied).
 --
 -- Root cause: before this change importFederationEvents.resolveLocalEntityId
