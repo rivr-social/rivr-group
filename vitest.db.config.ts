@@ -31,13 +31,10 @@ export default defineConfig({
       "src/lib/__tests__/work-completion.test.ts",
       "src/lib/__tests__/settlement-splits.test.ts",
       "src/lib/__tests__/lineage-distribution.test.ts",
-      // NOT included, and deliberately so — see open-issues.md (2026-07-26):
-      // `group-action-tools.test.ts` and `group-federation-mutations-route.test.ts`
-      // are database-backed but ran in NO config for months, so they drifted
-      // from the code (stale buildProjectListing expectations, a missing
-      // `getResourcesByOwnerSubtreeAndType` mock export, an Auth.js Drizzle
-      // adapter error). They are excluded from the unit config too. Repair
-      // them and add them here; do not leave them running nowhere again.
+      // Repaired 2026-07-27 after running in NO config for months. Keep them
+      // here so they cannot silently die again.
+      "src/lib/federation/__tests__/group-action-tools.test.ts",
+      "src/__tests__/group-federation-mutations-route.test.ts",
     ],
     exclude: ["node_modules", "tests/**"],
     globalSetup: "./src/test/setup.ts",

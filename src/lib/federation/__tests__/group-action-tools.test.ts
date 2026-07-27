@@ -54,6 +54,12 @@ vi.mock("@/app/actions/wallet/crypto-treasury", () => ({
 
 vi.mock("@/lib/queries/resources", () => ({
   getResourcesByOwnerAndType: (...args: unknown[]) => mockGetResourcesByOwnerAndType(...args),
+  // The group-owned listing path added a subtree query; without it the module
+  // mock is incomplete and the tool call throws.
+  getResourcesByOwnerSubtreeAndType: (...args: unknown[]) =>
+    mockGetResourcesByOwnerAndType(...args),
+  // Task rollup for the job listing; no tasks in these fixtures.
+  getTaskCountsByJob: vi.fn(async () => new Map<string, number>()),
 }));
 
 import {
@@ -120,6 +126,11 @@ describe("buildProjectListing", () => {
       date: "2026-03-05",
       assignees: ["a1", "a2"],
       maxAssignees: 3,
+      // Added when jobs gained cash compensation + task rollup.
+      payKind: null,
+      payAmountCents: null,
+      hourlyRateCents: null,
+      taskCount: 0,
     });
 
     // Job with only a projectId link still nests, with null/empty scheduling.
@@ -132,6 +143,10 @@ describe("buildProjectListing", () => {
       date: null,
       assignees: [],
       maxAssignees: null,
+      payKind: null,
+      payAmountCents: null,
+      hourlyRateCents: null,
+      taskCount: 0,
     });
 
     const p2 = listing.find((p) => p.id === "p2")!;
@@ -177,7 +192,8 @@ describe("rivr.projects.list tool", () => {
       projects: Array<{ id: string; jobs: Array<{ id: string }> }>;
     };
 
-    expect(mockGetResourcesByOwnerAndType).toHaveBeenCalledWith(GROUP_ID, "project", 50);
+    // Default project limit was raised 50 -> 200 (group-action-tools.ts).
+    expect(mockGetResourcesByOwnerAndType).toHaveBeenCalledWith(GROUP_ID, "project", 200);
     expect(mockGetResourcesByOwnerAndType).toHaveBeenCalledWith(GROUP_ID, "job", 500);
     expect(result.count).toBe(1);
     expect(result.projects[0].jobs.map((j) => j.id)).toEqual(["j1"]);

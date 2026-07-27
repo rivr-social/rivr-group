@@ -71,6 +71,17 @@ vi.mock("@/lib/kg/autobot-kg-client", () => ({
 }));
 vi.mock("@/db", () => ({ db: {} }));
 
+// The route pulls in the auth layer, which constructs NextAuth with the Drizzle
+// adapter at module load. The adapter rejects the bare `{}` db above with
+// "Unsupported database type (object)", so the suite never even started. This
+// route authenticates by peer secret + actor assertion, not a NextAuth session.
+vi.mock("@/auth", () => ({
+  auth: vi.fn(async () => null),
+  handlers: {},
+  signIn: vi.fn(),
+  signOut: vi.fn(),
+}));
+
 import { POST } from "@/app/api/federation/mutations/route";
 
 function buildRequest(): Request {
