@@ -8,6 +8,7 @@ import { eq, and } from 'drizzle-orm';
 import { headers } from 'next/headers';
 import { getClientIp } from '@/lib/client-ip';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
+import { submitGlobalRefund } from '@/lib/global-refund';
 
 /**
  * Requests a refund for a receipt. The buyer must own the receipt.
@@ -54,9 +55,50 @@ export async function requestRefundAction(receiptId: string): Promise<{ success:
   const paymentIntentId = meta.stripePaymentIntentId as string | undefined;
   if (!paymentIntentId) return { success: false, error: 'No payment intent found' };
 
-  return {
-    success: false,
-    error:
-      'Refund execution is owned by Global. This Group instance cannot create a Stripe refund directly.',
-  };
+  // Global is the only Stripe platform, so the refund is submitted to it as an
+  // obligation rather than executed here. Global re-derives origin, owner,
+  // amount, and payment intent from its OWN projection before moving money.
+  const result = await submitGlobalRefund({
+    receiptId: receipt.id,
+    buyerAgentId: actorId,
+  });
+
+  switch (result.status) {
+    case 'refunded':
+    case 'already-requested':
+      // Mirror the outcome locally so the buyer's receipt reflects it. Only
+      // done on a definite verdict — an ambiguous result must not look settled.
+      await db
+        .update(resources)
+        .set({
+          metadata: {
+            ...meta,
+            status: 'refund_requested',
+            refundRequestedAt: new Date().toISOString(),
+            ...(result.refundId ? { refundId: result.refundId } : {}),
+          },
+        })
+        .where(eq(resources.id, receipt.id));
+      return { success: true };
+
+    case 'disabled':
+      return {
+        success: false,
+        error: 'Refunds are not enabled yet. Please contact the seller.',
+      };
+
+    case 'not-authorized':
+      console.error('[refund] Global rejected the obligation:', result.detail);
+      return { success: false, error: 'Not authorized' };
+
+    case 'not-refundable':
+      return { success: false, error: 'This payment is not in a refundable state.' };
+
+    default:
+      console.error('[refund] Global refund failed:', result.detail);
+      return {
+        success: false,
+        error: 'Refund could not be completed. Please try again later.',
+      };
+  }
 }

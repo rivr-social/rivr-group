@@ -131,7 +131,7 @@ describe("requestRefundAction", () => {
       });
     }));
 
-  it("fails closed at the Global-owned refund execution boundary", () =>
+  it("fails closed when the Global refund lane is not enabled", () =>
     withTestTransaction(async (db) => {
       const user = await createTestAgent(db);
       const receipt = await createTestResource(db, user.id, {
@@ -145,10 +145,12 @@ describe("requestRefundAction", () => {
 
       const result = await requestRefundAction(receipt.id);
 
+      // Global is the only Stripe platform, so this instance submits an
+      // obligation rather than refunding. With the lane disabled it must refuse
+      // and leave the receipt untouched, never look settled.
       expect(result).toEqual({
         success: false,
-        error:
-          "Refund execution is owned by Global. This Group instance cannot create a Stripe refund directly.",
+        error: "Refunds are not enabled yet. Please contact the seller.",
       });
 
       const [unchangedReceipt] = await db
