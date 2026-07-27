@@ -91,7 +91,7 @@ services:
           echo "[secrets] Matrix admin token loaded from registration shared secret"
         fi
         echo "[migrate] Running database migrations..."
-        pnpm db:migrate || echo "[migrate] Migration failed (continuing)"
+        pnpm db:migrate || { echo "[migrate] FAILED - refusing to serve; the app would run against a schema it does not expect"; exit 1; }
         echo "[start] Starting Group Next.js production server..."
         exec pnpm start
     secrets:
