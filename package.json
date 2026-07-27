@@ -30,7 +30,8 @@
     "map:mirror:all": "pnpm map:mirror:style && pnpm map:prefetch:tiles",
     "map:verify:local": "tsx src/scripts/verify-map-local-paths.ts",
     "federation:connect": "tsx src/scripts/federation-connect-peer.ts",
-    "federation:pull": "tsx src/scripts/federation-pull.ts"
+    "federation:pull": "tsx src/scripts/federation-pull.ts",
+    "check:migrations": "node scripts/check-migration-journal.mjs"
   },
   "dependencies": {
     "3d-force-graph": "^1.79.1",

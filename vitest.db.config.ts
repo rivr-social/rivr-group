@@ -44,5 +44,10 @@ export default defineConfig({
     testTimeout: 30000,
     hookTimeout: 30000,
     pool: "forks",
+    // These suites share ONE database, so detached writes cross transaction
+    // boundaries between files when they run in parallel — global reported ~145
+    // spurious failures that all passed when run individually. Serialize until
+    // each worker gets its own database.
+    fileParallelism: false,
   },
 });
