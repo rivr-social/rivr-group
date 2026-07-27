@@ -77,3 +77,90 @@ export function taxCodeForListingMetadata(
     ? STRIPE_TAX_CODE_GENERAL_GOODS
     : STRIPE_TAX_CODE_DEFAULT;
 }
+
+// ---------------------------------------------------------------------------
+// Untaxed-path tripwire
+// ---------------------------------------------------------------------------
+
+/**
+ * How long an active-registration lookup is trusted before re-checking.
+ * Registrations change by hand in the Stripe dashboard, so minutes are plenty.
+ */
+const REGISTRATION_CACHE_TTL_MS = 5 * 60_000;
+
+let registrationCache: { activeAt: number; hasActive: boolean } | null = null;
+
+/**
+ * Whether RIVR holds any ACTIVE Stripe Tax registration.
+ *
+ * This is the switch that turns `automatic_tax` from inert wiring into real
+ * collection. It is read from Stripe rather than a local flag so it cannot
+ * drift from what the dashboard actually says.
+ */
+export async function hasActiveTaxRegistrations(stripe: Stripe): Promise<boolean> {
+  const now = Date.now();
+  if (registrationCache && now - registrationCache.activeAt < REGISTRATION_CACHE_TTL_MS) {
+    return registrationCache.hasActive;
+  }
+
+  try {
+    const registrations = await stripe.tax.registrations.list({ status: 'active', limit: 1 });
+    const hasActive = registrations.data.length > 0;
+    registrationCache = { activeAt: now, hasActive };
+    return hasActive;
+  } catch (error) {
+    console.error('[stripe-tax] Could not read tax registrations:', error);
+    // Prefer the last known answer over guessing.
+    if (registrationCache) return registrationCache.hasActive;
+    // With no answer at all, do not halt commerce: today there are no
+    // registrations anywhere, so the truthful default is "not collecting". The
+    // loud log above is the signal that this decision was made blind.
+    return false;
+  }
+}
+
+/** Thrown when a charge path that cannot compute tax runs while tax is live. */
+export class UntaxedChargePathError extends Error {
+  constructor(public readonly pathName: string) {
+    super(
+      `${pathName} cannot compute sales tax, but RIVR now holds an active Stripe Tax ` +
+        `registration. Charging here would under-collect tax that RIVR is liable ` +
+        `for as a marketplace facilitator. Wire this path to the Tax Calculation ` +
+        `API before enabling it.`,
+    );
+    this.name = 'UntaxedChargePathError';
+  }
+}
+
+/**
+ * Guards a raw-PaymentIntent charge path that has NO tax calculation.
+ *
+ * `automatic_tax` only exists on Checkout Sessions. The destination-charge
+ * paths (offering purchase, offering accept) build PaymentIntents directly and
+ * would need the Tax Calculation API — which needs a buyer address they do not
+ * collect. While RIVR holds no registrations that difference is invisible,
+ * because nothing collects tax anywhere. The moment a registration is added,
+ * Checkout starts collecting and these paths would silently keep charging
+ * untaxed, and the shortfall is RIVR's to remit.
+ *
+ * Failing closed here converts that silent under-collection into a loud,
+ * specific error at the first affected sale.
+ *
+ * Does NOT apply to wallet top-ups: funding stored value is not a taxable sale,
+ * and tax applies at the purchase the funds are later spent on.
+ *
+ * @throws {UntaxedChargePathError} When an active tax registration exists.
+ */
+export async function assertUntaxedChargePathAllowed(
+  stripe: Stripe,
+  pathName: string,
+): Promise<void> {
+  if (await hasActiveTaxRegistrations(stripe)) {
+    throw new UntaxedChargePathError(pathName);
+  }
+}
+
+/** Test seam — clears the memoized registration lookup. */
+export function resetTaxRegistrationCacheForTests(): void {
+  registrationCache = null;
+}
