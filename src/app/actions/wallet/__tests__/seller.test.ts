@@ -110,7 +110,7 @@ describe("seller actions", () => {
         expect(result.error).toContain("logged in");
       }));
 
-    it("rejects local onboarding because Global owns connected accounts", () =>
+    it("fails closed when the Global onboarding lane is not enabled", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         vi.mocked(auth).mockResolvedValue(mockAuthSession(user.id));
@@ -118,7 +118,7 @@ describe("seller actions", () => {
         const result = await setupConnectAccountAction();
 
         expect(result.success).toBe(false);
-        expect(result.error).toMatch(/through Global/i);
+        expect(result.error).toMatch(/not enabled yet/i);
       }));
   });
 

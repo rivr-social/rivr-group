@@ -12,6 +12,10 @@ import {
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { settleConnectPayout } from '@/lib/connect-payout';
 import {
+  isGlobalConnectOnboardingEnabled,
+  requestGlobalConnectOnboarding,
+} from '@/lib/global-connect-onboarding';
+import {
   consumeWalletCapital,
   restoreWalletCapitalFromConsumptions,
 } from '@/lib/wallet';
@@ -139,9 +143,50 @@ export async function setupConnectAccountAction(
       payload: { ownerId, returnPath, accountCountry },
     },
     async () => {
-      throw new Error(
-        'Payment onboarding must be completed through Global. Local Group Stripe account creation is disabled.',
-      );
+      // Global holds every connected account, so onboarding is requested from
+      // it rather than created here. The seller returns to THIS instance.
+      //
+      // Check the lane FIRST: complaining about this instance's base-URL
+      // configuration for a feature that is switched off is a misleading error.
+      if (!isGlobalConnectOnboardingEnabled()) {
+        throw new Error('Payment onboarding is not enabled yet.');
+      }
+      const instanceBaseUrl = (
+        process.env.NEXT_PUBLIC_BASE_URL ??
+        process.env.BASE_URL ??
+        process.env.NEXTAUTH_URL ??
+        ''
+      ).replace(/\/+$/, '');
+      if (!instanceBaseUrl) {
+        throw new Error('This instance has no configured base URL for the onboarding return.');
+      }
+      const safeReturnPath =
+        returnPath && returnPath.startsWith('/') ? returnPath : '/settings';
+
+      const onboarding = await requestGlobalConnectOnboarding({
+        sellerAgentId: ownerId ?? currentUserId,
+        // Immutable on the Stripe account, so it must be an explicit choice.
+        accountCountry: accountCountry ?? '',
+        returnUrl: `${instanceBaseUrl}${safeReturnPath}`,
+        refreshUrl: `${instanceBaseUrl}${safeReturnPath}`,
+      });
+
+      switch (onboarding.status) {
+        case 'ok':
+          return { success: true, url: onboarding.url };
+        case 'disabled':
+          throw new Error('Payment onboarding is not enabled yet.');
+        case 'invalid':
+          throw new Error(
+            onboarding.detail ?? 'Choose your bank country before setting up payouts.',
+          );
+        case 'not-authorized':
+          console.error('[connect-onboarding] Global rejected:', onboarding.detail);
+          throw new Error('Payment onboarding is not available for this account.');
+        default:
+          console.error('[connect-onboarding] failed:', onboarding.detail);
+          throw new Error('Unable to start payment onboarding. Please try again.');
+      }
     },
   );
 
