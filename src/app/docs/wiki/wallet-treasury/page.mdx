@@ -247,6 +247,27 @@ a balance is negative.** Partial refunds recover only the new portion, so a sale
 refunded in stages is never over-recovered, and a reversed dispute puts every
 recovered split back.
 
+## Global-mediated checkout (dormant until enabled)
+
+The RIVR ecosystem has ONE Stripe platform: the global instance. Sovereign
+group instances hold Stripe **Connect** accounts, not platform credentials.
+When mediation is enabled (`GLOBAL_PAYMENTS_ENABLED` +
+`GLOBAL_CHECKOUT_ENABLED`), marketplace and event-ticket card checkouts are
+created on the global platform instead of locally:
+
+1. This instance records a **checkout obligation** (what is being sold, to
+   whom, at what price) and asks Global for a hosted checkout URL.
+2. The buyer pays on Stripe exactly as before; success and cancel URLs return
+   to this instance.
+3. When the charge settles, Global sends a peer-authenticated **settlement
+   notice** back; this instance credits its own ledger from its recorded
+   obligation — the identical accounting a local sale runs — using what Stripe
+   actually charged. Receipts, seller credits, splits, and inventory all
+   behave the same.
+
+Until the flags are enabled nothing changes: checkout runs locally on the
+instance's own Stripe configuration.
+
 ## Good to know
 
 - **Points are not money.** Stake points come from attested task work and are

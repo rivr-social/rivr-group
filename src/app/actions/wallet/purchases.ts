@@ -29,6 +29,8 @@ import { consumeBookingSlot, hasBookableSchedule, isBookingSlotAvailable } from 
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { getCurrentUserIdForWrite } from './helpers';
 import { isUuid, isPositiveInteger, getAcceptedCurrencies, getAvailableInventory } from './types';
+import { isGlobalCheckoutEnabled, requestGlobalCheckout } from '@/lib/global-checkout';
+import { recordCheckoutObligation } from '@/lib/checkout-obligations';
 
 type EventTicketSelectionInput = {
   ticketProductId: string;
@@ -535,6 +537,68 @@ export async function createEventTicketCheckoutAction(
 
       const subtotalCents = resolvedSelections.reduce((sum, selection) => sum + selection.subtotalCents, 0);
       const breakdown = calculateLegacyCheckoutFeesCents(subtotalCents);
+
+      // Global-mediated checkout: the session is created on GLOBAL's platform
+      // (sovereigns hold Connect accounts, not platform credentials). The full
+      // settlement payload is recorded locally first; the settlement receiver
+      // settles from that record when Global's notice arrives.
+      if (isGlobalCheckoutEnabled()) {
+        const obligationId = crypto.randomUUID();
+        const mediatedBaseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        await recordCheckoutObligation({
+          obligationId,
+          expectedTotalCents: breakdown.totalCents,
+          payload: {
+            kind: 'event_ticket',
+            eventId,
+            ticketProductId: resolvedSelections[0]?.ticketProductId ?? '',
+            ticketSelections: resolvedSelections.map((selection) => ({
+              ticketProductId: selection.ticketProductId,
+              quantity: selection.quantity,
+              subtotalCents: selection.subtotalCents,
+            })),
+            buyerAgentId: agentId,
+            organizerAgentId: eventOwnerId,
+            totalCents: breakdown.totalCents,
+            subtotalCents: breakdown.subtotalCents,
+            platformFeeCents: breakdown.platformFeeCents,
+            legacySalesTaxCents: breakdown.salesTaxCents,
+            paymentFeeCents: breakdown.paymentFeeCents,
+          },
+        });
+
+        const buyer = await getAgent(agentId);
+        const mediated = await requestGlobalCheckout({
+          obligationId,
+          lineItems: [
+            ...resolvedSelections.map((selection) => ({
+              name: selection.ticketName,
+              amountCents: selection.unitPriceCents,
+              quantity: selection.quantity,
+              taxCode: STRIPE_TAX_CODE_DEFAULT,
+            })),
+            ...(breakdown.totalCents > subtotalCents
+              ? [{
+                  name: `${eventName} Platform fee`,
+                  amountCents: breakdown.totalCents - subtotalCents,
+                  quantity: 1,
+                  taxCode: STRIPE_TAX_CODE_DEFAULT,
+                }]
+              : []),
+          ],
+          successUrl: `${mediatedBaseUrl}/events/${eventId}/registered?checkout=success`,
+          cancelUrl: `${mediatedBaseUrl}/events/${eventId}/tickets?checkout=cancel`,
+          ...(buyer?.email ? { buyerEmail: buyer.email } : {}),
+        });
+
+        if (mediated.status !== 'ok' || !mediated.url) {
+          console.error('createEventTicketCheckoutAction: mediated checkout failed:', mediated);
+          throw new Error('Checkout is temporarily unavailable. Please try again shortly.');
+        }
+
+        return { success: true, url: mediated.url } as { success: boolean; url?: string; error?: string };
+      }
+
       const customerId = await getOrCreateStripeCustomer(agentId);
       const stripe = getStripe();
       const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';

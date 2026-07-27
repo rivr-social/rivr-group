@@ -38,35 +38,6 @@ function allocateExact(totalCents: number, weights: number[]): number[] {
   return allocated;
 }
 
-async function insertEventMarker(
-  tx: DbTx,
-  eventId: string,
-  eventType: string,
-  paymentIntentId: string,
-): Promise<boolean> {
-  const [inserted] = await tx
-    .insert(walletTransactions)
-    .values({
-      type: 'refund',
-      amountCents: 0,
-      feeCents: 0,
-      currency: 'usd',
-      stripePaymentIntentId: `stripe-event:${eventId}`,
-      description: `Stripe webhook event ${eventType}`,
-      status: 'completed',
-      metadata: {
-        source: 'stripe_event_marker',
-        stripeEventId: eventId,
-        stripeEventType: eventType,
-        paymentIntentId,
-      },
-    })
-    .onConflictDoNothing({ target: walletTransactions.stripePaymentIntentId })
-    .returning({ id: walletTransactions.id });
-
-  return Boolean(inserted);
-}
-
 async function loadSettlementCredits(
   tx: DbTx,
   paymentIntentId: string,
@@ -123,6 +94,28 @@ async function priorPrincipalByCredit(
     }
   }
   return result;
+}
+
+/**
+ * Total fee already recovered for this payment intent under `source`. Fees are
+ * netted against prior recoveries exactly like principal — a redelivered or
+ * cumulative event must never re-charge the processing/dispute fee.
+ */
+async function priorFeeCents(
+  tx: DbTx,
+  paymentIntentId: string,
+  source: 'refund_clawback' | 'chargeback',
+): Promise<number> {
+  const rows = await tx
+    .select({ feeCents: walletTransactions.feeCents })
+    .from(walletTransactions)
+    .where(
+      and(
+        sql`${walletTransactions.metadata}->>'source' = ${source}`,
+        sql`${walletTransactions.metadata}->>'paymentIntentId' = ${paymentIntentId}`,
+      ),
+    );
+  return rows.reduce((sum, row) => sum + (row.feeCents ?? 0), 0);
 }
 
 async function reduceSourceCapital(
@@ -224,7 +217,12 @@ function buildAllocations(
       ? credit.amountCents
       : 0,
   );
-  const feeAllocations = allocateExact(targetFeeCents, payoutWeights);
+  // A fee-only delta (principal fully recovered earlier, fee not) still needs
+  // somewhere to land: fall back to the payout credits by size.
+  const feeWeights = payoutWeights.some((weight) => weight > 0)
+    ? payoutWeights
+    : credits.map((credit) => (credit.type === 'marketplace_payout' ? credit.amountCents : 0));
+  const feeAllocations = allocateExact(targetFeeCents, feeWeights);
 
   return credits
     .map((credit, index) => ({
@@ -245,10 +243,6 @@ export async function clawbackRefund(params: {
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentIntentId}, 0))`,
     );
-    if (!(await insertEventMarker(tx, params.eventId, 'charge.refunded', params.paymentIntentId))) {
-      return { recovered: false, reason: 'already-processed' };
-    }
-
     const credits = await loadSettlementCredits(tx, params.paymentIntentId);
     if (credits.length === 0) return { recovered: false, reason: 'no-internal-credit' };
     const creditedTotal = credits.reduce((sum, credit) => sum + credit.amountCents, 0);
@@ -259,14 +253,23 @@ export async function clawbackRefund(params: {
     const prior = await priorPrincipalByCredit(tx, params.paymentIntentId, 'refund_clawback');
     const alreadyRecovered = Array.from(prior.values()).reduce((sum, amount) => sum + amount, 0);
     const deltaPrincipal = Math.max(0, targetPrincipal - alreadyRecovered);
-    if (deltaPrincipal <= 0) return { recovered: false, reason: 'already-recovered' };
 
-    const allocations = buildAllocations(
-      credits,
-      targetPrincipal,
-      estimateStripeProcessingFeeCents(deltaPrincipal),
-      prior,
+    // Stripe keeps its processing fee on a refund, so the fee is recovered on
+    // top of principal — estimated on the refunded CHARGE amount (which the
+    // buyer actually paid, tax included), not on the internal credited
+    // principal, and netted against fees already recovered.
+    const targetFeeCents = estimateStripeProcessingFeeCents(
+      Math.min(params.totalRefundedCents, params.chargeAmountCents),
     );
+    const deltaFeeCents = Math.max(
+      0,
+      targetFeeCents - (await priorFeeCents(tx, params.paymentIntentId, 'refund_clawback')),
+    );
+    if (deltaPrincipal <= 0 && deltaFeeCents <= 0) {
+      return { recovered: false, reason: 'already-processed' };
+    }
+
+    const allocations = buildAllocations(credits, targetPrincipal, deltaFeeCents, prior);
     const debitedCents = await applyLossAllocations(
       tx,
       allocations,
@@ -294,10 +297,6 @@ export async function clawbackChargeback(params: {
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentIntentId}, 0))`,
     );
-    if (!(await insertEventMarker(tx, params.eventId, 'charge.dispute.created', params.paymentIntentId))) {
-      return { recovered: false, reason: 'already-processed' };
-    }
-
     const credits = await loadSettlementCredits(tx, params.paymentIntentId);
     if (credits.length === 0) return { recovered: false, reason: 'no-internal-credit' };
     const creditedTotal = credits.reduce((sum, credit) => sum + credit.amountCents, 0);
@@ -306,12 +305,19 @@ export async function clawbackChargeback(params: {
         Math.max(1, params.chargeAmountCents),
     );
     const prior = await priorPrincipalByCredit(tx, params.paymentIntentId, 'chargeback');
-    const allocations = buildAllocations(
-      credits,
-      targetPrincipal,
-      params.disputeFeeCents ?? STRIPE_DISPUTE_FEE_CENTS,
-      prior,
+    const alreadyRecovered = Array.from(prior.values()).reduce((sum, amount) => sum + amount, 0);
+    const deltaPrincipal = Math.max(0, targetPrincipal - alreadyRecovered);
+    // Net the dispute fee against prior recoveries so a redelivered dispute
+    // event cannot charge the seller the fee a second time.
+    const deltaFeeCents = Math.max(
+      0,
+      (params.disputeFeeCents ?? STRIPE_DISPUTE_FEE_CENTS) -
+        (await priorFeeCents(tx, params.paymentIntentId, 'chargeback')),
     );
+    if (deltaPrincipal <= 0 && deltaFeeCents <= 0) {
+      return { recovered: false, reason: 'already-processed' };
+    }
+    const allocations = buildAllocations(credits, targetPrincipal, deltaFeeCents, prior);
     const debitedCents = await applyLossAllocations(
       tx,
       allocations,
@@ -337,17 +343,6 @@ export async function reverseChargebackClawback(params: {
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${params.paymentIntentId}, 0))`,
     );
-    if (
-      !(await insertEventMarker(
-        tx,
-        params.eventId,
-        'charge.dispute.funds_reinstated',
-        params.paymentIntentId,
-      ))
-    ) {
-      return { reversed: false, reason: 'already-processed' };
-    }
-
     const clawbacks = await tx
       .select()
       .from(walletTransactions)
@@ -359,7 +354,25 @@ export async function reverseChargebackClawback(params: {
         ),
       )
       .for('update');
-    if (clawbacks.length === 0) return { reversed: false, reason: 'clawback-not-found' };
+    if (clawbacks.length === 0) {
+      // Distinguish "this reversal already ran" from "no such clawback": a
+      // redelivered reinstatement finds only already-reversed rows.
+      const reversedRows = await tx
+        .select({ id: walletTransactions.id })
+        .from(walletTransactions)
+        .where(
+          and(
+            sql`${walletTransactions.metadata}->>'source' = 'chargeback'`,
+            sql`${walletTransactions.metadata}->>'disputeId' = ${params.disputeId}`,
+            sql`${walletTransactions.metadata}->>'reversedAt' IS NOT NULL`,
+          ),
+        )
+        .limit(1);
+      return {
+        reversed: false,
+        reason: reversedRows.length > 0 ? 'already-processed' : 'clawback-not-found',
+      };
+    }
 
     const walletIds = Array.from(
       new Set(

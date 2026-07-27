@@ -40,6 +40,8 @@ import {
 } from '@/lib/http-status';
 import { getClientIp } from '@/lib/client-ip';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
+import { isGlobalCheckoutEnabled, requestGlobalCheckout } from '@/lib/global-checkout';
+import { recordCheckoutObligation } from '@/lib/checkout-obligations';
 
 function getAcceptedCurrencies(metadata: Record<string, unknown>): string[] {
   const raw = metadata.acceptedCurrencies;
@@ -293,6 +295,67 @@ export async function POST(request: NextRequest) {
       orgCommissionBps: orgCommissionBps > 0 ? orgCommissionBps : undefined,
       platformFeeBps: marketplaceFeePolicy.feeBps,
     });
+
+    const mediatedBaseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+
+    // 6a. Global-mediated checkout: sovereign instances hold Connect accounts,
+    // not Stripe platform credentials, so with mediation enabled the session
+    // is created on GLOBAL's platform. The full settlement payload is recorded
+    // locally FIRST — the settlement receiver settles from this record, never
+    // from the notice body. No local-capture fallback on failure: charging on
+    // a sovereign platform is the state this lane exists to end.
+    if (isGlobalCheckoutEnabled()) {
+      const obligationId = crypto.randomUUID();
+      await recordCheckoutObligation({
+        obligationId,
+        expectedTotalCents: fees.buyerTotalCents,
+        payload: {
+          kind: 'marketplace_purchase',
+          listingId,
+          sellerAgentId: sellerId,
+          buyerAgentId: buyerAgentId || null,
+          orgId,
+          orgCommissionCents: fees.orgCommissionCents,
+          platformFeeCents: fees.platformFeeCents,
+          buyerPlatformFeeCents: fees.buyerPlatformFeeCents,
+          priceCents: fees.sellerPriceCents,
+          buyerTotalCents: fees.buyerTotalCents,
+          quantity,
+          bookingSelection,
+          dealPostId: deal?.postId ?? null,
+        },
+      });
+
+      const mediated = await requestGlobalCheckout({
+        obligationId,
+        lineItems: [
+          {
+            name:
+              quantity * hours > 1
+                ? `${listing.name} x${quantity * hours}`
+                : listing.name,
+            amountCents: fees.buyerTotalCents,
+            quantity: 1,
+            taxCode: taxCodeForListingMetadata(listingMeta),
+          },
+        ],
+        successUrl: `${mediatedBaseUrl}/marketplace/${listingId}/confirmed?session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl:
+          deal?.postId
+            ? `${mediatedBaseUrl}/marketplace/${listingId}/purchase?dealPostId=${encodeURIComponent(deal.postId)}`
+            : `${mediatedBaseUrl}/marketplace/${listingId}/purchase`,
+      });
+
+      if (mediated.status !== 'ok' || !mediated.url) {
+        console.error('[MarketplaceCheckout] Global-mediated checkout failed:', mediated);
+        return NextResponse.json(
+          { error: 'Checkout is temporarily unavailable. Please try again shortly.' },
+          { status: STATUS_INTERNAL_ERROR },
+        );
+      }
+
+      return NextResponse.json({ url: mediated.url });
+    }
 
     // 6. Create Stripe Checkout Session
     const stripe = getStripe();

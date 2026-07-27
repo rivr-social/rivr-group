@@ -7,7 +7,7 @@
  * payment handlers all execute real queries that are rolled back after each test.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import {
@@ -155,6 +155,10 @@ function makeStripeEvent(type: string, dataObject: unknown, id = `evt_${type.rep
 // ---------------------------------------------------------------------------
 
 describe("POST /api/stripe/webhook", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockPaymentIntentsRetrieve.mockResolvedValue({
@@ -1012,6 +1016,7 @@ describe("POST /api/stripe/webhook", () => {
         const buyer = await createTestAgent(db);
         const organizer = await createTestAgent(db);
         const platformOrg = await createTestGroup(db, { name: "RIVR" });
+        vi.stubEnv("PLATFORM_AGENT_ID", platformOrg.id);
         const organizerWallet = await createTestWallet(db, organizer.id);
         const platformWallet = await createTestWallet(db, platformOrg.id, {
           type: "group",
@@ -1227,6 +1232,8 @@ describe("POST /api/stripe/webhook", () => {
     it("records a guest marketplace card purchase and creates a receipt", () =>
       withTestTransaction(async (db) => {
         const seller = await createTestAgent(db);
+        const platformOrg = await createTestGroup(db, { name: "RIVR" });
+        vi.stubEnv("PLATFORM_AGENT_ID", platformOrg.id);
         const { createTestResource } = await import("@/test/fixtures");
         const listing = await createTestResource(db, seller.id, {
           name: "Handmade Bowl",
@@ -1305,6 +1312,7 @@ describe("POST /api/stripe/webhook", () => {
     it("does NOT credit internal capital on a Connect destination charge (COM-DSN-002)", () =>
       withTestTransaction(async (db) => {
         const platformOrg = await createTestGroup(db, { name: "RIVR" });
+        vi.stubEnv("PLATFORM_AGENT_ID", platformOrg.id);
         const platformWallet = await createTestWallet(db, platformOrg.id, {
           type: "group",
         });
@@ -1413,6 +1421,7 @@ describe("POST /api/stripe/webhook", () => {
     it("credits internal capital on the platform-capital rail (no Connect destination)", () =>
       withTestTransaction(async (db) => {
         const platformOrg = await createTestGroup(db, { name: "RIVR" });
+        vi.stubEnv("PLATFORM_AGENT_ID", platformOrg.id);
         const platformWallet = await createTestWallet(db, platformOrg.id, {
           type: "group",
         });

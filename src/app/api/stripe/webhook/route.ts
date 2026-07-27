@@ -28,7 +28,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import Stripe from 'stripe';
 import { db } from '@/db';
-import { agents, capitalEntries, groupMembershipSubscriptions, ledger, resources, subscriptions, wallets, walletTransactions, type NewLedgerEntry, type WalletRecord } from '@/db/schema';
+import { agents, capitalEntries, groupMembershipSubscriptions, ledger, resources, subscriptions, wallets, walletTransactions, type NewLedgerEntry } from '@/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
 import { getStripe, tierForPriceId } from '@/lib/billing';
 import { grantGroupMembership, revokeGroupMembership } from '@/lib/group-subscriptions';
@@ -39,17 +39,24 @@ import {
   getPlatformWallet,
   getPlatformWalletOrNull,
   getSettlementWalletForAgent,
-  getOrCreateProjectWallet,
   creditWalletCapital,
 } from '@/lib/wallet';
+import { resolveSettlementSplits } from '@/lib/settlement-splits';
 import {
-  resolveSettlementSplits,
-  allocateByBps,
-  type SettlementSplit,
-} from '@/lib/settlement-splits';
+  getPaymentIntentPayoutEligibleAt,
+  getResourceProjectId,
+  incrementListingInventory,
+  lockWallets,
+  resolveSettlementTargets,
+  settleSellerNet,
+} from '@/lib/settlement-accounting';
+import {
+  resolveGuestBuyerAgentId,
+  settleMarketplacePurchase,
+} from '@/lib/marketplace-settlement';
+import { settleEventTicketPurchase } from '@/lib/event-ticket-settlement';
 import { STATUS_BAD_REQUEST, STATUS_INTERNAL_ERROR } from '@/lib/http-status';
 import { eventMatchesRuntimeMode, getStripeRuntimeMode, stripeModeOfLivemode } from '@/lib/stripe-mode';
-import { consumeBookingSlot, isBookingSlotAvailable } from '@/lib/booking-slots';
 import { assertAmountReconciled } from '@/lib/stripe-reconcile';
 import { reconcileTaxExclusiveCheckout } from '@/lib/stripe-checkout-settlement';
 import {
@@ -60,259 +67,6 @@ import {
 
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const MONTHLY_SUBSCRIPTION_THANKS_GRANT = 100;
-
-function getInventoryState(metadata: Record<string, unknown>): {
-  quantityAvailable: number | null;
-  quantitySold: number;
-  quantityRemaining: number | null;
-} {
-  const quantityAvailable =
-    typeof metadata.quantityAvailable === 'number' && Number.isFinite(metadata.quantityAvailable)
-      ? metadata.quantityAvailable
-      : null;
-  const quantitySold =
-    typeof metadata.quantitySold === 'number' && Number.isFinite(metadata.quantitySold)
-      ? metadata.quantitySold
-      : 0;
-  const quantityRemaining =
-    typeof metadata.quantityRemaining === 'number' && Number.isFinite(metadata.quantityRemaining)
-      ? metadata.quantityRemaining
-      : quantityAvailable != null
-        ? Math.max(quantityAvailable - quantitySold, 0)
-        : null;
-
-  return { quantityAvailable, quantitySold, quantityRemaining };
-}
-
-function sortedUniqueWalletIds(walletIds: Array<string | null | undefined>): string[] {
-  return Array.from(
-    new Set(
-      walletIds.filter(
-        (walletId): walletId is string => typeof walletId === 'string' && walletId.length > 0,
-      ),
-    ),
-  ).sort();
-}
-
-async function lockWallets(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  walletIds: Array<string | null | undefined>,
-): Promise<void> {
-  for (const walletId of sortedUniqueWalletIds(walletIds)) {
-    await tx.execute(sql`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`);
-  }
-}
-
-/**
- * A resolved settlement split paired with its destination wallet.
- *
- * The wallet is fetched (and lazily created, for project treasuries) OUTSIDE
- * the settlement transaction so that every destination can be row-locked up
- * front and the in-transaction credit stays purely additive.
- */
-interface ResolvedSettlementTarget {
-  split: SettlementSplit;
-  wallet: WalletRecord;
-}
-
-/**
- * Resolves a listing/offering's `projectId` from the authoritative resource
- * record (never from client-supplied Stripe metadata) so the settlement
- * cascade is server-trusted.
- */
-async function getResourceProjectId(resourceId: string): Promise<string | null> {
-  const [resource] = await db
-    .select({ metadata: resources.metadata })
-    .from(resources)
-    .where(eq(resources.id, resourceId))
-    .limit(1);
-
-  const projectId = (resource?.metadata as Record<string, unknown> | null | undefined)?.[
-    'projectId'
-  ];
-  return typeof projectId === 'string' && projectId.length > 0 ? projectId : null;
-}
-
-/**
- * Materializes each settlement split into its destination wallet. Project
- * splits resolve to the project treasury wallet (created on first settlement);
- * agent splits resolve to the recipient's settlement wallet. Returned in the
- * same order as `splits` so `allocateByBps` output lines up by index.
- */
-async function resolveSettlementTargets(
-  splits: SettlementSplit[],
-): Promise<ResolvedSettlementTarget[]> {
-  const targets: ResolvedSettlementTarget[] = [];
-  for (const split of splits) {
-    const wallet =
-      split.walletKind === 'project' && split.projectResourceId
-        ? await getOrCreateProjectWallet(split.projectResourceId, split.ownerAgentId)
-        : await getSettlementWalletForAgent(split.ownerAgentId);
-    targets.push({ split, wallet });
-  }
-  return targets;
-}
-
-/**
- * Credits the seller-net amount across the resolved settlement targets inside
- * the settlement transaction. Each target's wallet balance is incremented, a
- * `marketplace_payout` wallet transaction is recorded, and a pending capital
- * entry is opened so the share is payout-eligible once Stripe clears the charge.
- *
- * The cent split uses {@link allocateByBps} (largest-remainder, exact-sum) so
- * the distributed cents add up to `sellerCreditCents` with no leakage.
- */
-async function settleSellerNet(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  targets: ResolvedSettlementTarget[],
-  sellerCreditCents: number,
-  payoutEligibleAt: string | null,
-  opts: {
-    currency: string;
-    referenceId: string;
-    ledgerEntryId: string;
-    paymentIntentId: string;
-    sourceType: string;
-    descriptionPrefix: string;
-  },
-): Promise<void> {
-  if (sellerCreditCents <= 0) return;
-
-  const allocations = allocateByBps(
-    sellerCreditCents,
-    targets.map((t) => t.split),
-  );
-
-  for (let i = 0; i < targets.length; i++) {
-    const { wallet, split } = targets[i];
-    const amountCents = allocations[i].amountCents;
-    if (amountCents <= 0) continue;
-
-    await tx
-      .update(wallets)
-      .set({
-        balanceCents: sql`${wallets.balanceCents} + ${amountCents}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(wallets.id, wallet.id));
-
-    const [payoutTx] = await tx
-      .insert(walletTransactions)
-      .values({
-        type: 'marketplace_payout',
-        toWalletId: wallet.id,
-        amountCents,
-        feeCents: 0,
-        currency: opts.currency,
-        description: `${opts.descriptionPrefix} ${opts.referenceId}`,
-        referenceType: 'resource',
-        referenceId: opts.referenceId,
-        ledgerEntryId: opts.ledgerEntryId,
-        status: 'completed',
-        metadata: {
-          source: opts.sourceType,
-          paymentIntentId: opts.paymentIntentId,
-          referenceId: opts.referenceId,
-          settlementRole: split.role,
-          settlementBps: split.bps,
-          walletKind: split.walletKind,
-          ownerAgentId: split.ownerAgentId,
-          projectResourceId: split.projectResourceId ?? null,
-          payoutEligibleAt,
-        },
-      })
-      .returning({ id: walletTransactions.id });
-
-    await creditWalletCapital(tx, wallet.id, amountCents, {
-      settlementStatus: 'pending',
-      availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
-      sourceType: opts.sourceType,
-      sourceTransactionId: payoutTx.id,
-      metadata: {
-        paymentIntentId: opts.paymentIntentId,
-        stripePaymentIntentId: opts.paymentIntentId,
-        referenceId: opts.referenceId,
-        settlementRole: split.role,
-        projectResourceId: split.projectResourceId ?? null,
-      },
-    });
-  }
-}
-
-async function incrementListingInventory(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  resourceId: string,
-  requestedQuantity: number,
-  bookingSelection?: { date: string; slot: string } | null,
-): Promise<void> {
-  if (!Number.isInteger(requestedQuantity) || requestedQuantity <= 0) return;
-
-  // Lock the row to prevent concurrent webhooks from reading stale inventory
-  const [resource] = await tx.execute(
-    sql`SELECT metadata FROM resources WHERE id = ${resourceId} LIMIT 1 FOR UPDATE`
-  ) as unknown as { metadata: Record<string, unknown> }[];
-
-  const metadata = (resource?.metadata ?? {}) as Record<string, unknown>;
-  if (!isBookingSlotAvailable(metadata, bookingSelection)) {
-    throw new Error(`Booking slot unavailable for resource ${resourceId}`);
-  }
-  const { quantityAvailable, quantitySold, quantityRemaining } = getInventoryState(metadata);
-  if (quantityAvailable == null && !bookingSelection) return;
-
-  if (quantityAvailable != null && requestedQuantity > (quantityRemaining ?? 0)) {
-    throw new Error(`Inventory exceeded for resource ${resourceId}`);
-  }
-
-  const nextQuantitySold = quantitySold + requestedQuantity;
-  const nextQuantityRemaining =
-    quantityAvailable != null ? Math.max(quantityAvailable - nextQuantitySold, 0) : null;
-  const nextMetadata = consumeBookingSlot(metadata, bookingSelection);
-
-  await tx
-    .update(resources)
-    .set({
-      metadata: {
-        ...nextMetadata,
-        ...(quantityAvailable != null
-          ? {
-              quantityAvailable,
-              quantitySold: nextQuantitySold,
-              quantityRemaining: nextQuantityRemaining,
-              ...(nextQuantityRemaining === 0 ? { status: 'sold_out' } : {}),
-            }
-          : {}),
-      },
-    })
-    .where(eq(resources.id, resourceId));
-}
-
-async function getPaymentIntentPayoutEligibleAt(paymentIntentId: string): Promise<string | null> {
-  try {
-    const stripe = getStripe();
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
-      expand: ['latest_charge.balance_transaction'],
-    });
-
-    const latestCharge =
-      paymentIntent.latest_charge && typeof paymentIntent.latest_charge !== 'string'
-        ? paymentIntent.latest_charge
-        : null;
-    const balanceTransaction =
-      latestCharge?.balance_transaction &&
-      typeof latestCharge.balance_transaction !== 'string'
-        ? latestCharge.balance_transaction
-        : null;
-
-    if (!balanceTransaction?.available_on) {
-      return null;
-    }
-
-    return new Date(balanceTransaction.available_on * 1000).toISOString();
-  } catch (error) {
-    console.error('Failed to fetch payment intent payout eligibility:', paymentIntentId, error);
-    return null;
-  }
-}
 
 /**
  * Stripe webhook handler.
@@ -643,8 +397,6 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
   const platformFeeCents = Number(metadata.platformFeeCents ?? 0);
   const legacySalesTaxCents = Number(metadata.salesTaxCents ?? 0);
   const paymentFeeCents = Number(metadata.paymentFeeCents ?? 0);
-  const preTaxFeeCents = platformFeeCents + legacySalesTaxCents + paymentFeeCents;
-  const sellerNetCents = totalCents - preTaxFeeCents;
 
   const checkoutAmounts = reconcileTaxExclusiveCheckout(
     session,
@@ -652,20 +404,7 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
     `event-ticket:${session.id}`,
   );
 
-  // Idempotency guard: check once before opening a transaction to short-circuit duplicates.
-  const [existingTx] = await db
-    .select({ id: walletTransactions.id })
-    .from(walletTransactions)
-    .where(eq(walletTransactions.stripePaymentIntentId, paymentIntentId))
-    .limit(1);
-
-  if (existingTx) {
-    return;
-  }
-
   const payoutEligibleAt = await getPaymentIntentPayoutEligibleAt(paymentIntentId);
-  const organizerWallet = await getSettlementWalletForAgent(organizerAgentId);
-  const platformWallet = preTaxFeeCents > 0 ? await getPlatformWallet() : null;
   const ticketSelections = parsedSelections.length > 0
     ? parsedSelections
         .map((selection) => ({
@@ -680,179 +419,24 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
         subtotalCents: Number(metadata.subtotalCents ?? totalCents),
       }];
 
-  await db.transaction(async (tx) => {
-    // Re-check inside the transaction to avoid race conditions across concurrent webhook deliveries.
-    const [existingInTx] = await tx
-      .select({ id: walletTransactions.id })
-      .from(walletTransactions)
-      .where(eq(walletTransactions.stripePaymentIntentId, paymentIntentId))
-      .limit(1);
-
-    if (existingInTx) return;
-
-    for (const walletId of Array.from(new Set([
-      organizerWallet.id,
-      platformWallet?.id,
-    ].filter((walletId): walletId is string => typeof walletId === 'string' && walletId.length > 0))).sort()) {
-      await tx.execute(sql`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`);
-    }
-
-    const [ledgerEntry] = await tx
-      .insert(ledger)
-      .values({
-        verb: 'buy',
-        subjectId: buyerAgentId,
-        objectId: organizerAgentId,
-        objectType: 'agent',
-        resourceId: ticketProductId,
-        metadata: {
-          interactionType: 'event-ticket-purchase',
-          checkoutSessionId: session.id,
-          paymentIntentId,
-          eventId,
-          ticketProductId,
-          subtotalCents: Number(metadata.subtotalCents ?? 0),
-          platformFeeCents,
-          salesTaxCents: checkoutAmounts.taxCents,
-          legacySalesTaxCents,
-          paymentFeeCents,
-          preTaxTotalCents: totalCents,
-          totalCents: checkoutAmounts.chargedTotalCents,
-        },
-      } as NewLedgerEntry)
-      .returning({ id: ledger.id });
-
-    await tx.insert(walletTransactions).values({
-      type: 'marketplace_purchase',
-      amountCents: checkoutAmounts.chargedTotalCents,
-      feeCents: preTaxFeeCents + checkoutAmounts.taxCents,
-      currency: session.currency ?? 'usd',
-      // Business traceability: description helps with back-office reconciliation.
-      description: `Event ticket purchase for event ${eventId}`,
-      stripePaymentIntentId: paymentIntentId,
-      referenceType: 'resource',
-      referenceId: ticketProductId,
-      ledgerEntryId: ledgerEntry.id,
-      status: 'completed',
-      metadata: {
-        checkoutSessionId: session.id,
-        eventId,
-        ticketProductId,
-        buyerAgentId,
-        organizerAgentId,
-      },
-    });
-
-    let remainingFeeCents = preTaxFeeCents;
-    for (const [index, selection] of ticketSelections.entries()) {
-      const lineFeeCents =
-        index === ticketSelections.length - 1
-          ? remainingFeeCents
-          : Math.floor((preTaxFeeCents * selection.subtotalCents) / Math.max(1, Number(metadata.subtotalCents ?? totalCents)));
-      remainingFeeCents -= lineFeeCents;
-
-      await tx.insert(walletTransactions).values({
-        type: 'event_ticket',
-        amountCents: selection.subtotalCents + lineFeeCents,
-        feeCents: lineFeeCents,
-        currency: session.currency ?? 'usd',
-        description: `Event ticket purchase for event ${eventId}`,
-        referenceType: 'resource',
-        referenceId: selection.ticketProductId,
-        ledgerEntryId: ledgerEntry.id,
-        status: 'completed',
-        metadata: {
-          checkoutSessionId: session.id,
-          eventId,
-          ticketProductId: selection.ticketProductId,
-          buyerAgentId,
-          organizerAgentId,
-          quantity: selection.quantity,
-        },
-      });
-    }
-
-    if (sellerNetCents > 0) {
-      await tx
-        .update(wallets)
-        .set({
-          balanceCents: sql`${wallets.balanceCents} + ${sellerNetCents}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(wallets.id, organizerWallet.id));
-
-      const [sellerPayoutTx] = await tx.insert(walletTransactions).values({
-        type: 'marketplace_payout',
-        toWalletId: organizerWallet.id,
-        amountCents: sellerNetCents,
-        feeCents: 0,
-        currency: session.currency ?? 'usd',
-        description: `Stripe ticket settlement for event ${eventId}`,
-        referenceType: 'resource',
-        referenceId: ticketSelections[0]?.ticketProductId ?? ticketProductId,
-        ledgerEntryId: ledgerEntry.id,
-        status: 'completed',
-        metadata: {
-          source: 'stripe_event_ticket',
-          checkoutSessionId: session.id,
-          paymentIntentId,
-          organizerAgentId,
-          eventId,
-        },
-      }).returning({ id: walletTransactions.id });
-
-      await creditWalletCapital(tx, organizerWallet.id, sellerNetCents, {
-        settlementStatus: 'pending',
-        availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
-        sourceType: 'stripe_event_ticket',
-        sourceTransactionId: sellerPayoutTx.id,
-        metadata: {
-          eventId,
-          paymentIntentId,
-        },
-      });
-    }
-
-    if (preTaxFeeCents > 0 && platformWallet) {
-      await tx
-        .update(wallets)
-        .set({
-          balanceCents: sql`${wallets.balanceCents} + ${preTaxFeeCents}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(wallets.id, platformWallet.id));
-
-      const [platformFeeTx] = await tx.insert(walletTransactions).values({
-        type: 'service_fee',
-        toWalletId: platformWallet.id,
-        amountCents: preTaxFeeCents,
-        feeCents: 0,
-        currency: session.currency ?? 'usd',
-        description: `Service fee for event ticket ${eventId}`,
-        referenceType: 'resource',
-        referenceId: ticketProductId,
-        ledgerEntryId: ledgerEntry.id,
-        status: 'completed',
-        metadata: {
-          source: 'stripe_event_ticket',
-          checkoutSessionId: session.id,
-          paymentIntentId,
-          organizerAgentId,
-          eventId,
-        },
-      }).returning({ id: walletTransactions.id });
-
-      await creditWalletCapital(tx, platformWallet.id, preTaxFeeCents, {
-        settlementStatus: 'pending',
-        availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
-        sourceType: 'stripe_event_ticket_fee',
-        sourceTransactionId: platformFeeTx.id,
-        metadata: {
-          eventId,
-          paymentIntentId,
-        },
-      });
-    }
+  await settleEventTicketPurchase({
+    eventId,
+    ticketProductId,
+    ticketSelections,
+    buyerAgentId,
+    organizerAgentId,
+    totalCents,
+    subtotalCents: Number(metadata.subtotalCents ?? 0),
+    feeProrationBaseCents: Number(metadata.subtotalCents ?? totalCents),
+    platformFeeCents,
+    legacySalesTaxCents,
+    paymentFeeCents,
+    chargedTotalCents: checkoutAmounts.chargedTotalCents,
+    taxCents: checkoutAmounts.taxCents,
+    currency: session.currency ?? 'usd',
+    checkoutSessionId: session.id,
+    paymentIntentId,
+    payoutEligibleAt,
   });
 }
 
@@ -904,288 +488,36 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
     return;
   }
 
-  const payoutEligibleAt = await getPaymentIntentPayoutEligibleAt(paymentIntentId);
-  const orgWallet = orgId ? await getSettlementWalletForAgent(orgId) : null;
-  const platformWallet = await getPlatformWallet();
-  const sellerCreditCents = priceCents;
-  const platformRevenueCents = Math.max(0, buyerTotalCents - sellerCreditCents - orgCommissionCents);
-
-  // Idempotency guard
-  const [existingTx] = await db
-    .select({ id: walletTransactions.id })
-    .from(walletTransactions)
-    .where(eq(walletTransactions.stripePaymentIntentId, paymentIntentId))
-    .limit(1);
-
-  if (existingTx) return;
-
-  // If no buyer agent (guest checkout), create a guest agent from customer details.
-  // Only reuse an existing agent if it's a genuine guest (no password, no email verification).
-  // Never silently assign purchases to a registered user's account.
+  // Guest checkout: attribute the purchase from the identity Stripe collected.
   if (!buyerAgentId && session.customer_details?.email) {
-    const guestEmail = session.customer_details.email;
-    const guestName =
-      session.customer_details.name || `Guest (${guestEmail})`;
-
-    const [existingAgent] = await db
-      .select({
-        id: agents.id,
-        passwordHash: agents.passwordHash,
-        emailVerified: agents.emailVerified,
-      })
-      .from(agents)
-      .where(eq(agents.email, guestEmail))
-      .limit(1);
-
-    if (existingAgent) {
-      const isGuest = !existingAgent.passwordHash && !existingAgent.emailVerified;
-      if (isGuest) {
-        buyerAgentId = existingAgent.id;
-      } else {
-        // Real registered user — do not silently reuse their account for a guest purchase
-        console.warn('Guest checkout email matches registered user, skipping reuse:', guestEmail);
-      }
-    } else {
-      const [newAgent] = await db
-        .insert(agents)
-        .values({
-          name: guestName,
-          type: 'person',
-          email: guestEmail,
-          metadata: { source: 'guest_checkout', noSignin: true },
-        })
-        .returning({ id: agents.id });
-      buyerAgentId = newAgent.id;
-    }
+    buyerAgentId = await resolveGuestBuyerAgentId(
+      session.customer_details.email,
+      session.customer_details.name ?? null,
+    );
   }
 
-  // Resolve how the seller-net is distributed. When the listing is bound to a
-  // project (server-trusted `metadata.projectId`), the seller-net cascades to
-  // the project treasury + configured downstream recipients; otherwise it is a
-  // single split crediting the seller 100%.
-  const settlementProjectId = await getResourceProjectId(listingId);
-  const settlementSplits = await resolveSettlementSplits({
-    sellerId: sellerAgentId,
-    buyerId: buyerAgentId,
-    listingMeta: settlementProjectId ? { projectId: settlementProjectId } : {},
-  });
-  const settlementTargets = await resolveSettlementTargets(settlementSplits);
+  const payoutEligibleAt = await getPaymentIntentPayoutEligibleAt(paymentIntentId);
 
-  await db.transaction(async (tx) => {
-    // Re-check inside transaction for idempotency
-    const [existingInTx] = await tx
-      .select({ id: walletTransactions.id })
-      .from(walletTransactions)
-      .where(eq(walletTransactions.stripePaymentIntentId, paymentIntentId))
-      .limit(1);
-
-    if (existingInTx) return;
-
-    await incrementListingInventory(tx, listingId, requestedQuantity, bookingSelection);
-    await lockWallets(tx, [
-      ...settlementTargets.map((t) => t.wallet.id),
-      orgWallet?.id,
-      platformWallet.id,
-    ]);
-
-    // Create ledger entry for the purchase
-    const [ledgerEntry] = await tx
-      .insert(ledger)
-      .values({
-        verb: 'buy',
-        subjectId: buyerAgentId || sellerAgentId,
-        objectId: sellerAgentId,
-        objectType: 'agent',
-        resourceId: listingId,
-        metadata: {
-          interactionType: 'marketplace-purchase',
-          checkoutSessionId: session.id,
-          paymentIntentId,
-          listingId,
-          priceCents,
-          quantity: requestedQuantity,
-          bookingDate: bookingSelection?.date ?? null,
-          bookingSlot: bookingSelection?.slot ?? null,
-          platformFeeCents,
-          orgCommissionCents,
-          orgId,
-        },
-      } as NewLedgerEntry)
-      .returning({ id: ledger.id });
-
-    // Record wallet transaction
-    await tx.insert(walletTransactions).values({
-      type: 'marketplace_purchase',
-      amountCents: checkoutAmounts.chargedTotalCents,
-      feeCents: checkoutAmounts.chargedTotalCents - sellerCreditCents,
-      currency: session.currency ?? 'usd',
-      description: `Marketplace purchase: ${listingId}`,
-      stripePaymentIntentId: paymentIntentId,
-      referenceType: 'resource',
-      referenceId: listingId,
-      ledgerEntryId: ledgerEntry.id,
-      status: 'completed',
-      metadata: {
-        checkoutSessionId: session.id,
-        listingId,
-        buyerAgentId: buyerAgentId || null,
-        sellerAgentId,
-        quantity: requestedQuantity,
-        bookingDate: bookingSelection?.date ?? null,
-        bookingSlot: bookingSelection?.slot ?? null,
-        orgId,
-          purchaseType: 'marketplace_purchase',
-          stripeTaxCents: checkoutAmounts.taxCents,
-          preTaxTotalCents: buyerTotalCents,
-      },
-    });
-
-    await settleSellerNet(tx, settlementTargets, sellerCreditCents, payoutEligibleAt, {
-      currency: session.currency ?? 'usd',
-      referenceId: listingId,
-      ledgerEntryId: ledgerEntry.id,
-      paymentIntentId,
-      sourceType: 'stripe_marketplace_checkout',
-      descriptionPrefix: 'Marketplace settlement for listing',
-    });
-
-    if (orgCommissionCents > 0 && orgWallet) {
-      await tx
-        .update(wallets)
-        .set({
-          balanceCents: sql`${wallets.balanceCents} + ${orgCommissionCents}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(wallets.id, orgWallet.id));
-
-      const [orgPayoutTx] = await tx.insert(walletTransactions).values({
-        type: 'marketplace_payout',
-        toWalletId: orgWallet.id,
-        amountCents: orgCommissionCents,
-        feeCents: 0,
-        currency: session.currency ?? 'usd',
-        description: `Org commission for listing ${listingId}`,
-        referenceType: 'resource',
-        referenceId: listingId,
-        ledgerEntryId: ledgerEntry.id,
-        status: 'completed',
-        metadata: {
-          source: 'stripe_marketplace_checkout',
-          checkoutSessionId: session.id,
-          paymentIntentId,
-          orgId,
-          listingId,
-          payoutEligibleAt,
-        },
-      }).returning({ id: walletTransactions.id });
-
-      await creditWalletCapital(tx, orgWallet.id, orgCommissionCents, {
-        settlementStatus: 'pending',
-        availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
-        sourceType: 'stripe_marketplace_org_commission',
-        sourceTransactionId: orgPayoutTx.id,
-        metadata: {
-          paymentIntentId,
-          stripePaymentIntentId: paymentIntentId,
-          listingId,
-          orgId,
-        },
-      });
-    }
-
-    if (platformRevenueCents > 0) {
-      await tx
-        .update(wallets)
-        .set({
-          balanceCents: sql`${wallets.balanceCents} + ${platformRevenueCents}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(wallets.id, platformWallet.id));
-
-      const [platformFeeTx] = await tx.insert(walletTransactions).values({
-        type: 'service_fee',
-        toWalletId: platformWallet.id,
-        amountCents: platformRevenueCents,
-        feeCents: 0,
-        currency: session.currency ?? 'usd',
-        description: `Platform fee for marketplace purchase ${listingId}`,
-        referenceType: 'resource',
-        referenceId: listingId,
-        ledgerEntryId: ledgerEntry.id,
-        status: 'completed',
-        metadata: {
-          source: 'stripe_marketplace_checkout',
-          checkoutSessionId: session.id,
-          paymentIntentId,
-          listingId,
-          buyerPlatformFeeCents,
-          platformFeeCents,
-        },
-      }).returning({ id: walletTransactions.id });
-
-      await creditWalletCapital(tx, platformWallet.id, platformRevenueCents, {
-        settlementStatus: 'pending',
-        availableOn: payoutEligibleAt ? new Date(payoutEligibleAt) : null,
-        sourceType: 'stripe_marketplace_platform_fee',
-        sourceTransactionId: platformFeeTx.id,
-        metadata: {
-          paymentIntentId,
-          stripePaymentIntentId: paymentIntentId,
-          listingId,
-        },
-      });
-    }
-
-    // Create notification ledger entry for seller
-    if (buyerAgentId) {
-      await tx.insert(ledger).values({
-        verb: 'buy',
-        subjectId: buyerAgentId,
-        objectId: sellerAgentId,
-        objectType: 'agent',
-        isActive: true,
-        metadata: {
-          kind: 'marketplace-purchase',
-          listingId,
-          amountCents: priceCents,
-          message: 'purchased your listing',
-        },
-      } as NewLedgerEntry);
-    }
-
-    // Create receipt resource for buyer's purchase history
-    if (buyerAgentId) {
-      await tx.insert(resources).values({
-        name: `Receipt: ${listingId}`,
-        type: 'receipt',
-        ownerId: buyerAgentId,
-        description: `Purchase receipt for listing ${listingId}`,
-        metadata: {
-          originalListingId: listingId,
-          buyerAgentId,
-          sellerAgentId,
-          stripePaymentIntentId: paymentIntentId,
-          stripeCheckoutSessionId: session.id,
-          priceCents,
-          platformFeeCents: buyerPlatformFeeCents,
-          platformMarginCents: platformFeeCents,
-          orgCommissionCents,
-          preTaxTotalCents: buyerTotalCents,
-          salesTaxCents: checkoutAmounts.taxCents,
-          totalCents: checkoutAmounts.chargedTotalCents,
-          feeCents: buyerPlatformFeeCents + checkoutAmounts.taxCents,
-          quantity: requestedQuantity,
-          bookingDate: bookingSelection?.date ?? null,
-          bookingSlot: bookingSelection?.slot ?? null,
-          purchasedAt: new Date().toISOString(),
-          status: 'completed',
-          currency: session.currency ?? 'usd',
-          orgId,
-          customerEmail: session.customer_details?.email || null,
-          customerName: session.customer_details?.name || null,
-        },
-      });
-    }
+  await settleMarketplacePurchase({
+    listingId,
+    sellerAgentId,
+    buyerAgentId,
+    orgId,
+    orgCommissionCents,
+    platformFeeCents,
+    buyerPlatformFeeCents,
+    priceCents,
+    buyerTotalCents,
+    quantity: requestedQuantity,
+    bookingSelection,
+    chargedTotalCents: checkoutAmounts.chargedTotalCents,
+    taxCents: checkoutAmounts.taxCents,
+    currency: session.currency ?? 'usd',
+    checkoutSessionId: session.id,
+    paymentIntentId,
+    payoutEligibleAt,
+    customerEmail: session.customer_details?.email || null,
+    customerName: session.customer_details?.name || null,
   });
 }
 
@@ -1619,7 +951,13 @@ async function recordMemberDuesReceipt(params: {
         memberAgentId,
       },
     })
-    .onConflictDoNothing({ target: walletTransactions.stripePaymentIntentId });
+    // `wallet_transactions_stripe_pi_idx` is a PARTIAL unique index (WHERE
+    // stripe_payment_intent_id IS NOT NULL, migration 0014); ON CONFLICT only
+    // matches it when the inference clause carries the same predicate.
+    .onConflictDoNothing({
+      target: walletTransactions.stripePaymentIntentId,
+      where: sql`stripe_payment_intent_id IS NOT NULL`,
+    });
 }
 
 /**

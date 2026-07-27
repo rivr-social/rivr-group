@@ -31,7 +31,7 @@ const STOCK_INVENTORY_TYPE_SET: ReadonlySet<string> = new Set(STOCK_INVENTORY_TY
  *    stock — they were wrongly rendering as inventory rows).
  *  - `fund`: a named treasury sub-pool (a wallet-bound `resource`, not stock).
  */
-export const NON_STOCK_RESOURCE_KINDS = ["workperiod", "fund"] as const;
+export const NON_STOCK_RESOURCE_KINDS = ["workperiod", "fund", "checkout_obligation"] as const;
 export type NonStockResourceKind = (typeof NON_STOCK_RESOURCE_KINDS)[number];
 
 const NON_STOCK_RESOURCE_KIND_SET: ReadonlySet<string> = new Set(NON_STOCK_RESOURCE_KINDS);
