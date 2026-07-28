@@ -1,0 +1,75 @@
+# Getting paid & taxes
+
+## What it is
+
+The tax picture for group sellers and event organizers, in plain language. RIVR runs on ONE Stripe
+platform (the global instance); this group instance holds Stripe **Connect** accounts
+for payouts, and card checkouts are (or are becoming) **Global-mediated** —
+created on the global platform, settled back to this instance's ledger
+identically to a local sale. There are three separate tax layers, and it
+matters who owes what:
+
+| Layer | Who owes it | Who handles it |
+| --- | --- | --- |
+| **Sales tax at checkout** | The buyer pays it; RIVR (the platform) collects and remits it as a marketplace facilitator, wherever RIVR holds a tax registration | Automatic — computed at checkout, added ON TOP of your price; your net is never reduced |
+| **Local admission taxes** (e.g. a city facilities/amusement tax) | The EVENT ORGANIZER | You declare it on your event (name + percentage); it's charged as its own line and **paid out to you** — you remit it |
+| **Income-tax paperwork** (W-9 / W-8BEN, 1099-K) | The seller/payee | Collected at payout setup; RIVR issues US sellers a 1099-K when thresholds are met |
+
+## Sales tax at checkout
+
+Where RIVR holds an active registration, checkout calculates sales tax from
+the right source and adds it on top of the listed price:
+
+- **Products** are taxed at the buyer's address.
+- **In-person event tickets** are taxed where the EVENT takes place — which
+  is why an in-person event needs a **venue address** before paid tickets can
+  be sold. Online events are taxed at the buyer's address.
+- The collected tax is remitted by RIVR and is **never part of your payout or
+  your reported sales** — your net is the listed price.
+- **Wallet balance cannot collect sales tax**, so taxable items (tangible
+  goods, in-person admissions) must be paid by card once RIVR is registered.
+  Services remain wallet-payable.
+
+## Your local admission tax (organizer-remitted)
+
+If your city levies an admission tax that falls on YOU as the organizer,
+enable **Add a local admission tax** on the create-event form — a name buyers
+see, your chosen percentage, and (optionally) your registration ID for your
+own records. It appears as its own separately-stated line, is part of the
+charged total (RIVR's platform fee and processing gross-up apply to the full
+amount charged), and is **paid out to you** with your ticket revenue. **You
+remit it; RIVR does not.** Details:
+[Calendar & events](/docs/wiki/calendar-events).
+
+## Your tax identity (payout setup)
+
+Payout setup runs through Stripe's hosted onboarding on the global platform:
+
+- **US sellers** provide their tax identity (SSN/EIN) there — the W-9
+  equivalent, verified by Stripe. Until it verifies, payouts can be held.
+  RIVR — not Stripe — issues your 1099-K when federal/state thresholds are
+  met; collected sales tax is excluded from that gross.
+- **Non-US sellers** provide a W-8BEN instead; most foreign payouts withhold
+  0% because the work isn't US-source, and any withholding that does apply is
+  shown before you're paid.
+
+## Refunds and tax
+
+A refunded sale reverses its tax too: the buyer gets the tax back and the
+collected amount is removed from RIVR's remittance records. Your own
+recovered net follows the refund policy on
+[Wallet & treasury](/docs/wiki/wallet-treasury).
+
+## Good to know
+
+- Prices on RIVR are always **tax-exclusive** — tax is added at checkout and
+  stated separately, never carved out of your listed price.
+- RIVR's platform fee is computed on the full amount charged (including an
+  organizer admission tax line), and Stripe's processing cost is grossed into
+  the buyer total — the buyer funds the fees, you net your price.
+- Nothing here is tax advice; what you owe on YOUR income and YOUR
+  organizer-remitted taxes is between you and your taxing authority.
+
+## Cross-links
+
+- [Wallet & treasury](/docs/wiki/wallet-treasury) · [Marketplace](/docs/wiki/marketplace) · [Calendar & events](/docs/wiki/calendar-events)

@@ -128,13 +128,14 @@ charged to every buyer and kept as revenue.
   gets **General – Tangible Goods** (`txcd_99999999`). Offerings, services,
   vouchers, tickets, and legacy listings stay on services — the conservative
   failure mode is under-collection, never a wrong charge.
-- **Inert until registered.** `automatic_tax` collects tax **only** in
-  jurisdictions where RIVR has an active registration in the Stripe dashboard
-  (Settings → Tax → Registrations). Until those exist, **nobody is charged tax.**
-- **Checkout-Session paths only.** Marketplace checkout, tickets, and group/org
-  dues run through Checkout Sessions and carry the tax config. The
-  destination-charge paths (offerings and bookings, which use raw
-  PaymentIntents) need the Tax Calculation API instead — not yet wired.
+- **Collection follows RIVR's registrations.** `automatic_tax` collects tax
+  **only** in jurisdictions where RIVR (the platform) has an active
+  registration. With none, nobody is charged tax.
+- **In-person ticket tax follows the VENUE**, not the buyer's address —
+  which is why paid in-person events need a venue address. Wallet balance
+  cannot collect sales tax, so taxable items (tangible goods, in-person
+  admissions) must be paid by card once RIVR is registered. See
+  [Getting paid & taxes](/docs/wiki/getting-paid-taxes).
 - On the Connect rail the charge routes to a connected account, so RIVR-the-
   facilitator is set as the party **liable** to collect and remit
   (`liability.type = 'self'`).
