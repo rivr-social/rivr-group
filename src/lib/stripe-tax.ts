@@ -206,14 +206,16 @@ export interface OrganizerAdmissionTax {
   name: string;
   /** Percent of the ticket subtotal, 0–100, up to 2 decimal places. */
   ratePercent: number;
-  /** The organizer's own registration/account id with the taxing authority. */
-  registrationId: string;
+  /** Optional: the organizer's registration/account id, kept as audit trail. */
+  registrationId?: string;
 }
 
 /**
  * Reads and validates the organizer admission tax from event metadata.
- * Returns null unless enabled with a name, a sane rate, and a registration id
- * (Eventbrite's rule: no registration, no tax — it is also the audit trail).
+ * Returns null unless enabled with a name and a sane rate. A registration id
+ * is OPTIONAL (Cameron, 07-28): the tax is the organizer's own liability to
+ * remit, so RIVR does not gate it on paperwork — the id is kept purely as an
+ * audit convenience when provided.
  */
 export function parseOrganizerAdmissionTax(
   metadata: Record<string, unknown> | null | undefined,
@@ -227,11 +229,11 @@ export function parseOrganizerAdmissionTax(
     typeof t.registrationId === 'string' ? t.registrationId.trim() : '';
   const rateRaw = typeof t.ratePercent === 'number' ? t.ratePercent : NaN;
   const ratePercent = Math.round(rateRaw * 100) / 100;
-  if (!name || !registrationId) return null;
+  if (!name) return null;
   if (!Number.isFinite(ratePercent) || ratePercent <= 0 || ratePercent > 100) {
     return null;
   }
-  return { name, ratePercent, registrationId };
+  return { name, ratePercent, ...(registrationId ? { registrationId } : {}) };
 }
 
 /** Organizer tax in cents on a ticket subtotal (round-half-up, never negative). */

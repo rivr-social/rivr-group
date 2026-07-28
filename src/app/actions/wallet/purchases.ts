@@ -570,7 +570,6 @@ export async function createEventTicketCheckoutAction(
       }
 
       const subtotalCents = resolvedSelections.reduce((sum, selection) => sum + selection.subtotalCents, 0);
-      const breakdown = calculateLegacyCheckoutFeesCents(subtotalCents);
 
       // Global-mediated checkout: the session is created on GLOBAL's platform
       // (sovereigns hold Connect accounts, not platform credentials). The full
@@ -586,7 +585,7 @@ export async function createEventTicketCheckoutAction(
         const eventTaxMeta = (eventResourceForTax?.metadata ?? {}) as Record<string, unknown>;
         const eventIsVirtual = isVirtualEventMetadata(eventTaxMeta);
         const eventVenueAddress = parseVenueAddress(eventTaxMeta);
-        if (!eventIsVirtual && !eventVenueAddress && breakdown.totalCents > 0) {
+        if (!eventIsVirtual && !eventVenueAddress && subtotalCents > 0) {
           throw new Error(MEDIATED_TICKET_VENUE_REQUIRED_MESSAGE);
         }
         const admissionVenue = !eventIsVirtual && eventVenueAddress ? eventVenueAddress : undefined;
@@ -599,12 +598,17 @@ export async function createEventTicketCheckoutAction(
           ? computeOrganizerAdmissionTaxCents(subtotalCents, organizerTax.ratePercent)
           : 0;
 
+        // RIVR's platform fee + processing gross-up apply to EVERYTHING
+        // charged, including the organizer's tax line (Cameron, 07-28). The
+        // organizer still nets their full subtotal + tax.
+        const breakdown = calculateLegacyCheckoutFeesCents(subtotalCents + organizerTaxCents);
+
 
         const obligationId = crypto.randomUUID();
         const mediatedBaseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
         await recordCheckoutObligation({
           obligationId,
-          expectedTotalCents: breakdown.totalCents + organizerTaxCents,
+          expectedTotalCents: breakdown.totalCents,
           payload: {
             kind: 'event_ticket',
             eventId,
@@ -616,8 +620,8 @@ export async function createEventTicketCheckoutAction(
             })),
             buyerAgentId: agentId,
             organizerAgentId: eventOwnerId,
-            totalCents: breakdown.totalCents + organizerTaxCents,
-            subtotalCents: breakdown.subtotalCents,
+            totalCents: breakdown.totalCents,
+            subtotalCents,
             organizerTaxCents,
             organizerTaxName: organizerTax?.name ?? '',
             platformFeeCents: breakdown.platformFeeCents,
@@ -637,10 +641,10 @@ export async function createEventTicketCheckoutAction(
               taxCode: STRIPE_TAX_CODE_DEFAULT,
               ...(admissionVenue ? { venueAddress: admissionVenue } : {}),
             })),
-            ...(breakdown.totalCents > subtotalCents
+            ...(breakdown.totalCents > subtotalCents + organizerTaxCents
               ? [{
                   name: `${eventName} Platform fee`,
-                  amountCents: breakdown.totalCents - subtotalCents,
+                  amountCents: breakdown.totalCents - subtotalCents - organizerTaxCents,
                   quantity: 1,
                   taxCode: STRIPE_TAX_CODE_DEFAULT,
                   ...(admissionVenue ? { venueAddress: admissionVenue } : {}),
@@ -670,6 +674,7 @@ export async function createEventTicketCheckoutAction(
         return { success: true, url: mediated.url } as { success: boolean; url?: string; error?: string };
       }
 
+      const breakdown = calculateLegacyCheckoutFeesCents(subtotalCents);
       const customerId = await getOrCreateStripeCustomer(agentId);
       const stripe = getStripe();
       const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';

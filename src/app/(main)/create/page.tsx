@@ -894,7 +894,7 @@ export default function CreatePage() {
         endTime: eventEndTime || null,
         location: eventType === "virtual-meeting" ? "" : eventLocation,
         organizerTax:
-          organizerTaxEnabled && organizerTaxName.trim() && organizerTaxRegistrationId.trim() && Number(organizerTaxRate) > 0
+          organizerTaxEnabled && organizerTaxName.trim() && Number(organizerTaxRate) > 0
             ? {
                 enabled: true,
                 name: organizerTaxName,
@@ -1810,7 +1810,7 @@ export default function CreatePage() {
                     <Input placeholder="Tax name shown to buyers (e.g. Denver FDA Tax)" value={organizerTaxName} onChange={(e) => setOrganizerTaxName(e.target.value)} />
                     <div className="grid grid-cols-2 gap-2">
                       <Input placeholder="Rate % (e.g. 10)" inputMode="decimal" value={organizerTaxRate} onChange={(e) => setOrganizerTaxRate(e.target.value)} />
-                      <Input placeholder="Your tax registration ID (required)" value={organizerTaxRegistrationId} onChange={(e) => setOrganizerTaxRegistrationId(e.target.value)} />
+                      <Input placeholder="Your tax registration ID (optional)" value={organizerTaxRegistrationId} onChange={(e) => setOrganizerTaxRegistrationId(e.target.value)} />
                     </div>
                   </div>
                 )}
