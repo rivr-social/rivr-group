@@ -26,10 +26,13 @@ import { getAgent } from '@/lib/queries/agents';
 import { getOrCreateStripeCustomer, getStripe } from '@/lib/billing';
 import {
   buildAutomaticTax,
+  computeOrganizerAdmissionTaxCents,
   hasActiveTaxRegistrations,
   isTaxSensitiveListingMetadata,
   isVirtualEventMetadata,
   MEDIATED_TICKET_VENUE_REQUIRED_MESSAGE,
+  organizerAdmissionTaxLabel,
+  parseOrganizerAdmissionTax,
   parseVenueAddress,
   RIVR_TAX_BEHAVIOR,
   STRIPE_TAX_CODE_DEFAULT,
@@ -574,30 +577,6 @@ export async function createEventTicketCheckoutAction(
       // settlement payload is recorded locally first; the settlement receiver
       // settles from that record when Global's notice arrives.
       if (isGlobalCheckoutEnabled()) {
-        const obligationId = crypto.randomUUID();
-        const mediatedBaseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-        await recordCheckoutObligation({
-          obligationId,
-          expectedTotalCents: breakdown.totalCents,
-          payload: {
-            kind: 'event_ticket',
-            eventId,
-            ticketProductId: resolvedSelections[0]?.ticketProductId ?? '',
-            ticketSelections: resolvedSelections.map((selection) => ({
-              ticketProductId: selection.ticketProductId,
-              quantity: selection.quantity,
-              subtotalCents: selection.subtotalCents,
-            })),
-            buyerAgentId: agentId,
-            organizerAgentId: eventOwnerId,
-            totalCents: breakdown.totalCents,
-            subtotalCents: breakdown.subtotalCents,
-            platformFeeCents: breakdown.platformFeeCents,
-            legacySalesTaxCents: breakdown.salesTaxCents,
-            paymentFeeCents: breakdown.paymentFeeCents,
-          },
-        });
-
         // Admissions are taxed at the VENUE. For an in-person event the venue
         // address rides each admission line so Global can source the tax to a
         // performance location; a PAID in-person ticket without one is refused
@@ -611,6 +590,41 @@ export async function createEventTicketCheckoutAction(
           throw new Error(MEDIATED_TICKET_VENUE_REQUIRED_MESSAGE);
         }
         const admissionVenue = !eventIsVirtual && eventVenueAddress ? eventVenueAddress : undefined;
+
+        // Organizer-declared admission tax: the ORGANIZER owes and remits it
+        // (RIVR never does) — rendered as its own line and settled to the
+        // organizer inside the ticket revenue. Excluded from RIVR's fee base.
+        const organizerTax = parseOrganizerAdmissionTax(eventTaxMeta);
+        const organizerTaxCents = organizerTax
+          ? computeOrganizerAdmissionTaxCents(subtotalCents, organizerTax.ratePercent)
+          : 0;
+
+
+        const obligationId = crypto.randomUUID();
+        const mediatedBaseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        await recordCheckoutObligation({
+          obligationId,
+          expectedTotalCents: breakdown.totalCents + organizerTaxCents,
+          payload: {
+            kind: 'event_ticket',
+            eventId,
+            ticketProductId: resolvedSelections[0]?.ticketProductId ?? '',
+            ticketSelections: resolvedSelections.map((selection) => ({
+              ticketProductId: selection.ticketProductId,
+              quantity: selection.quantity,
+              subtotalCents: selection.subtotalCents,
+            })),
+            buyerAgentId: agentId,
+            organizerAgentId: eventOwnerId,
+            totalCents: breakdown.totalCents + organizerTaxCents,
+            subtotalCents: breakdown.subtotalCents,
+            organizerTaxCents,
+            organizerTaxName: organizerTax?.name ?? '',
+            platformFeeCents: breakdown.platformFeeCents,
+            legacySalesTaxCents: breakdown.salesTaxCents,
+            paymentFeeCents: breakdown.paymentFeeCents,
+          },
+        });
 
         const buyer = await getAgent(agentId);
         const mediated = await requestGlobalCheckout({
@@ -627,6 +641,16 @@ export async function createEventTicketCheckoutAction(
               ? [{
                   name: `${eventName} Platform fee`,
                   amountCents: breakdown.totalCents - subtotalCents,
+                  quantity: 1,
+                  taxCode: STRIPE_TAX_CODE_DEFAULT,
+                  ...(admissionVenue ? { venueAddress: admissionVenue } : {}),
+                }]
+              : []),
+            ...(organizerTax && organizerTaxCents > 0
+              ? [{
+                  // "Separately stated" on its own line, named by the organizer.
+                  name: organizerAdmissionTaxLabel(organizerTax),
+                  amountCents: organizerTaxCents,
                   quantity: 1,
                   taxCode: STRIPE_TAX_CODE_DEFAULT,
                   ...(admissionVenue ? { venueAddress: admissionVenue } : {}),

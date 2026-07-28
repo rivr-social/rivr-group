@@ -153,6 +153,12 @@ async function settleFromObligation(
     paymentIntentId: notice.paymentIntentId,
     payoutEligibleAt: null,
     federatedObligationId: obligation.obligationId,
+    ...(payload.organizerTaxCents
+      ? {
+          organizerTaxCents: payload.organizerTaxCents,
+          organizerTaxName: payload.organizerTaxName,
+        }
+      : {}),
   });
 }
 

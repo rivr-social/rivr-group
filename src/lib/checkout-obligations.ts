@@ -58,6 +58,9 @@ export interface EventTicketObligationPayload {
   platformFeeCents: number;
   legacySalesTaxCents: number;
   paymentFeeCents: number;
+  /** Organizer-declared admission tax (settles to the organizer; they remit). */
+  organizerTaxCents?: number;
+  organizerTaxName?: string;
 }
 
 export type CheckoutObligationPayload =

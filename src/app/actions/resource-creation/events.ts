@@ -180,6 +180,17 @@ export async function createEventResource(input: {
   } | null;
   eventType: "in-person" | "online";
   /**
+   * Organizer-declared admission tax: the ORGANIZER owes and remits it (RIVR
+   * never does). Rendered as its own checkout line, settled to the organizer
+   * with their ticket revenue. Requires their registration id to enable.
+   */
+  organizerTax?: {
+    enabled: boolean;
+    name: string;
+    ratePercent: number;
+    registrationId: string;
+  } | null;
+  /**
    * Host a Virtual Meeting on this instance: the event page opens a LiveKit
    * room during the event window; the session is recorded per participant
    * and a speaker-identified transcript lands on the event.
@@ -377,6 +388,15 @@ export async function createEventResource(input: {
           images: input.imageUrl ? [input.imageUrl] : [],
           chapterTags: Array.from(new Set([...baseChapterTags, ...(input.scopedLocaleIds ?? []), ...scopedRegionIds])),
           eventType: input.eventType,
+          organizerTax:
+            input.organizerTax && input.organizerTax.enabled
+              ? {
+                  enabled: true,
+                  name: input.organizerTax.name?.trim() ?? "",
+                  ratePercent: Math.round((input.organizerTax.ratePercent ?? 0) * 100) / 100,
+                  registrationId: input.organizerTax.registrationId?.trim() ?? "",
+                }
+              : null,
           price: normalizedTickets[0]?.priceCents ? normalizedTickets[0].priceCents / 100 : input.price ?? null,
           groupId: input.groupId ?? (ownerId !== resolvedUserId ? ownerId : null),
           projectId: input.projectId ?? null,

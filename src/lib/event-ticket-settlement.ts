@@ -53,6 +53,14 @@ export interface EventTicketSettlementInput {
   payoutEligibleAt: string | null;
   /** Present when the sale settled via Global mediation; audit-only. */
   federatedObligationId?: string;
+  /**
+   * Organizer-declared admission tax collected with this sale. Settles to the
+   * ORGANIZER inside the seller-net (it rides totalCents); stamped here so
+   * the ledger separately states what the organizer owes their taxing
+   * authority. RIVR never remits it.
+   */
+  organizerTaxCents?: number;
+  organizerTaxName?: string;
 }
 
 /**
@@ -131,6 +139,13 @@ export async function settleEventTicketPurchase(
           checkoutSessionId,
           paymentIntentId,
           eventId,
+          ...(input.organizerTaxCents
+            ? {
+                organizerTaxCents: input.organizerTaxCents,
+                organizerTaxName: input.organizerTaxName ?? null,
+                organizerTaxRemitsBy: 'organizer',
+              }
+            : {}),
           ticketProductId,
           subtotalCents,
           platformFeeCents,

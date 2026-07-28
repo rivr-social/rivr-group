@@ -186,6 +186,72 @@ export function isTaxSensitiveListingMetadata(
 }
 
 // ---------------------------------------------------------------------------
+// Organizer-settable admission tax (Eventbrite-style)
+// ---------------------------------------------------------------------------
+//
+// Some admission taxes fall on the ORGANIZER and are not shifted to the
+// marketplace by facilitator law (Denver's 10% Facilities Development
+// Admission Tax is the canonical case: the promoter owes it and it must be
+// "conspicuously, indelibly and separately stated" on the ticket). Stripe Tax
+// cannot compute these, so the organizer declares one per event — a name, a
+// chosen percentage, and their own registration id — and RIVR renders it as
+// its OWN checkout line item, computed on the ticket subtotal, settled TO THE
+// ORGANIZER (never RIVR revenue; RIVR does not remit it). It is deliberately
+// a plain line item — Stripe rejects line-item tax_rates alongside
+// automatic_tax — and it is EXCLUDED from RIVR's platform-fee base.
+
+/** Parsed organizer admission tax config from `event.metadata.organizerTax`. */
+export interface OrganizerAdmissionTax {
+  /** Shown at checkout/on receipts, e.g. "Denver FDA Tax". */
+  name: string;
+  /** Percent of the ticket subtotal, 0–100, up to 2 decimal places. */
+  ratePercent: number;
+  /** The organizer's own registration/account id with the taxing authority. */
+  registrationId: string;
+}
+
+/**
+ * Reads and validates the organizer admission tax from event metadata.
+ * Returns null unless enabled with a name, a sane rate, and a registration id
+ * (Eventbrite's rule: no registration, no tax — it is also the audit trail).
+ */
+export function parseOrganizerAdmissionTax(
+  metadata: Record<string, unknown> | null | undefined,
+): OrganizerAdmissionTax | null {
+  const raw = metadata?.organizerTax;
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Record<string, unknown>;
+  if (t.enabled !== true) return null;
+  const name = typeof t.name === 'string' ? t.name.trim() : '';
+  const registrationId =
+    typeof t.registrationId === 'string' ? t.registrationId.trim() : '';
+  const rateRaw = typeof t.ratePercent === 'number' ? t.ratePercent : NaN;
+  const ratePercent = Math.round(rateRaw * 100) / 100;
+  if (!name || !registrationId) return null;
+  if (!Number.isFinite(ratePercent) || ratePercent <= 0 || ratePercent > 100) {
+    return null;
+  }
+  return { name, ratePercent, registrationId };
+}
+
+/** Organizer tax in cents on a ticket subtotal (round-half-up, never negative). */
+export function computeOrganizerAdmissionTaxCents(
+  subtotalCents: number,
+  ratePercent: number,
+): number {
+  if (!Number.isFinite(subtotalCents) || subtotalCents <= 0) return 0;
+  return Math.max(0, Math.round((subtotalCents * ratePercent) / 100));
+}
+
+/** Checkout line-item label, e.g. "Denver FDA Tax (10%)". */
+export function organizerAdmissionTaxLabel(tax: OrganizerAdmissionTax): string {
+  const rate = Number.isInteger(tax.ratePercent)
+    ? String(tax.ratePercent)
+    : tax.ratePercent.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `${tax.name} (${rate}%)`;
+}
+
+// ---------------------------------------------------------------------------
 // Tax for ticket sales — venue (performance-location) sourcing
 // ---------------------------------------------------------------------------
 //

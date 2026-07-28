@@ -134,6 +134,11 @@ export default function CreatePage() {
   const [venueCity, setVenueCity] = useState("")
   const [venueState, setVenueState] = useState("")
   const [venuePostalCode, setVenuePostalCode] = useState("")
+  // Organizer-declared admission tax (organizer owes + remits it, not RIVR)
+  const [organizerTaxEnabled, setOrganizerTaxEnabled] = useState(false)
+  const [organizerTaxName, setOrganizerTaxName] = useState("")
+  const [organizerTaxRate, setOrganizerTaxRate] = useState("")
+  const [organizerTaxRegistrationId, setOrganizerTaxRegistrationId] = useState("")
   const [eventType, setEventType] = useState(() => isLiveClass ? "in-person" : "in-person") // "in-person" or "online"
   // Lazy-reveal for the optional event location/meeting-link section (G2). Opens
   // by default when a location was handed off via URL (e.g. a Live Class) so the
@@ -888,6 +893,15 @@ export default function CreatePage() {
         endDate: eventEndDate || null,
         endTime: eventEndTime || null,
         location: eventType === "virtual-meeting" ? "" : eventLocation,
+        organizerTax:
+          organizerTaxEnabled && organizerTaxName.trim() && organizerTaxRegistrationId.trim() && Number(organizerTaxRate) > 0
+            ? {
+                enabled: true,
+                name: organizerTaxName,
+                ratePercent: Number(organizerTaxRate),
+                registrationId: organizerTaxRegistrationId,
+              }
+            : null,
         venueAddress:
           eventType === "in-person" && venueLine1.trim()
             ? {
@@ -1775,6 +1789,32 @@ export default function CreatePage() {
                   </div>
                 </div>
               )}
+
+              <div className="space-y-2 rounded-md border p-3">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={organizerTaxEnabled}
+                    onChange={(e) => setOrganizerTaxEnabled(e.target.checked)}
+                  />
+                  Add a local admission tax
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  For city/venue admission taxes YOU owe as the organizer (e.g. a
+                  facilities or amusement tax). It appears as its own line at
+                  checkout and is paid out to you with your ticket revenue —
+                  you are responsible for remitting it; RIVR does not remit it.
+                </p>
+                {organizerTaxEnabled && (
+                  <div className="space-y-2">
+                    <Input placeholder="Tax name shown to buyers (e.g. Denver FDA Tax)" value={organizerTaxName} onChange={(e) => setOrganizerTaxName(e.target.value)} />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input placeholder="Rate % (e.g. 10)" inputMode="decimal" value={organizerTaxRate} onChange={(e) => setOrganizerTaxRate(e.target.value)} />
+                      <Input placeholder="Your tax registration ID (required)" value={organizerTaxRegistrationId} onChange={(e) => setOrganizerTaxRegistrationId(e.target.value)} />
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Venue Booking Section - Only show for in-person events */}
               {eventType === "in-person" && (
