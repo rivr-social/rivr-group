@@ -32,6 +32,7 @@ import {
   updateResource,
   deleteResource,
 } from "@/app/actions/resource-creation";
+import { dollarsToCents } from "@/app/actions/resource-creation/types";
 import { updateTaskStatus, claimTasksAction } from "@/app/actions/interactions/tasks";
 import {
   claimJobAction,
@@ -65,6 +66,16 @@ function requireStr(args: Record<string, unknown>, key: string): string {
 
 function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Coerce a DOLLAR-denominated tool argument to the integer CENTS the resource
+ * actions persist. Returns `undefined` when the caller omitted the field so the
+ * action leaves the price unset rather than writing a `0` price.
+ */
+function dollarArgToCents(value: unknown): number | undefined {
+  const dollars = num(value);
+  return dollars === undefined ? undefined : dollarsToCents(dollars);
 }
 
 function strArray(value: unknown): string[] {
@@ -728,7 +739,8 @@ export const GROUP_ACTION_TOOLS: GroupActionTool[] = [
         title: requireStr(args, "title"),
         description: requireStr(args, "description"),
         offeringType: requireStr(args, "offeringType"),
-        basePrice: num(args.basePrice),
+        // This tool's schema is denominated in DOLLARS; the action takes CENTS.
+        basePrice: dollarArgToCents(args.basePrice),
         currency: str(args.currency),
         quantityAvailable: num(args.quantityAvailable),
         category: str(args.category),

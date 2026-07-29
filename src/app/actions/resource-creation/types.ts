@@ -104,9 +104,14 @@ export function resolveGroupMemberCapability(
 }
 
 /**
- * Convert a dollar amount to integer cents. Offering/listing prices arrive from
- * the form as DOLLARS but are persisted (and forwarded over federation) in
- * CENTS — so this helper is the single conversion point.
+ * Convert a dollar amount to integer cents.
+ *
+ * Prices are persisted (and forwarded over federation) in CENTS, and the in-app
+ * offering form already emits cents — so this helper belongs at the boundaries
+ * whose OWN surface is denominated in dollars: the MCP agent tools
+ * (`rivr.offerings.create`) and the legacy marketplace-listing input. Do NOT
+ * apply it to a value that is already cents; that is the ×100-twice defect that
+ * made a $15 listing charge $1,500. See `@/lib/offering-pricing`.
  *
  * Returns 0 for non-finite or non-positive inputs so callers can safely
  * compare against `0` to detect "no price".

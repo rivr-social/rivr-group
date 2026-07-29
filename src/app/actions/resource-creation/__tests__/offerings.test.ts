@@ -279,10 +279,12 @@ describe("offering creation actions", () => {
         expect(result.success).toBe(true);
       }));
 
-    // Pricing — dollars → cents conversion. Regression for the off-by-100
-    // forward-path bug: a sovereign-homed offering with `basePrice: 12` ($12)
-    // was persisting `totalPriceCents: 12` ($0.12) because the dollars→cents
-    // conversion was missing on this instance's create path.
+    // Pricing — `dollarsToCents` guards the DOLLAR-denominated boundaries (the
+    // MCP `rivr.offerings.create` tool). `createOfferingResource` itself takes
+    // `basePrice` in CENTS; applying this helper to an already-cents value is
+    // the ×100-twice defect that made a $15 service charge $1,500. Coverage of
+    // the action-side normalizer is pure and lives in
+    // `src/lib/__tests__/offering-pricing.test.ts`.
     it("dollarsToCents helper converts dollars to integer cents", () => {
       expect(dollarsToCents(5)).toBe(500);
       expect(dollarsToCents(12)).toBe(1200);
