@@ -63,3 +63,52 @@ export const WALLET_TX_STATUS = {
   FAILED: 'failed',
   REVERSED: 'reversed',
 } as const;
+
+/**
+ * `metadata.failureReason` stamped on a deposit that SETTLED at Stripe but
+ * could not be credited because the destination wallet is frozen (audit W-07).
+ *
+ * The payer's money is captured and owed back, so the row is the reconciliation
+ * anchor an operator refunds against:
+ * `metadata->>'failureReason' = 'wallet_frozen' AND metadata->>'requiresRefund' = 'true'`.
+ */
+export const WALLET_DEPOSIT_FAILURE_WALLET_FROZEN = 'wallet_frozen';
+
+/** The reconciliation stamp written on a stranded (captured, uncredited) deposit. */
+export interface StrandedDepositStamp {
+  failureReason: typeof WALLET_DEPOSIT_FAILURE_WALLET_FROZEN;
+  /** Captured amount owed back to the payer, in integer cents. */
+  strandedAmountCents: number;
+  /** The settled PaymentIntent to refund against. */
+  strandedPaymentIntentId: string;
+  /** When the credit was refused, ISO-8601. */
+  strandedAt: string;
+  /** Always true — the flag operators query on. */
+  requiresRefund: true;
+}
+
+/**
+ * Builds the metadata stamp for a deposit that SETTLED at Stripe but could not
+ * be credited (audit W-07).
+ *
+ * Pure so the anchor's shape is pinned by a test: an operator's refund query
+ * depends on these exact keys, and a silent rename would re-hide the money.
+ *
+ * @param input.paymentIntentId Settled Stripe PaymentIntent.
+ * @param input.amountCents Captured amount owed back.
+ * @param input.at Timestamp of the refusal (injectable for tests).
+ * @returns The stamp to merge into `wallet_transactions.metadata`.
+ */
+export function buildStrandedDepositStamp(input: {
+  paymentIntentId: string;
+  amountCents: number;
+  at?: Date;
+}): StrandedDepositStamp {
+  return {
+    failureReason: WALLET_DEPOSIT_FAILURE_WALLET_FROZEN,
+    strandedAmountCents: input.amountCents,
+    strandedPaymentIntentId: input.paymentIntentId,
+    strandedAt: (input.at ?? new Date()).toISOString(),
+    requiresRefund: true,
+  };
+}
