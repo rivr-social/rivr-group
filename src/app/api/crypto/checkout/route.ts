@@ -33,6 +33,12 @@ import {
   type SplitPayout,
 } from '@/lib/crypto-splitter';
 import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit';
+import { getStripe } from '@/lib/billing';
+import {
+  CRYPTO_PURCHASE_TAXABLE_MESSAGE,
+  hasActiveTaxRegistrations,
+  isTaxSensitiveListingMetadata,
+} from '@/lib/stripe-tax';
 import { getClientIp } from '@/lib/client-ip';
 import {
   STATUS_BAD_REQUEST,
@@ -159,6 +165,27 @@ export async function POST(request: NextRequest) {
       { status: STATUS_NOT_FOUND },
     );
   }
+  // Crypto settles on-chain with no Stripe charge, so no sales tax can be
+  // computed or remitted (fees-audit finding B, 2026-07-30). Same guard as the
+  // wallet lane: once RIVR holds an active tax registration, tax-sensitive
+  // items (tangible goods) must use a tax-computing card lane. An instance
+  // without Stripe credentials stands down — collection is the card lanes' job.
+  const splitListingMeta = (split.resource.metadata ?? {}) as Record<string, unknown>;
+  if (isTaxSensitiveListingMetadata(splitListingMeta)) {
+    let taxGuardActive = false;
+    try {
+      taxGuardActive = await hasActiveTaxRegistrations(getStripe());
+    } catch {
+      taxGuardActive = false;
+    }
+    if (taxGuardActive) {
+      return NextResponse.json(
+        { error: CRYPTO_PURCHASE_TAXABLE_MESSAGE },
+        { status: STATUS_BAD_REQUEST },
+      );
+    }
+  }
+
 
   try {
     if (action === 'quote') {

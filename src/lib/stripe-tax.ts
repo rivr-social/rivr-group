@@ -178,6 +178,15 @@ export function resetTaxRegistrationCacheForTests(): void {
 export const WALLET_PURCHASE_TAXABLE_MESSAGE =
   'This item is taxable and wallet balance cannot collect sales tax — please pay by card instead.';
 
+/**
+ * Crypto (USDC) checkout is the same class of untaxed lane as the wallet:
+ * no Stripe charge means no tax computation or remittance. Once registered,
+ * tax-sensitive items must use a tax-computing card lane (fees-audit
+ * finding B, 2026-07-30).
+ */
+export const CRYPTO_PURCHASE_TAXABLE_MESSAGE =
+  'This item is taxable and crypto checkout cannot collect sales tax — please pay by card instead.';
+
 /** Whether a listing is tax-sensitive for the wallet-purchase guard. */
 export function isTaxSensitiveListingMetadata(
   metadata: Record<string, unknown>,
@@ -198,7 +207,9 @@ export function isTaxSensitiveListingMetadata(
 // its OWN checkout line item, computed on the ticket subtotal, settled TO THE
 // ORGANIZER (never RIVR revenue; RIVR does not remit it). It is deliberately
 // a plain line item — Stripe rejects line-item tax_rates alongside
-// automatic_tax — and it is EXCLUDED from RIVR's platform-fee base.
+// automatic_tax. RIVR's platform fee + processing gross-up apply to the FULL
+// charged base INCLUDING this line (Cameron, 07-28 — Stripe's processing cut
+// applies to those cents too); the organizer still nets subtotal + tax.
 
 /** Parsed organizer admission tax config from `event.metadata.organizerTax`. */
 export interface OrganizerAdmissionTax {

@@ -25,6 +25,7 @@ import { getResource } from '@/lib/queries/resources';
 import { getAgent } from '@/lib/queries/agents';
 import { getOrCreateStripeCustomer, getStripe } from '@/lib/billing';
 import {
+  assertUntaxedChargePathAllowed,
   buildAutomaticTax,
   computeOrganizerAdmissionTaxCents,
   hasActiveTaxRegistrations,
@@ -592,7 +593,8 @@ export async function createEventTicketCheckoutAction(
 
         // Organizer-declared admission tax: the ORGANIZER owes and remits it
         // (RIVR never does) — rendered as its own line and settled to the
-        // organizer inside the ticket revenue. Excluded from RIVR's fee base.
+        // organizer inside the ticket revenue. RIVR's fee applies to the FULL
+        // charged base including this line (Cameron, 07-28).
         const organizerTax = parseOrganizerAdmissionTax(eventTaxMeta);
         const organizerTaxCents = organizerTax
           ? computeOrganizerAdmissionTaxCents(subtotalCents, organizerTax.ratePercent)
@@ -1007,6 +1009,12 @@ export async function createProvidePaymentAction(offeringId: string): Promise<{
 
       // Create PaymentIntent with destination charge
       const stripe = getStripe();
+      // Fail-closed tax tripwire (fees-audit finding A, 2026-07-30): this is a
+      // RAW PaymentIntent with no automatic_tax, so once RIVR holds an active
+      // registration a sale here would silently under-collect tax RIVR is
+      // liable for as facilitator. Refuse loudly instead — the hosted-Checkout
+      // offering lane is the tax-computing path.
+      await assertUntaxedChargePathAllowed(stripe, 'createProvidePaymentAction');
       const paymentIntent = await stripe.paymentIntents.create({
         amount: charge.totalCents,
         currency: 'usd',
