@@ -170,15 +170,26 @@ net-zero, so funding a project never double-counts as revenue.
 - This replaced an older version that read the *viewer's personal* wallet and
   therefore never showed job payouts (which debit the project wallet).
 
+### Choosing a date range
+
+The **Transactions** tab has a date-range picker (*All time*, *This month*,
+*Last month*, *Year to date*). It scopes the transaction list, the count above
+it, and the CSV export together, so what you export is what you were looking at.
+
 ### Exporting the ledger
 
-**Export CSV** downloads the transactions you are authorized to read, paging the
-full ledger rather than just the rows on screen (capped at 1,000 rows; a file
-that hits the cap says so in its first line, along with how many of the total it
-covers). Each row carries BOTH a **gross amount** — the real value moved,
-including internal allocations and sweeps — and a **treasury-signed amount**,
-which is `0.00` for internal moves because they net to zero for the treasury as
-a whole.
+**Export CSV** downloads the transactions you are authorized to read **over the
+selected date range** — not just the rows on screen — up to a 10,000-row cap.
+After the download the app tells you how many transactions it covered; if the
+range exceeded the cap it says so and the file name is marked `-partial`, so a
+truncated export can't be mistaken for the complete ledger. (Narrow the date
+range to export the rest.) The file itself stays a plain header-plus-rows table
+that spreadsheets and data tools read without special handling.
+
+Each row carries BOTH an **Amount (USD)** — the real value moved, including
+internal allocations and sweeps — and a **Treasury effect (USD)**, which is
+`0.00` for internal moves because they net to zero for the treasury as a whole.
+The **Direction** column (`in` / `out` / `internal`) says which is which.
 
 ### Reports and the budget half
 

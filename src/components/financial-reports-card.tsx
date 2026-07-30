@@ -16,48 +16,27 @@ import { Button } from "@/components/ui/button"
 import { Download, FileJson, Loader2 } from "lucide-react"
 import { getGroupFinancialReportAction } from "@/app/actions/wallet"
 import type { GroupFinancialReport } from "@/app/actions/wallet"
+import {
+  buildTreasuryPeriods,
+  type TreasuryPeriod,
+  type TreasuryPeriodKey,
+} from "@/lib/treasury-periods"
 
 interface FinancialReportsCardProps {
   groupId: string
 }
 
-type RangeKey = "this_month" | "last_month" | "ytd" | "all"
-
-interface Range {
-  key: RangeKey
-  label: string
-  sinceIso?: string
-  untilIso?: string
-}
+/** Re-exported shapes from the shared period module (audit T1-5: the report's
+ *  window and the ledger's window must be one definition, not two copies). */
+type RangeKey = TreasuryPeriodKey
+type Range = TreasuryPeriod
 
 function usd(cents: number): string {
   return (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" })
 }
 
-/** Builds the selectable date ranges relative to now (computed at click time). */
-function buildRanges(): Range[] {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = now.getMonth()
-  const monthStart = new Date(y, m, 1)
-  const lastMonthStart = new Date(y, m - 1, 1)
-  const lastMonthEnd = new Date(y, m, 0, 23, 59, 59, 999)
-  const yearStart = new Date(y, 0, 1)
-  return [
-    { key: "this_month", label: "This month", sinceIso: monthStart.toISOString(), untilIso: now.toISOString() },
-    {
-      key: "last_month",
-      label: "Last month",
-      sinceIso: lastMonthStart.toISOString(),
-      untilIso: lastMonthEnd.toISOString(),
-    },
-    { key: "ytd", label: "Year to date", sinceIso: yearStart.toISOString(), untilIso: now.toISOString() },
-    { key: "all", label: "All time" },
-  ]
-}
-
 export function FinancialReportsCard({ groupId }: FinancialReportsCardProps) {
-  const [ranges] = useState<Range[]>(buildRanges)
+  const [ranges] = useState<Range[]>(() => buildTreasuryPeriods(new Date()))
   const [activeKey, setActiveKey] = useState<RangeKey>("this_month")
   const [report, setReport] = useState<GroupFinancialReport | null>(null)
   const [isLoading, setIsLoading] = useState(false)

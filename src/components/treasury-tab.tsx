@@ -46,6 +46,7 @@ import {
   toCsvText,
   EXPORT_MAX_ROWS,
 } from "@/lib/treasury-ledger"
+import { buildTreasuryPeriods, findTreasuryPeriod } from "@/lib/treasury-periods"
 import { useToast } from "@/components/ui/use-toast"
 import {
   Select,
@@ -63,40 +64,6 @@ const TRANSACTIONS_PAGE_LIMIT = 100
 function currentMonthStartIso(): string {
   const now = new Date()
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-}
-
-/** A selectable window for the Transactions list and the CSV export (T-13). */
-interface TxRange {
-  key: string
-  label: string
-  sinceIso?: string
-  untilIso?: string
-}
-
-/**
- * The date ranges offered on the Transactions tab, computed at render time.
- *
- * Audit T-13: the "Date Range" button was inert (no `onClick`). The ledger
- * action already accepted `sinceIso`/`untilIso`, so wiring it needed no new
- * server work — these presets are exactly that parameter pair. Its sibling
- * "Filter" button had no server-side counterpart at all and was REMOVED rather
- * than left as dead UI.
- */
-function buildTxRanges(): TxRange[] {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = now.getMonth()
-  return [
-    { key: "all", label: "All time" },
-    { key: "this_month", label: "This month", sinceIso: new Date(y, m, 1).toISOString() },
-    {
-      key: "last_month",
-      label: "Last month",
-      sinceIso: new Date(y, m - 1, 1).toISOString(),
-      untilIso: new Date(y, m, 0, 23, 59, 59, 999).toISOString(),
-    },
-    { key: "ytd", label: "Year to date", sinceIso: new Date(y, 0, 1).toISOString() },
-  ]
 }
 
 interface TreasuryTabProps {
@@ -142,14 +109,14 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
   const [fundsTotalCents, setFundsTotalCents] = useState(0)
   const [isExporting, setIsExporting] = useState(false)
   // Transactions tab: the selected window (T-13) and the rows within it.
-  const [txRanges] = useState<TxRange[]>(buildTxRanges)
+  const [txRanges] = useState(() => buildTreasuryPeriods(new Date()))
   const [txRangeKey, setTxRangeKey] = useState<string>("all")
   const [txEntries, setTxEntries] = useState<TreasuryLedgerEntry[]>([])
   const [txTotal, setTxTotal] = useState(0)
   const [isLoadingTx, setIsLoadingTx] = useState(false)
   const { toast } = useToast()
 
-  const activeTxRange = txRanges.find((r) => r.key === txRangeKey) ?? txRanges[0]
+  const activeTxRange = findTreasuryPeriod(txRanges, txRangeKey)
 
   const fetchWalletData = useCallback(async () => {
     setIsLoadingWallet(true)
@@ -212,8 +179,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
     try {
       const result = await getGroupTreasuryLedgerAction(groupId, {
         limit: TRANSACTIONS_PAGE_LIMIT,
-        sinceIso: activeTxRange?.sinceIso,
-        untilIso: activeTxRange?.untilIso,
+        sinceIso: activeTxRange.sinceIso,
+        untilIso: activeTxRange.untilIso,
       })
       if (result.success && result.ledger) {
         setTxEntries(result.ledger.entries)
@@ -222,7 +189,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
     } finally {
       setIsLoadingTx(false)
     }
-  }, [groupId, activeTxRange?.sinceIso, activeTxRange?.untilIso])
+  }, [groupId, activeTxRange.sinceIso, activeTxRange.untilIso])
 
   useEffect(() => {
     void fetchTransactions()
@@ -292,8 +259,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
       const result = await getGroupTreasuryLedgerAction(groupId, {
         forExport: true,
         limit: EXPORT_MAX_ROWS,
-        sinceIso: activeTxRange?.sinceIso,
-        untilIso: activeTxRange?.untilIso,
+        sinceIso: activeTxRange.sinceIso,
+        untilIso: activeTxRange.untilIso,
       })
       if (!result.success || !result.ledger) {
         toast({
@@ -313,8 +280,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
       toast({
         title: truncated ? "Exported a partial ledger" : "Treasury exported",
         description: truncated
-          ? `${entries.length} of ${total} transactions (${activeTxRange?.label.toLowerCase()}) — capped at ${EXPORT_MAX_ROWS.toLocaleString()} rows. Narrow the date range to export the rest.`
-          : `${entries.length} transaction${entries.length === 1 ? "" : "s"} (${activeTxRange?.label.toLowerCase()}).`,
+          ? `${entries.length} of ${total} transactions (${activeTxRange.label.toLowerCase()}) — capped at ${EXPORT_MAX_ROWS.toLocaleString()} rows. Narrow the date range to export the rest.`
+          : `${entries.length} transaction${entries.length === 1 ? "" : "s"} (${activeTxRange.label.toLowerCase()}).`,
         variant: truncated ? "destructive" : "default",
       })
     } finally {
@@ -579,8 +546,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
                 {isLoadingTx
                   ? "Loading…"
                   : txTotal > txEntries.length
-                    ? `Showing ${txEntries.length} of ${txTotal} — ${activeTxRange?.label.toLowerCase()}`
-                    : `${txTotal} transaction${txTotal === 1 ? "" : "s"} — ${activeTxRange?.label.toLowerCase()}`}
+                    ? `Showing ${txEntries.length} of ${txTotal} — ${activeTxRange.label.toLowerCase()}`
+                    : `${txTotal} transaction${txTotal === 1 ? "" : "s"} — ${activeTxRange.label.toLowerCase()}`}
               </p>
             </div>
             {/* T-13: the old "Filter" and "Date Range" buttons had no onClick at
