@@ -11,7 +11,7 @@ import { getResource } from "@/lib/queries/resources"
 import { redirectIfSovereignResource } from "@/lib/federation/sovereign-resource-redirect"
 import { getSession } from "@/lib/auth/get-session"
 import { resolveLocalActorId } from "@/lib/federation/resolution"
-import { splitterCheckoutEnabled } from "@/lib/crypto-splitter"
+import { cryptoNetwork, splitterCheckoutEnabled } from "@/lib/crypto-splitter"
 
 export default async function MarketplaceItemPurchasePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -36,15 +36,17 @@ export default async function MarketplaceItemPurchasePage({ params }: { params: 
     : null
   // Crypto checkout network selection is SERVER policy (per-instance env),
   // threaded down as props — the fleet is on test rails (Base Sepolia) until
-  // real-money cutover, mirroring the Stripe test-keys posture.
-  const cryptoNetwork =
-    process.env.CRYPTO_NETWORK === "base-sepolia" ? ("base-sepolia" as const) : ("base" as const)
+  // real-money cutover, mirroring the Stripe test-keys posture. ONE resolver
+  // (`cryptoNetwork`) decides it for both the client checkout and the
+  // server-side splitter rail, and it fails safe to the testnet when
+  // CRYPTO_NETWORK is unset — never re-derive the network inline here.
+  const network = cryptoNetwork()
   const cryptoPlatformWallet = process.env.CRYPTO_PLATFORM_WALLET || null
   return (
     <PurchasePageClient
       id={id}
       serverViewerId={serverViewerId}
-      cryptoNetwork={cryptoNetwork}
+      cryptoNetwork={network}
       cryptoPlatformWallet={cryptoPlatformWallet}
       cryptoOneSignature={splitterCheckoutEnabled()}
     />

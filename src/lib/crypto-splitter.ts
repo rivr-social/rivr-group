@@ -16,7 +16,8 @@
  *
  * Network: selected per instance via `CRYPTO_NETWORK` (base | base-sepolia),
  * same policy switch as the client checkout; `SPLITTER_ADDRESS` is the
- * deployed RivrSplitter for that network.
+ * deployed RivrSplitter for that network. The selection FAILS SAFE to the
+ * TESTNET — see {@link cryptoNetwork}.
  */
 import {
   createPublicClient,
@@ -66,8 +67,47 @@ export interface SplitPayout {
   amount: bigint;
 }
 
+/** The network used when `CRYPTO_NETWORK` is unset/unrecognized (fail-safe). */
+export const DEFAULT_CRYPTO_NETWORK: CryptoNetwork = 'base-sepolia';
+
+/** Values that opt an instance INTO real-money Base mainnet. Explicit only. */
+const MAINNET_OPT_IN_VALUES = new Set(['base', 'mainnet', 'base-mainnet']);
+
+/** Values that name the testnet explicitly (no warning — a deliberate choice). */
+const TESTNET_VALUES = new Set(['base-sepolia', 'sepolia', 'testnet']);
+
+/** Warn at most once per process per distinct bad/absent value — no log spam. */
+const warnedNetworkValues = new Set<string>();
+
+function warnNetworkDefault(raw: string | undefined): void {
+  const key = raw ?? '';
+  if (warnedNetworkValues.has(key)) return;
+  warnedNetworkValues.add(key);
+  console.warn(
+    raw
+      ? `[crypto] CRYPTO_NETWORK="${raw}" is not a recognized network — falling back to ` +
+          `${DEFAULT_CRYPTO_NETWORK} (testnet). Set CRYPTO_NETWORK=base to use Base mainnet.`
+      : `[crypto] CRYPTO_NETWORK is not set — defaulting to ${DEFAULT_CRYPTO_NETWORK} ` +
+          `(testnet). Set CRYPTO_NETWORK=base to move REAL USDC on Base mainnet.`,
+  );
+}
+
+/**
+ * The Base network this instance transacts on.
+ *
+ * MONEY-SAFETY: an unset or unrecognized `CRYPTO_NETWORK` resolves to the
+ * TESTNET. Mainnet moves REAL USDC, so it must be an explicit, deliberate
+ * opt-in (`CRYPTO_NETWORK=base`) — a missing env var on a box that happens to
+ * carry `SPLITTER_ADDRESS` + `CRYPTO_RELAYER_PRIVATE_KEY` must never silently
+ * point the rail at real money. Defaulting logs a warning (once per value).
+ */
 export function cryptoNetwork(): CryptoNetwork {
-  return process.env.CRYPTO_NETWORK === 'base-sepolia' ? 'base-sepolia' : 'base';
+  const raw = process.env.CRYPTO_NETWORK?.trim();
+  const normalized = raw?.toLowerCase();
+  if (normalized && MAINNET_OPT_IN_VALUES.has(normalized)) return 'base';
+  if (normalized && TESTNET_VALUES.has(normalized)) return 'base-sepolia';
+  warnNetworkDefault(raw);
+  return DEFAULT_CRYPTO_NETWORK;
 }
 
 export function splitterAddress(): Address | null {

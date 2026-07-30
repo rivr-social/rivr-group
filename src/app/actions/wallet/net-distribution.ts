@@ -28,6 +28,7 @@ import { getGroupMembersByClass } from './net-allocation';
 import { getSubtreeTaskPointsByMember } from '@/lib/queries/stakes';
 import {
   planProjectNetDistribution,
+  deriveDistributionIdempotencyKey,
   type DistributionRunPlan,
 } from '@/lib/net-distribution-run';
 import { getCurrentUserId } from './helpers';
@@ -43,6 +44,12 @@ const DISTRIBUTION_TX_TYPE = 'project_distribution' as const;
  * auto-trigger: it only executes when a controller explicitly invokes this
  * action AND passes `confirm: true`. A dry-run (the default) returns the exact
  * plan without touching any balance so the controller can review amounts first.
+ *
+ * It is also ALWAYS idempotent: a retry replays the original transaction ids
+ * instead of paying twice, under the treasury row lock. The key is the caller's
+ * `idempotencyKey` when supplied, and otherwise DERIVED from the run's own
+ * content (T-52 — it used to be optional, so a caller that omitted it double-paid
+ * every recipient on a re-fire).
  */
 export interface RunProjectNetDistributionInput {
   /** The `project` resource whose treasury net is distributed. */
@@ -57,12 +64,24 @@ export interface RunProjectNetDistributionInput {
    */
   confirm?: boolean;
   /**
-   * Optional idempotency key. When set, a second execute with the SAME key for
-   * the SAME project does NOT move money again — it replays the original run's
-   * transaction ids. Guards against double-submit / retry on this real-money
-   * action (the dry-run default only guards accidental firing, not re-firing).
+   * Optional explicit idempotency key. When set, a second execute with the SAME
+   * key for the SAME project does NOT move money again — it replays the original
+   * run's transaction ids.
+   *
+   * Omitting it is SAFE: the server derives a durable key from the run's own
+   * content (see {@link deriveDistributionIdempotencyKey}). It used to be the
+   * caller's job to remember, and this rail has NO UI — every caller is a script
+   * or an agent, exactly the callers that retry — so a forgotten key paid every
+   * recipient twice (T-52).
    */
   idempotencyKey?: string;
+  /**
+   * Optional client token, generated ONCE per authoring session (form mount /
+   * preview) and reused by the confirming submit. It feeds the derived key, so a
+   * double-submit of the SAME session is a no-op while a deliberate second run —
+   * a fresh token — still pays.
+   */
+  clientToken?: string;
 }
 
 export interface RunProjectNetDistributionResult {
@@ -181,6 +200,21 @@ export async function runProjectNetDistributionAction(
     };
   }
 
+  // Durable idempotency is NOT optional on a real-money run. An explicit key
+  // still wins (existing callers keep their semantics); otherwise the key is
+  // derived from this exact run — controller, treasury, plan, client token — so
+  // a double-submit replays instead of paying every recipient a second time.
+  const idempotencyKey =
+    input.idempotencyKey?.trim() ||
+    deriveDistributionIdempotencyKey({
+      scope: 'project',
+      scopeId: input.projectId,
+      groupId: input.groupId,
+      actorId: userId,
+      plan,
+      clientToken: input.clientToken,
+    });
+
   // EXECUTE — debit treasury, credit recipients, all in one transaction.
   const projectWallet = await getProjectWalletForResource(input.projectId);
   if (!projectWallet) {
@@ -215,20 +249,18 @@ export async function runProjectNetDistributionAction(
       // safe: every caller locks the project wallet above (FOR UPDATE), so a
       // concurrent second confirm blocks until the first commits, then sees its
       // rows here.
-      if (input.idempotencyKey) {
-        const prior = await tx
-          .select({ id: walletTransactions.id })
-          .from(walletTransactions)
-          .where(
-            and(
-              eq(walletTransactions.type, DISTRIBUTION_TX_TYPE),
-              eq(walletTransactions.referenceId, input.projectId),
-              sql`${walletTransactions.metadata}->>'idempotencyKey' = ${input.idempotencyKey}`,
-            ),
-          );
-        if (prior.length > 0) {
-          return { transactionIds: prior.map((t) => t.id), replayed: true };
-        }
+      const prior = await tx
+        .select({ id: walletTransactions.id })
+        .from(walletTransactions)
+        .where(
+          and(
+            eq(walletTransactions.type, DISTRIBUTION_TX_TYPE),
+            eq(walletTransactions.referenceId, input.projectId),
+            sql`${walletTransactions.metadata}->>'idempotencyKey' = ${idempotencyKey}`,
+          ),
+        );
+      if (prior.length > 0) {
+        return { transactionIds: prior.map((t) => t.id), replayed: true };
       }
 
       if (locked.isFrozen) throw new Error('Cannot distribute from a frozen treasury.');
@@ -308,7 +340,7 @@ export async function runProjectNetDistributionAction(
               projectResourceId: input.projectId,
               recipientId: credit.recipientId,
               bps: credit.bps,
-              ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+              idempotencyKey,
             },
           })
           .returning({ id: walletTransactions.id });

@@ -25,6 +25,10 @@
  */
 import { allocateByBps, FULL_PIE_BPS, type SettlementSplit } from '@/lib/settlement-splits';
 import { NET_ALLOCATION_FULL_PIE_BPS, type ResolvedNetAllocation } from '@/lib/net-allocation';
+import {
+  DETERMINISTIC_ID_NAMESPACES,
+  deterministicUuid,
+} from '@/lib/deterministic-id';
 
 /** Role tag used for the org's retained remainder split in a distribution run. */
 export const ORG_KEEP_ROLE = 'distribution' as const;
@@ -144,4 +148,73 @@ export function planProjectNetDistribution(
     distributedCents,
     orgKeepCents,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Durable idempotency (T-52)
+// ---------------------------------------------------------------------------
+
+/** Distribution scopes that can be run. Namespaced so keys never collide. */
+export type DistributionScope = 'group' | 'project';
+
+/**
+ * The content a distribution run is identified by, for durable idempotency.
+ */
+export interface DistributionIdempotencyInput {
+  /** Which rail ran: the group subgroup-pie or a project net tree. */
+  scope: DistributionScope;
+  /** The treasury being distributed FROM (group agent id / project id). */
+  scopeId: string;
+  /** The org whose allocation model governs the split. */
+  groupId: string;
+  /** The controller who invoked the run. */
+  actorId: string;
+  /** The exact plan that is about to be paid. */
+  plan: DistributionRunPlan;
+  /**
+   * Optional caller-chosen token — generated ONCE per authoring session (form
+   * mount / preview) and reused by the confirming submit. It is what lets a
+   * controller deliberately run the SAME distribution a second time: a new
+   * token means a new run, no token means a repeat is a replay.
+   */
+  clientToken?: string;
+}
+
+/**
+ * Stable digest of a plan: exactly who gets paid how much, in plan order.
+ *
+ * Two submits of the same distribution produce byte-identical plans, so they
+ * digest identically — which is what collapses a double-submit into a replay.
+ */
+export function digestDistributionPlan(plan: DistributionRunPlan): string {
+  const credits = plan.credits
+    .map((credit) => `${credit.recipientId}:${credit.amountCents}:${credit.bps}`)
+    .join(',');
+  return `${plan.netCents}|${plan.distributedCents}|${plan.orgKeepCents}|${credits}`;
+}
+
+/**
+ * Derives the durable idempotency key for a distribution run (T-52).
+ *
+ * MONEY-SAFETY: the run is only double-pay-safe when it carries a key, and an
+ * explicit `idempotencyKey` was OPTIONAL — so any caller that omitted it (a
+ * double-clicked button, a retried script, the group repo's project rail, which
+ * has no UI at all) paid every recipient twice. The server therefore derives one
+ * whenever the caller supplies none: same controller + same treasury + same plan
+ * (+ same client token) is the SAME run, and the second attempt replays.
+ *
+ * @param input See {@link DistributionIdempotencyInput}.
+ * @returns A stable UUID usable as the run's `idempotencyKey`.
+ */
+export function deriveDistributionIdempotencyKey(
+  input: DistributionIdempotencyInput,
+): string {
+  return deterministicUuid(DETERMINISTIC_ID_NAMESPACES.NET_DISTRIBUTION_RUN, [
+    input.scope,
+    input.scopeId,
+    input.groupId,
+    input.actorId,
+    digestDistributionPlan(input.plan),
+    input.clientToken ?? '',
+  ]);
 }

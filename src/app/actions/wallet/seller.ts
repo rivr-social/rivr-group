@@ -11,6 +11,7 @@ import {
 } from '@/lib/stripe-connect';
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
 import { settleConnectPayout } from '@/lib/connect-payout';
+import { assertNoRecoveryDebt } from '@/lib/payout-debt-guard';
 import {
   isGlobalConnectOnboardingEnabled,
   requestGlobalConnectOnboarding,
@@ -416,6 +417,11 @@ export async function resolveWalletToConnectAction(
         .limit(1);
       if (!wallet) throw new Error('Wallet not found.');
 
+      // A negative balance is recovery debt from a refund or chargeback. Report
+      // it honestly rather than as "insufficient balance" — the seller needs to
+      // know WHY cash-out is blocked and that it resumes on its own once sales
+      // net the deficit back to zero. Kept in lockstep with global + person.
+      assertNoRecoveryDebt(wallet.balanceCents);
       if (wallet.balanceCents < amountCents) {
         throw new Error('Insufficient Rivr wallet balance.');
       }
