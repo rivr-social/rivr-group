@@ -29,15 +29,6 @@ const STRIPE_INTERNATIONAL_SURCHARGE_BPS = 250;
 const STRIPE_EFFECTIVE_PERCENT_BPS = STRIPE_CARD_PERCENT_BPS + STRIPE_INTERNATIONAL_SURCHARGE_BPS;
 /** Flat RIVR margin component ($1.49), on top of the % margin — see calculateCheckoutFees. */
 export const PLATFORM_MARGIN_FIXED_CENTS = 149;
-const STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS = 200;
-/**
- * Connect-account overhead recovery rate for SMALL carts. Stripe's ~$2/month
- * active-account cost was previously folded in as a FLAT $2 per purchase,
- * which made micro-transactions absurd (a $6 item carried a $2.86 buyer fee —
- * ~48%). The overhead now scales at this rate and CAPS at the flat amount, so
- * a $6 cart recovers 30¢ while every cart ≥ $40 is priced exactly as before.
- */
-const CONNECT_OVERHEAD_RECOVERY_BPS = 500;
 
 /**
  * Cross-border transfer surcharge in basis points (0.25%), grossed into
@@ -182,10 +173,13 @@ export function calculateCheckoutFees(
      */
     platformFeeFixedCents?: number;
     /**
-     * Connect-account overhead folded into the platform's target net. Defaults
-     * to the marketplace flat overhead; recurring dues pass 0 — their
-     * per-member fee policy has no flat component, they only need the Stripe
-     * processing gross-up.
+     * Connect-account overhead folded into the platform's target net.
+     * DEFAULTS TO 0 (Cameron, 2026-07-30): Stripe's ~$2/month active-account
+     * cost is recovered ONCE, on the membership subscription that provisions
+     * the connected account (the grossed "Connect settlement fee" line —
+     * lib/membership-pricing.ts), never per purchase. Recovering it per
+     * purchase double-charged every subscribed seller's buyers. Callers with
+     * a genuine per-charge overhead may still pass one explicitly.
      */
     connectOverheadCents?: number;
     /**
@@ -260,10 +254,7 @@ export function calculateCheckoutFees(
     Number.isInteger(options.connectOverheadCents) &&
     options.connectOverheadCents >= 0
       ? options.connectOverheadCents
-      : Math.min(
-          STRIPE_CONNECT_ACCOUNT_OVERHEAD_CENTS,
-          Math.ceil((sellerPriceCents * CONNECT_OVERHEAD_RECOVERY_BPS) / BPS_DIVISOR),
-        );
+      : 0;
 
   const corridor: SellerPayoutCorridor = options?.payoutCorridor ?? "domestic";
   const crossBorderFeeCents =

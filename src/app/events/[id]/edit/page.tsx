@@ -31,7 +31,6 @@ import { useHomeFeed, useLocalesAndBasins } from "@/lib/hooks/use-graph-data";
 import { fetchManagedGroupsAction } from "@/app/actions/event-form";
 import {
   createCheckoutAction,
-  startFreeTrialAction,
 } from "@/app/actions/billing";
 import {
   Dialog,
@@ -445,7 +444,7 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
         setShowMembershipGate(true);
         toast({
           title: "Event saved — subscription needed for paid tickets",
-          description: result.error.details ?? "Start a free 1-month trial or subscribe to sell tickets.",
+          description: result.error.details ?? "Subscribe to sell tickets.",
         });
         return;
       }
@@ -456,32 +455,6 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
       router.refresh();
     } finally {
       setSaving(false);
-    }
-  };
-
-  /**
-   * Starts a free Organizer trial, then re-submits the price update to create the companion offering.
-   */
-  const handleStartFreeTrial = async () => {
-    setIsMembershipActionPending(true);
-    try {
-      const result = await startFreeTrialAction("organizer");
-      if (!result.success) {
-        toast({ title: "Unable to start free trial", description: result.error ?? "Please try again.", variant: "destructive" });
-        setIsMembershipActionPending(false);
-        return;
-      }
-      if (result.url) {
-        window.location.href = result.url;
-        return;
-      }
-      toast({ title: "Trial already active", description: "Your Organization trial is already active. You can now sell tickets." });
-      setShowMembershipGate(false);
-      setIsMembershipActionPending(false);
-      await handleSubmit(new Event("submit") as unknown as React.FormEvent);
-    } catch {
-      setIsMembershipActionPending(false);
-      toast({ title: "Unable to start free trial", description: "An unexpected error occurred.", variant: "destructive" });
     }
   };
 
@@ -912,7 +885,7 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
             <DialogTitle>Subscription Required For Paid Tickets</DialogTitle>
             <DialogDescription>
               Your event was saved, but selling tickets requires an active membership.
-              Start a free 1-month trial or subscribe now to create the ticket listing.
+              Subscribe to create the ticket listing.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -929,12 +902,6 @@ export default function EditEventPage({ params }: { params: Promise<{ id: string
               disabled={isMembershipActionPending}
             >
               {isMembershipActionPending ? "Processing..." : "Subscribe"}
-            </Button>
-            <Button
-              onClick={handleStartFreeTrial}
-              disabled={isMembershipActionPending}
-            >
-              {isMembershipActionPending ? "Processing..." : "Try Free For 1 Month"}
             </Button>
           </DialogFooter>
         </DialogContent>

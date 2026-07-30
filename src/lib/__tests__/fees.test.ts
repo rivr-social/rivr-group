@@ -68,11 +68,12 @@ describe("calculateLegacyCheckoutFeesCents", () => {
       const b = calculateLegacyCheckoutFeesCents(sub);
       const stripeCost = Math.round(b.totalCents * 0.029) + 30;
       expect(b.paymentFeeCents).toBe(stripeCost);
-      // Platform line = unified margin (3.3% + $1.49) + the gross-up spread over
-      // Stripe's real cost — strictly MORE than the bare margin alone (the spread
-      // is stated explicitly in platformFee instead of hiding in paymentFee).
+      // Platform line = unified margin (3.3% + $1.49) + the gross-up rounding
+      // spread. With Connect overhead moved to the membership subscription
+      // (2026-07-30) the line can equal the bare margin exactly when the
+      // ceil-rounding lands on a whole cent — never below it.
       const baseMargin = Math.round(sub * 0.033) + 149;
-      expect(b.platformFeeCents).toBeGreaterThan(baseMargin);
+      expect(b.platformFeeCents).toBeGreaterThanOrEqual(baseMargin);
     }
   });
 });

@@ -1,17 +1,15 @@
 'use server';
 
 /**
- * Billing server actions for membership checkout, subscription status lookup, and local free-trial bootstrap.
+ * Billing server actions for membership checkout, subscription status lookup,.
  *
  * Purpose:
  * - Validate authenticated user input before initiating Stripe checkout.
  * - Provide a normalized active subscription payload for UI entitlement decisions.
- * - Create or update synthetic trial subscriptions so authorization checks work immediately.
  *
  * Key exports:
  * - `createCheckoutAction`
  * - `getSubscriptionStatusAction`
- * - `startFreeTrialAction`
  *
  * Core dependencies:
  * - Authentication (`@/auth`)
@@ -151,57 +149,6 @@ export async function getSubscriptionStatusAction() {
     currentPeriodEnd: sub.currentPeriodEnd.toISOString(),
     cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
   };
-}
-
-/**
- * Starts or restores a local 30-day free trial for the selected membership tier.
- *
- * @param {MembershipTier} [tier='organizer'] - Tier to trial.
- * @returns {Promise<{ success: boolean; error?: string }>} Operation result.
- * @throws {Error} Can throw if database persistence fails unexpectedly outside guarded handling.
- * @example
- * ```ts
- * await startFreeTrialAction('organizer');
- * ```
- */
-export async function startFreeTrialAction(
-  tier: MembershipTier = 'organizer',
-  returnPath?: string
-): Promise<{ success: boolean; error?: string; url?: string }> {
-  const actorId = await resolveBillingActorId({ ensure: true });
-  if (!actorId) {
-    return { success: false, error: 'You must be logged in to start a trial.' };
-  }
-
-  if (!VALID_TIERS.has(tier)) {
-    return { success: false, error: `Invalid membership tier: ${tier}` };
-  }
-
-  const active = await getActiveSubscription(actorId);
-  if (active && (active.status === 'active' || active.status === 'trialing')) {
-    return { success: true };
-  }
-
-  try {
-    const url = await createCheckoutSession(
-      actorId,
-      tier,
-      'monthly',
-      {
-        trialDays: DEFAULT_MEMBERSHIP_TRIAL_DAYS,
-        successPath: returnPath
-          ? `/api/stripe/subscription-success?return_path=${encodeURIComponent(returnPath)}`
-          : undefined,
-      }
-    );
-    return { success: true, url };
-  } catch (error) {
-    console.error('startFreeTrialAction failed:', error);
-    return {
-      success: false,
-      error: 'Unable to start the Stripe trial checkout. Please try again later.',
-    };
-  }
 }
 
 /**

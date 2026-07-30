@@ -1517,7 +1517,6 @@ export default function GroupSettingsPage(props: { params: Promise<{ id: string 
         onOpenChange={setShowMembershipGate}
         requiredTier="organizer"
         featureDescription="Changing a basic group into an organization requires an Organization membership or higher."
-        onTrialStarted={() => void upgradeToOrganization()}
         returnPath={`/groups/${groupId}/settings?${RESUME_ORG_UPGRADE_PARAM}=1`}
       />
     </div>

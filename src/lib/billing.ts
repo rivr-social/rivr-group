@@ -113,7 +113,13 @@ export function isHiddenTier(tier: MembershipTier): boolean {
   return HIDDEN_MEMBERSHIP_TIERS.includes(tier);
 }
 
-export const DEFAULT_MEMBERSHIP_TRIAL_DAYS = 30;
+/**
+ * Free trials are OFF (Cameron, 2026-07-30): a subscription (even `trialing`)
+ * provisions a Stripe connected account that bills the platform ~$2/month —
+ * a free trial would hand out that cost with no recovery. Keep 0 until the
+ * economics change; the checkout only adds `trial_period_days` when > 0.
+ */
+export const DEFAULT_MEMBERSHIP_TRIAL_DAYS = 0;
 
 /**
  * Legacy ordinal hierarchy — retained ONLY for coarse display ordering and

@@ -5,7 +5,13 @@
  * total and reported per-recipient for settlement.
  */
 import { describe, expect, it } from "vitest";
-import { CROSS_BORDER_TRANSFER_BPS, calculateCheckoutFees, PLATFORM_MARGIN_FIXED_CENTS } from "@/lib/checkout-fees";
+import {
+  CROSS_BORDER_TRANSFER_BPS,
+  calculateCheckoutFees,
+  describeDepositCharge,
+  grossUpForStripeCents,
+  PLATFORM_MARGIN_FIXED_CENTS,
+} from "@/lib/checkout-fees";
 import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from "@/lib/wallet-constants";
 
 describe("calculateCheckoutFees — base behavior", () => {
@@ -105,30 +111,33 @@ describe("calculateCheckoutFees — referral splits", () => {
   });
 });
 
-describe("calculateCheckoutFees — micro-transaction overhead scaling", () => {
-  it("recovers Connect overhead proportionally on small carts (the $6 case)", () => {
-    // Overhead scales at min(200, 5% of price) = 30¢ on a $6 cart (vs the old
-    // flat $2 → $2.86/~48%). Unified margin: 3.3% of 600 = 20¢ + $1.49 = 169¢.
-    // targetNet = 169 + 30 = 199 → gross-up ceil((600+199+30)/0.971) = 854.
+describe("calculateCheckoutFees — Connect overhead lives on the membership, not the cart", () => {
+  it("charges NO per-purchase Connect overhead (the $6 case)", () => {
+    // Stripe's ~$2/month active-account cost is recovered ONCE, on the
+    // membership subscription's grossed "Connect settlement fee" line
+    // (Cameron, 2026-07-30) — recovering it per purchase double-charged
+    // every subscribed seller's buyers. Unified margin: 3.3% of 600 = 20¢
+    // + $1.49 = 169¢ → gross-up ceil((600+169+30)/0.971) = 823.
     const fees = calculateCheckoutFees(600);
-    expect(fees.connectAccountFeeEstimateCents).toBe(30);
-    expect(fees.buyerTotalCents).toBe(854);
-    expect(fees.buyerPlatformFeeCents).toBe(254);
+    expect(fees.connectAccountFeeEstimateCents).toBe(0);
+    expect(fees.buyerTotalCents).toBe(823);
+    expect(fees.buyerPlatformFeeCents).toBe(223);
     // Seller net stays guaranteed.
     expect(fees.sellerNetCents).toBe(600);
   });
 
-  it("caps at the flat overhead so carts ≥ $40 price exactly as before", () => {
+  it("prices a $40 cart from margin + gross-up alone", () => {
     const fees = calculateCheckoutFees(4_000);
-    expect(fees.connectAccountFeeEstimateCents).toBe(200);
-    // margin 3.3% of 4000 = 132 + $1.49 = 281; + overhead 200 + stripe fixed 30
-    // = 4511 → grossed at 2.9%.
-    expect(fees.buyerTotalCents).toBe(Math.ceil(4_511 / (1 - 0.029)));
+    expect(fees.connectAccountFeeEstimateCents).toBe(0);
+    // margin 3.3% of 4000 = 132 + $1.49 = 281; + stripe fixed 30 = 4311 →
+    // grossed at 2.9%.
+    expect(fees.buyerTotalCents).toBe(Math.ceil(4_311 / (1 - 0.029)));
   });
 
-  it("an explicit connectOverheadCents override still wins (dues pass 0)", () => {
-    const fees = calculateCheckoutFees(600, { connectOverheadCents: 0 });
-    expect(fees.connectAccountFeeEstimateCents).toBe(0);
+  it("an explicit connectOverheadCents still wins for callers with a real per-charge overhead", () => {
+    const fees = calculateCheckoutFees(600, { connectOverheadCents: 200 });
+    expect(fees.connectAccountFeeEstimateCents).toBe(200);
+    expect(fees.buyerTotalCents).toBeGreaterThan(calculateCheckoutFees(600).buyerTotalCents);
   });
 });
 
@@ -167,5 +176,39 @@ describe("calculateCheckoutFees — payout corridors", () => {
     expect(fees.orgCommissionCents).toBe(1_000);
     expect(fees.sellerNetCents).toBe(20_000);
     expect(fees.applicationFeeCents).toBe(fees.buyerTotalCents - 20_000);
+  });
+});
+
+describe("describeDepositCharge — wallet top-up disclosure (PAY-36)", () => {
+  it("itemizes the live $5 case exactly as the PaymentIntent is priced", () => {
+    // The audit's repro: a $5.00 top-up charges 561¢ (500 credit + 61 fee).
+    const charge = describeDepositCharge(500);
+    expect(charge.chargeCents).toBe(561);
+    expect(charge.creditCents).toBe(500);
+    expect(charge.stripeFeeCoveredCents).toBe(61);
+  });
+
+  it("always agrees with the gross-up the charge is priced from", () => {
+    for (const credit of [100, 500, 1_000, 2_500, 5_000, 10_000, 99_999]) {
+      const charge = describeDepositCharge(credit);
+      expect(charge.chargeCents).toBe(grossUpForStripeCents(credit));
+      // The three figures must reconcile — this is the disclosure's whole claim.
+      expect(charge.creditCents + charge.stripeFeeCoveredCents).toBe(charge.chargeCents);
+    }
+  });
+
+  it("never quotes a fee below Stripe's fixed component", () => {
+    // A $1.00 minimum deposit still covers the 30¢ fixed fee plus the percent.
+    expect(describeDepositCharge(100).stripeFeeCoveredCents).toBeGreaterThanOrEqual(30);
+  });
+
+  it("returns an all-zero breakdown for a non-chargeable request", () => {
+    for (const bad of [0, -100, 10.5, Number.NaN]) {
+      expect(describeDepositCharge(bad)).toEqual({
+        creditCents: 0,
+        stripeFeeCoveredCents: 0,
+        chargeCents: 0,
+      });
+    }
   });
 });

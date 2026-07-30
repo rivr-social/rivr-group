@@ -4,8 +4,9 @@
  * Reusable subscription gate dialog that prompts users to subscribe when
  * they attempt a tier-gated action (e.g. creating paid offerings or events).
  *
- * Shows which tier is required, offers a free trial button and a subscribe
- * button. Dismissing returns the user to the previous state.
+ * Shows which tier is required and offers a subscribe button. Free trials
+ * are OFF (Cameron, 2026-07-30): a subscription — even trialing — provisions
+ * a paid Stripe connected account, so there is no free path.
  */
 
 import { useState } from "react"
@@ -19,10 +20,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/use-toast"
-import {
-  createCheckoutAction,
-  startFreeTrialAction,
-} from "@/app/actions/billing"
+import { createCheckoutAction } from "@/app/actions/billing"
 import type { MembershipTier } from "@/db/schema"
 import { TIER_DISPLAY_NAMES } from "@/lib/subscription-constants"
 
@@ -35,9 +33,7 @@ interface SubscriptionGateDialogProps {
   requiredTier: MembershipTier
   /** Human-readable description of what is being gated. */
   featureDescription?: string
-  /** Called after a trial is successfully started (no redirect). */
-  onTrialStarted?: () => void
-  /** Optional path to return to after checkout/trial onboarding completes. */
+  /** Optional path to return to after checkout completes. */
   returnPath?: string
 }
 
@@ -46,7 +42,6 @@ export function SubscriptionGateDialog({
   onOpenChange,
   requiredTier,
   featureDescription,
-  onTrialStarted,
   returnPath,
 }: SubscriptionGateDialogProps) {
   const [isPending, setIsPending] = useState(false)
@@ -57,42 +52,6 @@ export function SubscriptionGateDialog({
   const description =
     featureDescription ??
     `This feature requires a ${tierName} membership or higher.`
-
-  const handleStartFreeTrial = async () => {
-    setIsPending(true)
-    try {
-      const result = await startFreeTrialAction(requiredTier, returnPath)
-      if (!result.success) {
-        toast({
-          title: "Unable to start free trial",
-          description: result.error ?? "Please try again.",
-          variant: "destructive",
-        })
-        setIsPending(false)
-        return
-      }
-
-      if (result.url) {
-        window.location.href = result.url
-        return
-      }
-
-      toast({
-        title: "Trial already active",
-        description: `Your ${tierName} trial is already active.`,
-      })
-      setIsPending(false)
-      onOpenChange(false)
-      onTrialStarted?.()
-    } catch {
-      setIsPending(false)
-      toast({
-        title: "Unable to start free trial",
-        description: "An unexpected error occurred.",
-        variant: "destructive",
-      })
-    }
-  }
 
   const handleSubscribe = async () => {
     setIsPending(true)
@@ -124,7 +83,7 @@ export function SubscriptionGateDialog({
         <DialogHeader>
           <DialogTitle>{tierName} Membership Required</DialogTitle>
           <DialogDescription>
-            {description} Start a free 1-month trial or subscribe now.
+            {description} Subscribe to continue.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -135,15 +94,8 @@ export function SubscriptionGateDialog({
           >
             Not Now
           </Button>
-          <Button
-            variant="outline"
-            onClick={handleSubscribe}
-            disabled={isPending}
-          >
+          <Button onClick={handleSubscribe} disabled={isPending}>
             {isPending ? "Processing..." : "Subscribe"}
-          </Button>
-          <Button onClick={handleStartFreeTrial} disabled={isPending}>
-            {isPending ? "Processing..." : "Try Free For 1 Month"}
           </Button>
         </DialogFooter>
       </DialogContent>

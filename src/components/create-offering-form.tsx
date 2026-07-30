@@ -1193,50 +1193,6 @@ export function CreateOfferingForm({
     }
   }
 
-  /**
-   * Retries offering creation after a subscription trial is started.
-   * Called from the SubscriptionGateDialog's onTrialStarted callback.
-   */
-  const handleRetryAfterTrial = async () => {
-    if (!pendingPayloadAfterGate) return
-    setIsSubmitting(true)
-    try {
-      if (onSubmitPayload) {
-        await onSubmitPayload(pendingPayloadAfterGate)
-        onCreated?.({ payload: pendingPayloadAfterGate })
-        return
-      }
-      const result = await createOfferingResource(pendingPayloadAfterGate)
-      if (!result.success) {
-        toast({
-          title: "Failed to create offering",
-          description: result.message,
-          variant: "destructive",
-        })
-        return
-      }
-      toast({
-        title: "Offering created",
-        description: "Your offering is now live.",
-      })
-      onCreated?.({ resourceId: result.resourceId, payload: pendingPayloadAfterGate })
-      if (onCancel) {
-        onCancel()
-      } else {
-        router.push("/profile?tab=offerings")
-      }
-    } catch {
-      toast({
-        title: "Failed to create offering",
-        description: "An unexpected error occurred.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsSubmitting(false)
-      setPendingPayloadAfterGate(null)
-    }
-  }
-
   // ─── Shared field fragments ────────────────────────────────────────────────
 
   const titleField = (
@@ -2340,7 +2296,6 @@ export function CreateOfferingForm({
       }}
       requiredTier={gateRequiredTier}
       featureDescription={FEATURE_DESCRIPTIONS.PAID_OFFERINGS}
-      onTrialStarted={handleRetryAfterTrial}
     />
     </>
   )
