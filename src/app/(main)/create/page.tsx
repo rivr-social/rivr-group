@@ -786,7 +786,7 @@ export default function CreatePage() {
   }
 
   /**
-   * Retries event creation after subscription trial is started from the gate dialog.
+   * Retries event creation after a subscription is activated from the gate dialog.
    */
   const persistPendingOrganizationDraft = () => {
     if (typeof window === "undefined") return
@@ -826,7 +826,7 @@ export default function CreatePage() {
    * Validates and submits event creation.
    * Applies subscription gating for paid ticketed events and redirects to the created event route on success.
    *
-   * @param skipMembershipGate When `true`, bypasses the subscription pre-check (used after starting trial).
+   * @param skipMembershipGate When `true`, bypasses the subscription pre-check (used after subscribing).
    */
   const handleCreateEvent = async (skipMembershipGate = false) => {
     // Events require only a title, description, and a start date/time (G1).
