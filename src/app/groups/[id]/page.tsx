@@ -5,8 +5,8 @@
  * rendering to `GroupTabsClient` (a client component with create buttons,
  * modals, and wired-in interactive components).
  */
+import { PageNotFoundView } from "@/components/page-not-found-view"
 import Link from "next/link"
-import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import { MessageSquare, Settings } from "lucide-react"
 import { fetchAgentFeed, fetchGroupDetail, fetchPublicAgentsByIds , fetchGroupLineage, hasOrgGradeAffiliation } from "@/app/actions/graph"
@@ -70,7 +70,11 @@ export default async function GroupPage({ params }: { params: Promise<{ id: stri
   ])
 
   if (!detail) {
-    notFound()
+    // Render the not-found view rather than calling notFound(): generateMetadata
+    // already awaited this same data, so a late notFound() re-renders the
+    // AppRouter mid-hydration and crashes anonymous visitors with React #310
+    // (audit S-3).
+    return <PageNotFoundView title="Group not found" message="This group doesn't exist, or it is no longer shared here." />
   }
 
   const group = agentToGroup(detail.group)

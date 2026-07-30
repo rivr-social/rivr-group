@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation"
+import { PageNotFoundView } from "@/components/page-not-found-view"
 import { fetchMarketplaceListingById, fetchPostDetail } from "@/app/actions/graph"
 import { PostDetailClient } from "@/components/post-detail-client"
 import { resourceToMarketplaceListing, resourceToPost } from "@/lib/graph-adapters"
@@ -52,7 +52,11 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
   const data = await getPostPageData(id)
 
   if (!data) {
-    notFound()
+    // Render the not-found view rather than calling notFound(): generateMetadata
+    // already awaited this same data, so a late notFound() re-renders the
+    // AppRouter mid-hydration and crashes anonymous visitors with React #310
+    // (audit S-3).
+    return <PageNotFoundView title="Post not found" message="This post doesn't exist, or it has been deleted." />
   }
 
   // Universal Manifest v0.4: bounce federated mirrors of sovereign-homed

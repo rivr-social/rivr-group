@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation"
+import { PageNotFoundView } from "@/components/page-not-found-view"
 import type { Metadata } from "next"
 import { fetchMarketplaceListingById } from "@/app/actions/graph"
 import { MarketplaceItemPageClient } from "@/components/marketplace-item-page-client"
@@ -39,7 +39,11 @@ export default async function MarketplaceItemPage({ params }: { params: Promise<
   const data = await getMarketplacePageData(id)
 
   if (!data) {
-    notFound()
+    // Render the not-found view rather than calling notFound(): generateMetadata
+    // already awaited this same data, so a late notFound() re-renders the
+    // AppRouter mid-hydration and crashes anonymous visitors with React #310
+    // (audit S-3).
+    return <PageNotFoundView title="Listing not found" message="This marketplace listing doesn't exist, or it has been removed." />
   }
 
   // Universal Manifest v0.4: if this listing is a federated mirror of a

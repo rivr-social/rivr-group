@@ -8,12 +8,17 @@ import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
+import { resolveWriteActor } from "@/lib/auth/write-actor";
 import {
   getCurrentUserId,
   toggleLedgerInteraction,
 } from "./helpers";
 import type { ActionResult, ReactionType, TargetType } from "./types";
 import { isUuid, REACTION_TYPES } from "./types";
+
+/** Verb phrases used in the refusal copy of this module's write actions. */
+const REACT_ACTION_LABEL = "react to content";
+const THANK_ACTION_LABEL = "thank someone";
 
 type ReactionSummary = {
   counts: Partial<Record<ReactionType, number>>;
@@ -39,8 +44,14 @@ export async function toggleLikeOnTarget(
   targetType: TargetType = "post",
   pathToRevalidate?: string
 ): Promise<ActionResult> {
-  const userId = await getCurrentUserId();
-  if (!userId) return { success: false, message: "You must be logged in to like content." };
+  const actor = await resolveWriteActor({
+    capability: "react",
+    actionLabel: REACT_ACTION_LABEL,
+  });
+  if (!actor.allowed) {
+    return { success: false, message: actor.message, error: { code: actor.code } };
+  }
+  const userId = actor.actorId;
 
   // Shared social rate limit throttles high-frequency interaction spam.
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
@@ -80,8 +91,14 @@ export async function setReactionOnTarget(
   targetType: TargetType = "post",
   reactionType: ReactionType = "like",
 ): Promise<ActionResult> {
-  const userId = await getCurrentUserId();
-  if (!userId) return { success: false, message: "You must be logged in to react to content." };
+  const actor = await resolveWriteActor({
+    capability: "react",
+    actionLabel: REACT_ACTION_LABEL,
+  });
+  if (!actor.allowed) {
+    return { success: false, message: actor.message, error: { code: actor.code } };
+  }
+  const userId = actor.actorId;
 
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };
@@ -227,8 +244,14 @@ export async function toggleThankOnTarget(
   targetId: string,
   targetType: TargetType = "post"
 ): Promise<ActionResult> {
-  const userId = await getCurrentUserId();
-  if (!userId) return { success: false, message: "You must be logged in to thank someone." };
+  const actor = await resolveWriteActor({
+    capability: "react",
+    actionLabel: THANK_ACTION_LABEL,
+  });
+  if (!actor.allowed) {
+    return { success: false, message: actor.message, error: { code: actor.code } };
+  }
+  const userId = actor.actorId;
 
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };

@@ -87,6 +87,11 @@ export function CommentFeed({ postId, eventId, targetId, embedded = false }: Com
   const [replyContent, setReplyContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  // A structured refusal (e.g. a federated visitor without the `comment`
+  // capability) must stay ON SCREEN next to the box — a toast alone is missable
+  // and left the composer looking like a silent no-op (audit finding S-1).
+  const [postError, setPostError] = useState<string | null>(null)
+  const [replyError, setReplyError] = useState<string | null>(null)
   const [reactionSummaries, setReactionSummaries] = useState<
     Record<string, { counts?: Partial<Record<ReactionType, number>>; totalCount?: number; currentUserReaction?: ReactionType | null }>
   >({})
@@ -140,9 +145,11 @@ export function CommentFeed({ postId, eventId, targetId, embedded = false }: Com
   const handlePostComment = async () => {
     if (!newComment.trim() || isSubmitting) return
     setIsSubmitting(true)
+    setPostError(null)
     try {
       const result = await postCommentAction(resourceId, newComment.trim())
       if (!result.success) {
+        setPostError(result.message)
         toast({ title: "Failed to post comment", description: result.message, variant: "destructive" })
         return
       }
@@ -157,9 +164,11 @@ export function CommentFeed({ postId, eventId, targetId, embedded = false }: Com
   const handlePostReply = async (parentId: string) => {
     if (!replyContent.trim() || isSubmitting) return
     setIsSubmitting(true)
+    setReplyError(null)
     try {
       const result = await postCommentAction(resourceId, replyContent.trim(), parentId)
       if (!result.success) {
+        setReplyError(result.message)
         toast({ title: "Failed to post reply", description: result.message, variant: "destructive" })
         return
       }
@@ -260,7 +269,7 @@ export function CommentFeed({ postId, eventId, targetId, embedded = false }: Com
                     variant="ghost"
                     size="sm"
                     className="h-8 text-muted-foreground px-2"
-                    onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}
+                    onClick={() => { setReplyError(null); setReplyingTo(replyingTo === comment.id ? null : comment.id) }}
                   >
                     <MessageCircle className="h-4 w-4 mr-2" />
                     Reply
@@ -283,11 +292,16 @@ export function CommentFeed({ postId, eventId, targetId, embedded = false }: Com
                           placeholder={`Reply to ${comment.authorName}...`}
                           className="min-h-[60px] p-2 text-sm"
                         />
+                        {replyError && (
+                          <p role="alert" className="mt-2 text-sm text-destructive">
+                            {replyError}
+                          </p>
+                        )}
                         <div className="flex justify-end gap-2 mt-2">
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => { setReplyingTo(null); setReplyContent("") }}
+                            onClick={() => { setReplyingTo(null); setReplyContent(""); setReplyError(null) }}
                           >
                             Cancel
                           </Button>
@@ -337,6 +351,11 @@ export function CommentFeed({ postId, eventId, targetId, embedded = false }: Com
                   placeholder="Write a comment..."
                   className="min-h-[80px] resize-none"
                 />
+                {postError && (
+                  <p role="alert" className="mt-2 text-sm text-destructive">
+                    {postError}
+                  </p>
+                )}
                 <div className="flex justify-end mt-2">
                   <Button onClick={() => void handlePostComment()} disabled={!newComment.trim() || isSubmitting}>
                     {isSubmitting ? "Posting..." : "Post"}

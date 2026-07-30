@@ -37,13 +37,17 @@ vi.mock("@/lib/rate-limit", () => ({
   },
 }));
 
-vi.mock("@/lib/persona", () => ({
-  getOperatingAgentId: vi.fn(),
+// The action resolves its principal through the shared write-actor resolver
+// (session OR federated remote-viewer cookie + visitor-capability policy, S-1).
+// The policy itself is unit-tested in lib/auth/__tests__/write-actor.test.ts;
+// here we drive its verdict.
+vi.mock("@/lib/auth/write-actor", () => ({
+  resolveWriteActor: vi.fn(),
 }));
 
 // Import AFTER mocks
 import { auth } from "@/auth";
-import { getOperatingAgentId } from "@/lib/persona";
+import { resolveWriteActor } from "@/lib/auth/write-actor";
 import { rateLimit } from "@/lib/rate-limit";
 import { postCommentAction, fetchCommentsAction } from "../comments";
 
@@ -52,6 +56,13 @@ import { postCommentAction, fetchCommentsAction } from "../comments";
 // =============================================================================
 
 const MAX_COMMENT_CONTENT_LENGTH = 10000;
+const VISITOR_DENIAL_MESSAGE =
+  "This community does not let visitors from other instances post a comment. Join the group to take part.";
+
+/** Resolver verdict for an accepted principal (local session or federated member). */
+function allowActor(actorId: string, authType: "local" | "federated" = "local") {
+  return { allowed: true as const, actorId, authType };
+}
 
 // =============================================================================
 // Tests
@@ -69,18 +80,79 @@ describe("comment actions", () => {
   describe("postCommentAction", () => {
     it("returns UNAUTHENTICATED when user is not logged in", () =>
       withTestTransaction(async () => {
-        vi.mocked(getOperatingAgentId).mockResolvedValue(null);
+        vi.mocked(resolveWriteActor).mockResolvedValue({
+          allowed: false,
+          code: "UNAUTHENTICATED",
+          message: "You must be logged in to post a comment.",
+        });
 
         const result = await postCommentAction("resource-id", "Hello");
 
         expect(result.success).toBe(false);
         expect(result.error?.code).toBe("UNAUTHENTICATED");
+        expect(result.message).toBe("You must be logged in to post a comment.");
+      }));
+
+    it("accepts a federated principal and attributes the comment to their LOCAL agent id", () =>
+      withTestTransaction(async (db) => {
+        const owner = await createTestAgent(db);
+        const federatedMember = await createTestAgent(db);
+        const resource = await createTestResource(db, owner.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue(
+          allowActor(federatedMember.id, "federated"),
+        );
+
+        const result = await postCommentAction(resource.id, "From my home instance");
+
+        expect(result.success).toBe(true);
+
+        // The resource owner is offered as standing so a federated MEMBER of the
+        // owning group is not treated as a drive-by visitor.
+        expect(vi.mocked(resolveWriteActor).mock.calls[0][0]).toMatchObject({
+          capability: "comment",
+          standingAgentIds: [owner.id],
+        });
+
+        const entries = await db
+          .select()
+          .from(ledger)
+          .where(
+            and(
+              eq(ledger.verb, "comment"),
+              eq(ledger.subjectId, federatedMember.id),
+              eq(ledger.resourceId, resource.id),
+            ),
+          );
+        expect(entries).toHaveLength(1);
+      }));
+
+    it("surfaces the visitor-capability refusal verbatim instead of writing", () =>
+      withTestTransaction(async (db) => {
+        const owner = await createTestAgent(db);
+        const resource = await createTestResource(db, owner.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue({
+          allowed: false,
+          code: "VISITOR_CAPABILITY_DENIED",
+          message: VISITOR_DENIAL_MESSAGE,
+        });
+
+        const result = await postCommentAction(resource.id, "Hello");
+
+        expect(result.success).toBe(false);
+        expect(result.error?.code).toBe("VISITOR_CAPABILITY_DENIED");
+        expect(result.message).toBe(VISITOR_DENIAL_MESSAGE);
+
+        const entries = await db
+          .select()
+          .from(ledger)
+          .where(eq(ledger.verb, "comment"));
+        expect(entries).toHaveLength(0);
       }));
 
     it("returns INVALID_INPUT when content is empty", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
-        vi.mocked(getOperatingAgentId).mockResolvedValue(user.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue(allowActor(user.id));
 
         const result = await postCommentAction("resource-id", "   ");
 
@@ -92,7 +164,7 @@ describe("comment actions", () => {
     it("returns INVALID_INPUT when content exceeds max length", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
-        vi.mocked(getOperatingAgentId).mockResolvedValue(user.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue(allowActor(user.id));
         const longContent = "x".repeat(MAX_COMMENT_CONTENT_LENGTH + 1);
 
         const result = await postCommentAction("resource-id", longContent);
@@ -105,7 +177,7 @@ describe("comment actions", () => {
     it("returns RATE_LIMITED when rate limit is exceeded", () =>
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
-        vi.mocked(getOperatingAgentId).mockResolvedValue(user.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue(allowActor(user.id));
         vi.mocked(rateLimit).mockResolvedValueOnce({ success: false, remaining: 0, resetMs: 60000 });
 
         const result = await postCommentAction("resource-id", "Hello");
@@ -118,7 +190,7 @@ describe("comment actions", () => {
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         const resource = await createTestResource(db, user.id);
-        vi.mocked(getOperatingAgentId).mockResolvedValue(user.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue(allowActor(user.id));
 
         const result = await postCommentAction(resource.id, "Great post!");
 
@@ -147,7 +219,7 @@ describe("comment actions", () => {
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         const resource = await createTestResource(db, user.id);
-        vi.mocked(getOperatingAgentId).mockResolvedValue(user.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue(allowActor(user.id));
 
         const parentId = "parent-comment-uuid";
         const result = await postCommentAction(resource.id, "Reply!", parentId);
@@ -172,7 +244,7 @@ describe("comment actions", () => {
       withTestTransaction(async (db) => {
         const user = await createTestAgent(db);
         const resource = await createTestResource(db, user.id);
-        vi.mocked(getOperatingAgentId).mockResolvedValue(user.id);
+        vi.mocked(resolveWriteActor).mockResolvedValue(allowActor(user.id));
 
         const result = await postCommentAction(resource.id, "  trimmed  ");
 

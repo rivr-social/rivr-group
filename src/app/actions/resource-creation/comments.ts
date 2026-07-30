@@ -11,25 +11,48 @@ import {
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { and, eq } from "drizzle-orm";
 
-import { getOperatingAgentId } from "@/lib/persona";
+import { resolveWriteActor } from "@/lib/auth/write-actor";
 import { federatedWrite, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
 import type { ActionResult, CommentData } from "./types";
 
 const MAX_COMMENT_CONTENT_LENGTH = 10000;
+/** Verb phrase used in this action's refusal copy. */
+const COMMENT_ACTION_LABEL = "post a comment";
+/** `resources.id` is a uuid column — a non-uuid lookup errors rather than misses. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function postCommentAction(
   resourceId: string,
   content: string,
   parentCommentId?: string | null,
 ): Promise<ActionResult> {
-  const userId = await getOperatingAgentId();
-  if (!userId) {
+  // Resolve the owner first: a federated principal's standing is checked against
+  // the group that owns the thread as well as the instance's primary agent.
+  const [resourceOwner] = UUID_RE.test(resourceId)
+    ? await db
+        .select({ ownerId: resources.ownerId })
+        .from(resources)
+        .where(eq(resources.id, resourceId))
+        .limit(1)
+    : [];
+
+  const actor = await resolveWriteActor({
+    capability: "comment",
+    actionLabel: COMMENT_ACTION_LABEL,
+    standingAgentIds: resourceOwner?.ownerId ? [resourceOwner.ownerId] : [],
+    // Local sessions keep persona attribution (the pre-S-1 getOperatingAgentId
+    // behavior); a federated principal has no local persona cookie.
+    preferActivePersona: true,
+  });
+  if (!actor.allowed) {
     return {
       success: false,
-      message: "You must be logged in to comment.",
-      error: { code: "UNAUTHENTICATED" },
+      message: actor.message,
+      error: { code: actor.code },
     };
   }
+  const userId = actor.actorId;
 
   if (!content.trim()) {
     return {
@@ -56,12 +79,7 @@ export async function postCommentAction(
     };
   }
 
-  // Look up the resource owner for federation routing
-  const [resourceOwner] = await db
-    .select({ ownerId: resources.ownerId })
-    .from(resources)
-    .where(eq(resources.id, resourceId))
-    .limit(1);
+  // Resource owner (already loaded above for the standing check) routes federation.
   const targetAgentId = resourceOwner?.ownerId ?? userId;
 
   const facadeResult = await federatedWrite(

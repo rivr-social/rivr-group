@@ -8,6 +8,7 @@ import type { NewLedgerEntry } from "@/db/schema";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { emitDomainEvent, EVENT_TYPES } from "@/lib/federation";
 import { federatedWrite } from "@/lib/federation/remote-write";
+import { resolveWriteActor } from "@/lib/auth/write-actor";
 import {
   getCurrentUserId,
   resolveInteractionTargetAgentId,
@@ -17,6 +18,9 @@ import type { ActionResult, EventAttendee } from "./types";
 import { isUuid } from "./types";
 import { createDocumentResourceAction, updateResource } from "@/app/actions/create-resources";
 import { hasGroupWriteAccess } from "@/app/actions/resource-creation/helpers";
+
+/** Verb phrase used in the RSVP action's refusal copy. */
+const RSVP_ACTION_LABEL = "RSVP to events";
 
 export async function hasActiveEventRsvp(userId: string, eventId: string): Promise<boolean> {
   const rows = await db.execute(sql`
@@ -151,8 +155,14 @@ export async function setEventRsvp(
   eventId: string,
   status: "going" | "interested" | "none"
 ): Promise<ActionResult> {
-  const userId = await getCurrentUserId();
-  if (!userId) return { success: false, message: "You must be logged in to RSVP." };
+  const actor = await resolveWriteActor({
+    capability: "rsvp",
+    actionLabel: RSVP_ACTION_LABEL,
+  });
+  if (!actor.allowed) {
+    return { success: false, message: actor.message, error: { code: actor.code } };
+  }
+  const userId = actor.actorId;
 
   const check = await rateLimit(`social:${userId}`, RATE_LIMITS.SOCIAL.limit, RATE_LIMITS.SOCIAL.windowMs);
   if (!check.success) return { success: false, message: "Rate limit exceeded. Please try again later." };

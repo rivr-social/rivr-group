@@ -27,7 +27,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
-import { auth } from "@/auth";
 import { db } from "@/db";
 import { agents, federatedVisitorSettings } from "@/db/schema";
 import {
@@ -37,6 +36,7 @@ import {
   STATUS_OK,
   STATUS_UNAUTHORIZED,
 } from "@/lib/http-status";
+import { resolveWriteActorPrincipal } from "@/lib/auth/write-actor";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
 import {
   BASELINE_VISITOR_CAPABILITY,
@@ -60,19 +60,23 @@ const UNAUTHORIZED_MESSAGE = "Authentication required";
  * NextResponse error when unauthorized/forbidden, or null when authorized.
  */
 async function requireOwnerOrRespond(): Promise<NextResponse | null> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  // Either auth source: an owner/admin arriving via cross-instance SSO holds
+  // only the rivr_remote_viewer cookie, invisible to `auth()` (S-1). The
+  // resolved id is always this instance's local agent id.
+  const principal = await resolveWriteActorPrincipal();
+  if (!principal) {
     return NextResponse.json(
       { error: UNAUTHORIZED_MESSAGE },
       { status: STATUS_UNAUTHORIZED },
     );
   }
+  const callerId = principal.actorId;
 
   const { primaryAgentId } = getInstanceConfig();
 
   // On a configured group instance the owner is the primary agent.
   if (primaryAgentId) {
-    if (session.user.id === primaryAgentId) return null;
+    if (callerId === primaryAgentId) return null;
   }
 
   // Fallback (and the only path when no primary agent is configured): a
@@ -80,7 +84,7 @@ async function requireOwnerOrRespond(): Promise<NextResponse | null> {
   const [agent] = await db
     .select({ metadata: agents.metadata })
     .from(agents)
-    .where(eq(agents.id, session.user.id))
+    .where(eq(agents.id, callerId))
     .limit(1);
   const metadata =
     agent?.metadata && typeof agent.metadata === "object" && !Array.isArray(agent.metadata)

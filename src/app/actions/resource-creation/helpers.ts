@@ -97,9 +97,19 @@ export async function resolveAuthenticatedUserId(): Promise<string | null> {
   // still invisible here — the 2026-07-16 fix surfaced the group as an owner
   // option for SSO-landed admins, but their SUBMIT then 401'd in this helper.
   // getAuthenticatedActorId is the established session-OR-cookie resolver
-  // (same combo the job-qa/project surfaces use for authority).
+  // (same combo the job-qa/project surfaces use for authority), and it also
+  // decodes the LEGACY packed cookie format that getCurrentUserId's decoder
+  // cannot read.
   const { getAuthenticatedActorId } = await import("@/lib/server-auth");
-  return getAuthenticatedActorId();
+  const cookieActorId = await getAuthenticatedActorId();
+  if (!cookieActorId) return null;
+
+  // That id is the actor's HOME id verbatim. Every downstream authorization
+  // (canPostToGroup, ownership) and every write keys on THIS instance's local
+  // agent id, so normalize before returning (S-1) — an un-normalized remote id
+  // silently failed every membership check.
+  const { resolveLocalActorId } = await import("@/lib/federation/resolution");
+  return resolveLocalActorId(cookieActorId);
 }
 
 /**

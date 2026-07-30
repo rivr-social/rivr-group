@@ -22,7 +22,11 @@
  *
  * Error handling pattern:
  * - Missing/invalid webhook setup or signature issues return `400`/`500`.
- * - Handler failures are logged and return `500` so Stripe can retry safely.
+ * - Handler failures are logged and return `500` so Stripe can retry safely,
+ *   EXCEPT failures about entities that do not exist on this instance
+ *   (`isForeignEntityError`) — those are acknowledged with `200`, since the
+ *   shared Stripe platform delivers other instances' events here and no retry
+ *   can ever succeed (audit M-6).
  */
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -56,6 +60,7 @@ import {
 } from '@/lib/marketplace-settlement';
 import { settleEventTicketPurchase } from '@/lib/event-ticket-settlement';
 import { STATUS_BAD_REQUEST, STATUS_INTERNAL_ERROR } from '@/lib/http-status';
+import { isForeignEntityError } from '@/lib/stripe-webhook-errors';
 import { eventMatchesRuntimeMode, getStripeRuntimeMode, stripeModeOfLivemode } from '@/lib/stripe-mode';
 import { assertAmountReconciled } from '@/lib/stripe-reconcile';
 import { reconcileTaxExclusiveCheckout } from '@/lib/stripe-checkout-settlement';
@@ -305,6 +310,13 @@ export async function POST(request: NextRequest) {
         break;
     }
   } catch (err) {
+    if (isForeignEntityError(err)) {
+      console.log(
+        `[stripe-webhook] Acknowledging foreign-entity event ${event.type} (${(err as Error).message})`,
+      );
+      return NextResponse.json({ received: true, foreignEntity: true });
+    }
+
     // Return 500 for processing errors so Stripe can retry according to its backoff policy.
     console.error(`Error handling webhook event ${event.type}:`, err);
     return NextResponse.json(

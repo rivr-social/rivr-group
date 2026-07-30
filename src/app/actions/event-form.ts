@@ -7,6 +7,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm"
 import { isGroupAdmin } from "@/app/actions/group-admin"
 import { getCurrentUserId } from "@/app/actions/interactions/helpers"
 import { getAuthenticatedActorId } from "@/lib/server-auth"
+import { resolveLocalActorId } from "@/lib/federation/resolution"
 
 type ManagedGroup = {
   id: string
@@ -43,8 +44,13 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
   // `auth()` cannot see — without this the "Offer this as" owner picker rendered
   // empty (only "My profile") for federated admins, blocking group-owned
   // offerings from landing sales in the group's Connect account.
-  const unifiedUserId = (await getCurrentUserId()) ?? (await getAuthenticatedActorId())
-  if (unifiedUserId) return unifiedUserId
+  const sessionUserId = await getCurrentUserId()
+  if (sessionUserId) return sessionUserId
+
+  // The cookie carries the actor's HOME id verbatim; normalize it to this
+  // instance's local agent id before any membership/authority check reads it (S-1).
+  const cookieActorId = await getAuthenticatedActorId()
+  if (cookieActorId) return resolveLocalActorId(cookieActorId)
 
   // Final fallback: a session that carries an email but no id (rare) resolves to
   // its agent row by email.

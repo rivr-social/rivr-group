@@ -1,4 +1,5 @@
-import { notFound, redirect } from "next/navigation"
+import { PageNotFoundView } from "@/components/page-not-found-view"
+import { redirect } from "next/navigation"
 import type { Metadata } from "next"
 import { fetchAgentByUsername, fetchPublicAgentById } from "@/app/actions/graph"
 import { buildPersonMetadata } from "@/lib/object-metadata"
@@ -66,7 +67,11 @@ export default async function UserProfilePage({ params }: { params: Promise<{ us
   const data = await getProfilePageData(username)
 
   if (!data) {
-    notFound()
+    // Render the not-found view rather than calling notFound(): generateMetadata
+    // already awaited this same data, so a late notFound() re-renders the
+    // AppRouter mid-hydration and crashes anonymous visitors with React #310
+    // (audit S-3).
+    return <PageNotFoundView title="Profile not found" message="This profile doesn't exist, or it is no longer shared here." />
   }
 
   const meta = data.profile.metadata

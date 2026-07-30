@@ -18,9 +18,9 @@
  *
  * @module projects/[id]/page
  */
+import { PageNotFoundView } from "@/components/page-not-found-view"
 import Link from "next/link"
 import Image from "next/image"
-import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import {
   ArrowLeft,
@@ -342,7 +342,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const data = await getProjectPageData(id)
 
   if (!data) {
-    notFound()
+    // Render the not-found view rather than calling notFound(): generateMetadata
+    // already awaited this same data, so a late notFound() re-renders the
+    // AppRouter mid-hydration and crashes anonymous visitors with React #310
+    // (audit S-3).
+    return <PageNotFoundView title="Project not found" message="This project doesn't exist, or it is no longer shared here." />
   }
 
   const { agent, project, ownerId, owner, children, activity, linkedEvents, jobResources, ownedResources } = data

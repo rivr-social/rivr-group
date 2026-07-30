@@ -814,6 +814,81 @@ workspaces (app codebases land with the own-environment/broker lane).
   a "Published vN" badge; on publish it updates the publication state and
   `router.refresh()`es the version history.
 
+## Federated writes: one write-actor resolver + visitor capabilities (2026-07-30, S-1)
+
+A federated SSO identity (global-credential login → `rivr_remote_viewer` cookie,
+no NextAuth session) got the full write UI while every social write refused with
+"You must be logged in to …" — the actions resolved their principal with a
+session-ONLY helper (`getOperatingAgentId` → `auth()`). Fixed at the resolver:
+
+- **`lib/auth/write-actor-policy.ts`** — PURE decision (no session/db/cookie
+  imports, so it is unit-testable): `decideWriteActor({principal, capability,
+  standing, visitorScope})` + `WRITE_ACTOR_DENIAL_CODES` +
+  `writeActorDenialMessage`. Policy: local session → allow; federated principal
+  with local STANDING (this instance's primary agent, an active
+  `own/manage/join/belong` edge, or metadata-authored admin) → allow (they are a
+  member acting from a remote home, NOT a drive-by visitor); otherwise the
+  owner-authored visitor policy decides (`/settings/visitor-access`,
+  `federation/visitor-scope.ts` — read/react/comment/rsvp/message). Tests:
+  `lib/auth/__tests__/write-actor.test.ts` (`pnpm test:unit`, 11 cases).
+- **`lib/auth/write-actor.ts`** — the IO half: `resolveWriteActorPrincipal()`
+  (execution context → `getSession()` → `getAuthenticatedActor()`, which also
+  decodes the LEGACY packed cookie `getSession` cannot read) always returning
+  THIS instance's local agent id via `resolveLocalActorId`, plus
+  `resolveFederatedStanding()` and `resolveWriteActor()`.
+- **Wired:** `postCommentAction` (capability `comment`, standing checked against
+  the thread's owner group, local-session persona attribution preserved),
+  `toggleLikeOnTarget` / `setReactionOnTarget` / `toggleThankOnTarget`
+  (`react`), `setEventRsvp` (`rsvp`). Identity-only (no new capability gate, the
+  policy models no authoring capability): `resource-creation/helpers.ts`
+  `resolveAuthenticatedUserId` and `actions/event-form.ts` now NORMALIZE the
+  cookie-derived home id to the local agent id — an un-normalized remote id
+  silently failed every membership check (event/post/group creation).
+  `/settings/visitor-access` (page + `api/admin/visitor-access`) accept either
+  auth source, so the SSO-landed owner is no longer bounced to `/auth/login`.
+- **This resolver never replaces authorization.** `canPostToGroup`,
+  `hasGroupManageAccess`, ownership and tier checks still run against the
+  resolved local actor. Do NOT reintroduce `getOperatingAgentId()` /
+  `getAuthenticatedUserId()` in a user-facing write action.
+- **Client half:** a structured `ActionResult` refusal must reach the user.
+  `comment-feed.tsx` now renders the message INLINE (`role="alert"`) beside the
+  composer as well as toasting — a toast alone read as a silent no-op.
+
+## No crash-404s: render the not-found view, never a late notFound() (2026-07-30, S-3)
+
+An ANONYMOUS visit to a missing/dangling entity rendered "… Not Found" and then
+hard-crashed to "Application error" (React #310): the page calls `notFound()`
+AFTER `generateMetadata` has already resolved and streamed, and that late
+`notFound()` re-renders the AppRouter mid-hydration (same class as the
+2026-07-15 sovereign-root flash). Logged-in renders resolve before the boundary
+swaps, which is why only anonymous visitors saw it.
+
+`components/page-not-found-view.tsx` is the extracted view (`app/not-found.tsx`
+now renders it too, so route-level 404s and page-level ones look identical).
+Every page that pairs `generateMetadata` with a data-miss now RETURNS
+`<PageNotFoundView title=… message=… />` instead of throwing: `posts/[id]`,
+`marketplace/[id]`, `groups/[id]`, `(main)/projects/[id]`,
+`(main)/profile/[username]`, `events/[id]`. **Rule: if `generateMetadata`
+awaits the same data the page awaits, the page must RENDER the not-found view,
+not call `notFound()`.** (Ported from global `64ec174`, styled to this app's own
+`app/not-found.tsx`.)
+
+## Stripe webhook: acknowledge foreign-entity events (2026-07-30, M-6)
+
+Every instance shares the ONE Stripe platform account, so this webhook receives
+other instances' events. The per-lane `localAgentExists` guards catch the shapes
+we know; anything slipping past reaches a wallet/engine/billing lookup that
+throws `Agent not found: <id>`, which escaped to the top-level catch as a 500 →
+Stripe retry storm (live on MAB: a dev-instance family agent). The catch in
+`api/stripe/webhook/route.ts` now classifies via
+`lib/stripe-webhook-errors.ts` `isForeignEntityError` (anchored
+`/^Agent not found:/`): log
+`[stripe-webhook] Acknowledging foreign-entity event <type> (<message>)` and
+return 200 `{received:true, foreignEntity:true}`. A retry can never succeed for
+an entity that is not local (or was deleted). EVERY other error still returns
+500 so Stripe retries. Tests: `lib/__tests__/stripe-webhook-errors.test.ts`
+(`pnpm test:unit`).
+
 ## Job claiming (baseline membership gate, 2026-07-10)
 
 Claiming a job ALWAYS requires active membership in the owning group, or

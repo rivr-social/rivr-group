@@ -17,13 +17,13 @@
 import { redirect } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
 
-import { auth } from "@/auth";
 import { db } from "@/db";
 import {
   agents,
   federatedVisitLog,
   federatedVisitorSettings,
 } from "@/db/schema";
+import { resolveWriteActorPrincipal } from "@/lib/auth/write-actor";
 import { getInstanceConfig } from "@/lib/federation/instance-config";
 import {
   BASELINE_VISITOR_CAPABILITY,
@@ -41,10 +41,14 @@ import {
 const RECENT_VISIT_LIMIT = 25;
 
 export default async function VisitorAccessSettingsPage() {
-  const session = await auth();
-  if (!session?.user?.id) {
+  // Accept EITHER auth source: an owner/admin who arrived through cross-instance
+  // SSO holds only the rivr_remote_viewer cookie, which `auth()` cannot see —
+  // that bounced them to /auth/login on their own settings page (S-1).
+  const principal = await resolveWriteActorPrincipal();
+  if (!principal) {
     redirect("/auth/login");
   }
+  const viewerId = principal.actorId;
 
   const { instanceId, instanceType, instanceSlug, primaryAgentId } =
     getInstanceConfig();
@@ -52,12 +56,12 @@ export default async function VisitorAccessSettingsPage() {
   // Owner gate. When a primary agent is configured (the normal sovereign case)
   // only that agent may administer visitor access; otherwise fall back to a
   // platform-admin check.
-  let isOwner = primaryAgentId !== null && session.user.id === primaryAgentId;
+  let isOwner = primaryAgentId !== null && viewerId === primaryAgentId;
   if (!isOwner) {
     const [agent] = await db
       .select({ metadata: agents.metadata })
       .from(agents)
-      .where(eq(agents.id, session.user.id))
+      .where(eq(agents.id, viewerId))
       .limit(1);
     const metadata =
       agent?.metadata && typeof agent.metadata === "object" && !Array.isArray(agent.metadata)

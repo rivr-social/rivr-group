@@ -1,6 +1,6 @@
+import { PageNotFoundView } from "@/components/page-not-found-view"
 import Link from "next/link"
 import Image from "next/image"
-import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import { Calendar, MapPin, Users, Video, Ticket } from "lucide-react"
 import { fetchEventDetail, fetchAgent, fetchAgentsByIds } from "@/app/actions/graph"
@@ -149,7 +149,11 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
   const agent = await fetchEventDetail(id)
 
   if (!agent) {
-    notFound()
+    // Render the not-found view rather than calling notFound(): generateMetadata
+    // already awaited this same data, so a late notFound() re-renders the
+    // AppRouter mid-hydration and crashes anonymous visitors with React #310
+    // (audit S-3).
+    return <PageNotFoundView title="Event not found" message="This event doesn't exist, or it has been cancelled." />
   }
 
   // Re-check against the resolved event's own metadata in case the resource
