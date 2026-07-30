@@ -393,6 +393,15 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
     return;
   }
 
+  // Shared-platform fan-out guard (M-6): a ticket sale whose organizer is not
+  // a local agent belongs to another instance — acknowledge and stand down.
+  if (!(await localAgentExists(organizerAgentId))) {
+    console.log(
+      `[stripe-webhook] Ignoring foreign event-ticket checkout ${session.id} (organizer ${organizerAgentId} not local)`,
+    );
+    return;
+  }
+
   const totalCents = Number(metadata.totalCents ?? 0);
   const platformFeeCents = Number(metadata.platformFeeCents ?? 0);
   const legacySalesTaxCents = Number(metadata.salesTaxCents ?? 0);
@@ -445,6 +454,27 @@ async function handlePaymentCheckoutCompleted(session: Stripe.Checkout.Session) 
  * Records the purchase in the ledger and wallet transactions, then
  * redistributes org commission via Stripe transfer if applicable.
  */
+/**
+ * Whether an agent id resolves to a LOCAL agents row.
+ *
+ * Every instance shares the ONE Stripe TEST/LIVE platform, so this endpoint
+ * receives every account's events — including checkouts whose entities live on
+ * a different instance entirely (audit M-6: MAB's handler threw
+ * `Agent not found: <a dev-global group>` and 500'd, making Stripe retry a
+ * settlement this instance can never perform). A foreign event must be
+ * ACKNOWLEDGED, not retried; only events that DO reference local entities may
+ * fail loudly.
+ */
+async function localAgentExists(agentId: string | null | undefined): Promise<boolean> {
+  if (!agentId) return false;
+  const [row] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+  return Boolean(row);
+}
+
 async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Session) {
   const metadata = session.metadata ?? {};
   const listingId = metadata.listingId;
@@ -475,6 +505,15 @@ async function handleMarketplacePurchaseCompleted(session: Stripe.Checkout.Sessi
 
   if (!listingId || !sellerAgentId) {
     console.warn('Marketplace purchase checkout missing required metadata:', session.id);
+    return;
+  }
+
+  // Shared-platform fan-out guard (M-6): a session whose seller is not a local
+  // agent belongs to another instance's checkout — acknowledge and stand down.
+  if (!(await localAgentExists(sellerAgentId))) {
+    console.log(
+      `[stripe-webhook] Ignoring foreign marketplace checkout ${session.id} (seller ${sellerAgentId} not local)`,
+    );
     return;
   }
 
@@ -536,6 +575,15 @@ async function handleSubscriptionUpsert(stripeSub: Stripe.Subscription) {
   if (!agentId) {
     // Metadata contract violation: without agent ownership we cannot safely map this subscription.
     console.warn('Subscription missing agentId metadata, skipping:', stripeSub.id);
+    return;
+  }
+
+  // Shared-platform fan-out guard (M-6): a subscription for an agent this
+  // instance does not hold belongs to another instance — acknowledge, skip.
+  if (!(await localAgentExists(agentId))) {
+    console.log(
+      `[stripe-webhook] Ignoring foreign subscription ${stripeSub.id} (agent ${agentId} not local)`,
+    );
     return;
   }
 
@@ -709,6 +757,15 @@ async function handleGroupSubscriptionUpsert(stripeSub: Stripe.Subscription) {
   const planId = stripeSub.metadata?.planId;
   if (!memberAgentId || !groupId || !planId) {
     console.warn('Group subscription missing metadata, skipping:', stripeSub.id);
+    return;
+  }
+
+  // Shared-platform fan-out guard (M-6): dues for a group this instance does
+  // not hold belong to another instance — acknowledge, skip.
+  if (!(await localAgentExists(groupId))) {
+    console.log(
+      `[stripe-webhook] Ignoring foreign group subscription ${stripeSub.id} (group ${groupId} not local)`,
+    );
     return;
   }
 
