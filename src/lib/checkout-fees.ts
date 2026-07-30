@@ -136,6 +136,38 @@ export function grossUpForStripeCents(netCents: number): number {
   );
 }
 
+/** What a wallet top-up actually charges, itemized. All figures in cents. */
+export interface DepositChargeBreakdown {
+  /** What lands in the wallet — exactly what the depositor asked for. */
+  creditCents: number;
+  /** Card processing the DEPOSITOR covers so RIVR breaks even. */
+  stripeFeeCoveredCents: number;
+  /** What the card is actually charged: credit + processing. */
+  chargeCents: number;
+}
+
+/**
+ * Itemizes a wallet top-up so the DIALOG can disclose what the card will be
+ * charged (audit PAY-36: the button said "Confirm $5.00" while the
+ * PaymentIntent charged 561¢). Single source of truth — `createDepositIntent`
+ * prices the PaymentIntent from this, and the UI discloses from this, so the
+ * quoted figure and the charged figure cannot drift.
+ *
+ * @param creditCents The amount to land in the wallet, in cents.
+ * @returns The itemized charge; all-zero for a non-positive/fractional request.
+ */
+export function describeDepositCharge(creditCents: number): DepositChargeBreakdown {
+  const chargeCents = grossUpForStripeCents(creditCents);
+  if (chargeCents <= 0) {
+    return { creditCents: 0, stripeFeeCoveredCents: 0, chargeCents: 0 };
+  }
+  return {
+    creditCents,
+    stripeFeeCoveredCents: chargeCents - creditCents,
+    chargeCents,
+  };
+}
+
 export function calculateCheckoutFees(
   sellerPriceCents: number,
   options?: {
