@@ -31,7 +31,7 @@ import {
   getGroupTreasuryLedgerAction,
   getGroupWalletAction,
 } from "@/app/actions/wallet"
-import type { TreasuryLedgerEntry } from "@/app/actions/wallet"
+import type { TreasuryLedgerEntry, TreasuryTypeTotal } from "@/app/actions/wallet"
 import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
 import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
 import { TreasuryFundsCard } from "@/components/treasury-funds-card"
@@ -41,12 +41,62 @@ import { TreasuryFlowChart } from "@/components/treasury-flow-chart"
 import { BudgetRollupCard } from "@/components/budget-rollup-card"
 import { FinancialReportsCard } from "@/components/financial-reports-card"
 import { computeTreasuryTopline } from "@/lib/treasury-topline"
+import {
+  buildTreasuryCsvRows,
+  toCsvText,
+  EXPORT_MAX_ROWS,
+} from "@/lib/treasury-ledger"
+import { useToast } from "@/components/ui/use-toast"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { WalletBalance } from "@/types"
+
+/** Rows fetched for the Transactions list (one page, server cap is 100). */
+const TRANSACTIONS_PAGE_LIMIT = 100
 
 /** First millisecond of the current calendar month, as an ISO string. */
 function currentMonthStartIso(): string {
   const now = new Date()
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+}
+
+/** A selectable window for the Transactions list and the CSV export (T-13). */
+interface TxRange {
+  key: string
+  label: string
+  sinceIso?: string
+  untilIso?: string
+}
+
+/**
+ * The date ranges offered on the Transactions tab, computed at render time.
+ *
+ * Audit T-13: the "Date Range" button was inert (no `onClick`). The ledger
+ * action already accepted `sinceIso`/`untilIso`, so wiring it needed no new
+ * server work — these presets are exactly that parameter pair. Its sibling
+ * "Filter" button had no server-side counterpart at all and was REMOVED rather
+ * than left as dead UI.
+ */
+function buildTxRanges(): TxRange[] {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = now.getMonth()
+  return [
+    { key: "all", label: "All time" },
+    { key: "this_month", label: "This month", sinceIso: new Date(y, m, 1).toISOString() },
+    {
+      key: "last_month",
+      label: "Last month",
+      sinceIso: new Date(y, m - 1, 1).toISOString(),
+      untilIso: new Date(y, m, 0, 23, 59, 59, 999).toISOString(),
+    },
+    { key: "ytd", label: "Year to date", sinceIso: new Date(y, 0, 1).toISOString() },
+  ]
 }
 
 interface TreasuryTabProps {
@@ -61,18 +111,45 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
   // subgroups) shown in the Recent Activity + Transactions lists.
   const [recentEntries, setRecentEntries] = useState<TreasuryLedgerEntry[]>([])
   // This-month movements + inflow/outflow totals for the summary cards.
-  const [monthEntries, setMonthEntries] = useState<TreasuryLedgerEntry[]>([])
-  const [monthTotals, setMonthTotals] = useState<{ inflowCents: number; outflowCents: number; netCents: number }>({
+  const [monthTotals, setMonthTotals] = useState<{
+    inflowCents: number
+    outflowCents: number
+    netCents: number
+    inflowCount: number
+    outflowCount: number
+  }>({
     inflowCents: 0,
     outflowCents: 0,
     netCents: 0,
+    inflowCount: 0,
+    outflowCount: 0,
   })
+  /**
+   * This month's inflow split by transaction type, over the WHOLE window and the
+   * whole treasury tree (audit T1-1/T-04). Revenue Streams used to be derived
+   * from the rendered PAGE of entries, so its slices were a subset of the
+   * headline revenue they were divided by — percentages summed to less than
+   * 100% — and for a member the page held only the rows they could see, which is
+   * how "P2p_transfer $20.09 — 36.7% of total revenue" appeared on a surface
+   * that should never show internal plumbing as revenue at all.
+   */
+  const [monthByType, setMonthByType] = useState<TreasuryTypeTotal[]>([])
   const [walletError, setWalletError] = useState<string | null>(null)
   const [isLoadingWallet, setIsLoadingWallet] = useState(true)
   // Sum of every treasury fund's own wallet balance (admin-only read; funds
   // aren't visible to non-admins, so this stays 0 for them and the topline
   // falls back to unallocated + Connect, same as before).
   const [fundsTotalCents, setFundsTotalCents] = useState(0)
+  const [isExporting, setIsExporting] = useState(false)
+  // Transactions tab: the selected window (T-13) and the rows within it.
+  const [txRanges] = useState<TxRange[]>(buildTxRanges)
+  const [txRangeKey, setTxRangeKey] = useState<string>("all")
+  const [txEntries, setTxEntries] = useState<TreasuryLedgerEntry[]>([])
+  const [txTotal, setTxTotal] = useState(0)
+  const [isLoadingTx, setIsLoadingTx] = useState(false)
+  const { toast } = useToast()
+
+  const activeTxRange = txRanges.find((r) => r.key === txRangeKey) ?? txRanges[0]
 
   const fetchWalletData = useCallback(async () => {
     setIsLoadingWallet(true)
@@ -85,8 +162,10 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         // payouts debit the PROJECT wallet, so a group-wallet-only view missed
         // them).
         getGroupTreasuryLedgerAction(groupId, { limit: 20 }),
-        // Month-to-date window drives the revenue/expense/net cards.
-        getGroupTreasuryLedgerAction(groupId, { sinceIso: currentMonthStartIso(), limit: 100 }),
+        // Month-to-date window drives the revenue/expense/net cards. Only the
+        // server-side aggregates are read (totals + byType), never the rows —
+        // so `limit: 1` is deliberate, not a truncation.
+        getGroupTreasuryLedgerAction(groupId, { sinceIso: currentMonthStartIso(), limit: 1 }),
         canManageStripe ? getGroupTreasuryFundsOverviewAction(groupId) : Promise.resolve(null),
       ])
 
@@ -101,8 +180,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
       }
 
       if (monthResult.success && monthResult.ledger) {
-        setMonthEntries(monthResult.ledger.entries)
         setMonthTotals(monthResult.ledger.totals)
+        setMonthByType(monthResult.ledger.byType)
       }
 
       if (fundsResult?.success && fundsResult.overview) {
@@ -123,6 +202,32 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
     fetchWalletData()
   }, [fetchWalletData])
 
+  /**
+   * The Transactions list, scoped to the selected date range (T-13). Kept
+   * separate from the 20-row Recent Activity read so "All Transactions" shows a
+   * full page of the chosen window rather than the same short recent slice.
+   */
+  const fetchTransactions = useCallback(async () => {
+    setIsLoadingTx(true)
+    try {
+      const result = await getGroupTreasuryLedgerAction(groupId, {
+        limit: TRANSACTIONS_PAGE_LIMIT,
+        sinceIso: activeTxRange?.sinceIso,
+        untilIso: activeTxRange?.untilIso,
+      })
+      if (result.success && result.ledger) {
+        setTxEntries(result.ledger.entries)
+        setTxTotal(result.ledger.total)
+      }
+    } finally {
+      setIsLoadingTx(false)
+    }
+  }, [groupId, activeTxRange?.sinceIso, activeTxRange?.untilIso])
+
+  useEffect(() => {
+    void fetchTransactions()
+  }, [fetchTransactions])
+
   // Month-to-date summaries come from the treasury-signed totals (internal
   // fund/project moves are excluded, so funding a project never reads as an
   // expense).
@@ -130,26 +235,19 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
   const monthlyExpenses = monthTotals.outflowCents / 100
   const netIncome = monthTotals.netCents / 100
 
-  // Build revenue stream breakdown by grouping this month's inflows by type.
-  const revenueStreams = (() => {
-    const creditEntries = monthEntries.filter((tx) => tx.direction === "in")
-    if (creditEntries.length === 0) return []
-
-    const byType = new Map<string, number>()
-    for (const tx of creditEntries) {
-      const label = tx.type || "Other"
-      byType.set(label, (byType.get(label) ?? 0) + tx.grossAmountCents / 100)
-    }
-
-    const totalRevenue = monthlyRevenue
-    return Array.from(byType.entries())
-      .map(([name, amount]) => ({
-        name,
-        amount,
-        percentage: totalRevenue > 0 ? (amount / totalRevenue) * 100 : 0,
-      }))
-      .sort((a, b) => b.amount - a.amount)
-  })()
+  // Revenue streams come from the server's window-wide, tree-wide `byType`
+  // split — the same aggregate the headline revenue figure is summed from, so
+  // the slices always reconcile to 100% of it (audit T1-1/T-04). Only external
+  // inflows appear: an internal fund/project move contributes 0 to `inflowCents`
+  // by construction, so it can no longer masquerade as a revenue stream.
+  const revenueStreams = monthByType
+    .filter((entry) => entry.inflowCents > 0)
+    .map((entry) => ({
+      name: entry.type || "Other",
+      amount: entry.inflowCents / 100,
+      percentage: monthTotals.inflowCents > 0 ? (entry.inflowCents / monthTotals.inflowCents) * 100 : 0,
+    }))
+    .sort((a, b) => b.amount - a.amount)
 
   // Current month label for reports
   const currentMonthLabel = new Date().toLocaleDateString("en-US", {
@@ -172,31 +270,69 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
     })
   }
 
-  // Export the loaded treasury transactions as a CSV the browser downloads.
-  // Treasury transactions are auto-derived from real wallet/settlement flows
-  // (there is no manual-entry model), so this simply serializes what's shown.
-  const handleExportCsv = () => {
-    const rows = [
-      ["Date", "Type", "Description", "Direction", "Treasury account", "Counterparty", "Signed amount (USD)", "Status"],
-      ...recentEntries.map((tx) => [
-        new Date(tx.createdAt).toISOString(),
-        tx.type,
-        tx.description ?? "",
-        tx.direction,
-        tx.scopeLabel,
-        tx.counterpartyLabel ?? "",
-        (tx.signedAmountCents / 100).toFixed(2),
-        tx.status,
-      ]),
-    ]
-    const csv = rows
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\n")
+  // Export the treasury ledger as a CSV the browser downloads.
+  //
+  // Audit T1-2, two defects fixed here:
+  //  1. Every internal row exported "0.00" because `signedAmountCents` is 0 for
+  //     a treasury-to-treasury move — correct for a P&L, useless as an audit
+  //     trail, so allocations and sweeps looked like zero-value events. The row
+  //     builder now emits a GROSS amount column (the real value moved, matching
+  //     the UI) alongside the signed treasury effect.
+  //  2. It serialized the 20 rows already on screen under a bare "Export"
+  //     label. It now runs its OWN query over the selected date range, up to a
+  //     named cap, and tells the user exactly how much it covered.
+  //
+  // Scope: the file contains exactly the rows this viewer is authorized to read
+  // — the action returns a member only the group's own settlement legs — so no
+  // extra gate is needed here. Serialization lives in the pure lib so the row
+  // shape is unit-tested rather than asserted by eye.
+  const handleExportCsv = async () => {
+    setIsExporting(true)
+    try {
+      const result = await getGroupTreasuryLedgerAction(groupId, {
+        forExport: true,
+        limit: EXPORT_MAX_ROWS,
+        sinceIso: activeTxRange?.sinceIso,
+        untilIso: activeTxRange?.untilIso,
+      })
+      if (!result.success || !result.ledger) {
+        toast({
+          title: "Export failed",
+          description: result.error ?? "Could not read the treasury ledger.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const { entries, total } = result.ledger
+      const truncated = total > entries.length
+      downloadCsv(toCsvText(buildTreasuryCsvRows(entries)), truncated)
+      // The old export was silent about covering only part of the ledger. Say
+      // it plainly, and keep the file itself a clean rectangle so spreadsheets
+      // and `read_csv` parse it without a ragged preamble row.
+      toast({
+        title: truncated ? "Exported a partial ledger" : "Treasury exported",
+        description: truncated
+          ? `${entries.length} of ${total} transactions (${activeTxRange?.label.toLowerCase()}) — capped at ${EXPORT_MAX_ROWS.toLocaleString()} rows. Narrow the date range to export the rest.`
+          : `${entries.length} transaction${entries.length === 1 ? "" : "s"} (${activeTxRange?.label.toLowerCase()}).`,
+        variant: truncated ? "destructive" : "default",
+      })
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  /** Triggers the browser download for already-serialized CSV text. */
+  const downloadCsv = (csv: string, truncated: boolean) => {
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = `treasury-${groupId}-${new Date().toISOString().slice(0, 10)}.csv`
+    // A partial file is named as one, so a truncated export can never be
+    // mistaken for the complete ledger once it leaves the browser.
+    a.download = `treasury-${groupId}-${txRangeKey}-${new Date().toISOString().slice(0, 10)}${
+      truncated ? "-partial" : ""
+    }.csv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -211,11 +347,11 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
           <Button
             variant="outline"
             size="sm"
-            onClick={handleExportCsv}
-            disabled={recentEntries.length === 0}
+            onClick={() => void handleExportCsv()}
+            disabled={txTotal === 0 || isExporting}
           >
             <Download className="mr-2 h-4 w-4" />
-            Export
+            {isExporting ? "Exporting..." : "Export CSV"}
           </Button>
         </div>
       </div>
@@ -297,7 +433,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
           <CardContent>
             <div className="text-2xl font-bold text-green-600">{formatCurrency(monthlyRevenue)}</div>
             <p className="text-xs text-muted-foreground">
-              Based on {monthEntries.filter((tx) => tx.direction === "in").length} transactions
+              Based on {monthTotals.inflowCount} transactions
             </p>
           </CardContent>
         </Card>
@@ -310,7 +446,7 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
           <CardContent>
             <div className="text-2xl font-bold text-red-600">{formatCurrency(monthlyExpenses)}</div>
             <p className="text-xs text-muted-foreground">
-              Based on {monthEntries.filter((tx) => tx.direction === "out").length} transactions
+              Based on {monthTotals.outflowCount} transactions
             </p>
           </CardContent>
         </Card>
@@ -436,24 +572,43 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         </TabsContent>
 
         <TabsContent value="transactions" className="space-y-4 mt-6">
-          <div className="flex justify-between items-center">
-            <h3 className="text-lg font-semibold">All Transactions</h3>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm">
-                Filter
-              </Button>
-              <Button variant="outline" size="sm">
-                <Calendar className="mr-2 h-4 w-4" />
-                Date Range
-              </Button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-lg font-semibold">All Transactions</h3>
+              <p className="text-xs text-muted-foreground">
+                {isLoadingTx
+                  ? "Loading…"
+                  : txTotal > txEntries.length
+                    ? `Showing ${txEntries.length} of ${txTotal} — ${activeTxRange?.label.toLowerCase()}`
+                    : `${txTotal} transaction${txTotal === 1 ? "" : "s"} — ${activeTxRange?.label.toLowerCase()}`}
+              </p>
+            </div>
+            {/* T-13: the old "Filter" and "Date Range" buttons had no onClick at
+                all. Date Range is real now (the ledger action already took
+                since/until); Filter had no server-side counterpart, so it was
+                removed rather than left looking clickable. */}
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+              <Select value={txRangeKey} onValueChange={setTxRangeKey}>
+                <SelectTrigger className="w-[160px]" aria-label="Date range">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {txRanges.map((range) => (
+                    <SelectItem key={range.key} value={range.key}>
+                      {range.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
           <Card>
             <CardContent className="p-0">
               <div className="divide-y">
-                {recentEntries.length > 0 ? (
-                  recentEntries.map((tx) => {
+                {txEntries.length > 0 ? (
+                  txEntries.map((tx) => {
                     const isCredit = tx.direction === "in"
                     const isInternal = tx.direction === "internal"
                     return (
@@ -508,8 +663,14 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
                 ) : (
                   <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                     <Inbox className="h-10 w-10 mb-3" />
-                    <p className="text-sm font-medium">No transactions yet</p>
-                    <p className="text-xs mt-1">Transactions will appear here as they occur</p>
+                    <p className="text-sm font-medium">
+                      {txRangeKey === "all" ? "No transactions yet" : "No transactions in this period"}
+                    </p>
+                    <p className="text-xs mt-1">
+                      {txRangeKey === "all"
+                        ? "Transactions will appear here as they occur"
+                        : "Try a wider date range."}
+                    </p>
                   </div>
                 )}
               </div>

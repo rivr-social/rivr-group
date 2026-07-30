@@ -67,13 +67,42 @@ function num(value: unknown): number {
 
 /**
  * Gathers a project's four cost components from the DB (+ best-effort Issuing
- * card spend), producing the pure-lib input. `sinceEpoch` optionally bounds the
- * card-spend read for date-ranged reports.
+ * card spend), producing the pure-lib input.
+ *
+ * DATE BOUNDS (audit T1-5): when a window is supplied, every SPEND component
+ * that carries a timestamp is bounded by it — paid job costs, project-attributed
+ * purchases, first-class project expenses, and Issuing card spend. Previously
+ * only card spend honoured `sinceIso` and `untilIso` was dropped entirely, so a
+ * "Last month" report paired a $0.00 P&L with July's $33.50 of spend.
+ *
+ * What CANNOT be bounded, by nature: the authored budget TARGET and the
+ * COMMITTED figure, which are both standing positions rather than period flows
+ * (a job's committed pay has no payment date until it settles). Those stay
+ * lifetime and the report labels them as such — see `budgetTargetIsLifetime`
+ * on the report result.
  */
 async function gatherProjectCostInputs(
   project: ProjectRow,
-  options?: { sinceEpoch?: number },
+  options?: { sinceEpoch?: number; untilEpoch?: number },
 ): Promise<ProjectCostInputs> {
+  // Reusable window predicates. Ledger rows carry `timestamp`; wallet
+  // transactions carry `created_at`.
+  const ledgerWindow = [
+    options?.sinceEpoch !== undefined
+      ? sql`${ledger.timestamp} >= to_timestamp(${options.sinceEpoch})`
+      : undefined,
+    options?.untilEpoch !== undefined
+      ? sql`${ledger.timestamp} <= to_timestamp(${options.untilEpoch})`
+      : undefined,
+  ].filter(Boolean);
+  const txWindow = [
+    options?.sinceEpoch !== undefined
+      ? sql`${walletTransactions.createdAt} >= to_timestamp(${options.sinceEpoch})`
+      : undefined,
+    options?.untilEpoch !== undefined
+      ? sql`${walletTransactions.createdAt} <= to_timestamp(${options.untilEpoch})`
+      : undefined,
+  ].filter(Boolean);
   const budgetCents = readBudgetCents(project.metadata);
 
   // (a) Job costs — committed from job pay metadata; paid from the ledger.
@@ -103,6 +132,7 @@ async function gatherProjectCostInputs(
         eq(ledger.isActive, true),
         sql`${ledger.metadata}->>'interactionType' = ${JOB_CASH_PAYOUT_INTERACTION}`,
         sql`${ledger.metadata}->>'projectId' = ${project.id}`,
+        ...ledgerWindow,
       ),
     );
   const jobsPaidCents = Number(paidRow?.sum ?? 0);
@@ -118,6 +148,7 @@ async function gatherProjectCostInputs(
         inArray(walletTransactions.type, [...PURCHASE_TX_TYPES]),
         eq(walletTransactions.status, 'completed'),
         sql`${walletTransactions.metadata}->>'projectId' = ${project.id}`,
+        ...txWindow,
       ),
     );
   const purchasesCents = Number(purchaseRow?.sum ?? 0);
@@ -134,6 +165,7 @@ async function gatherProjectCostInputs(
         eq(walletTransactions.referenceType, 'project'),
         eq(walletTransactions.referenceId, project.id),
         eq(walletTransactions.status, 'completed'),
+        ...txWindow,
       ),
     );
   const otherExpensesCents = Number(expenseRow?.sum ?? 0);
@@ -147,6 +179,7 @@ async function gatherProjectCostInputs(
   if (cardholderId && host) {
     cardExpensesCents = await sumIssuingSpendForCardholder(host, cardholderId, {
       createdGteEpoch: options?.sinceEpoch,
+      createdLteEpoch: options?.untilEpoch,
     }).catch(() => 0);
   }
 
@@ -199,7 +232,7 @@ async function fetchProject(projectId: string): Promise<ProjectRow | null> {
  */
 export async function getProjectBudgetSummaryAction(
   projectId: string,
-  options?: { sinceIso?: string },
+  options?: { sinceIso?: string; untilIso?: string },
 ): Promise<{ success: boolean; summary?: ProjectBudgetSummary; error?: string }> {
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, error: 'You must be logged in.' };
@@ -214,8 +247,10 @@ export async function getProjectBudgetSummaryAction(
       return { success: false, error: 'You are not allowed to view this project budget.' };
     }
 
-    const sinceEpoch = parseSinceEpoch(options?.sinceIso);
-    const inputs = await gatherProjectCostInputs(project, { sinceEpoch });
+    const inputs = await gatherProjectCostInputs(project, {
+      sinceEpoch: parseEpochBound(options?.sinceIso),
+      untilEpoch: parseEpochBound(options?.untilIso),
+    });
     return { success: true, summary: computeProjectBudget(inputs) };
   } catch (error) {
     console.error('getProjectBudgetSummaryAction failed:', error);
@@ -237,7 +272,7 @@ export async function getProjectBudgetSummaryAction(
  */
 export async function getGroupBudgetRollupAction(
   groupId: string,
-  options?: { sinceIso?: string },
+  options?: { sinceIso?: string; untilIso?: string },
 ): Promise<{ success: boolean; rollup?: BudgetRollupNode; error?: string }> {
   const userId = await getCurrentUserId();
   if (!userId) return { success: false, error: 'You must be logged in.' };
@@ -284,7 +319,8 @@ export async function getGroupBudgetRollupAction(
         ),
       );
 
-    const sinceEpoch = parseSinceEpoch(options?.sinceIso);
+    const sinceEpoch = parseEpochBound(options?.sinceIso);
+    const untilEpoch = parseEpochBound(options?.untilIso);
     const summaries: ProjectBudgetSummary[] = [];
     for (const row of projectRows) {
       const project: ProjectRow = {
@@ -293,7 +329,7 @@ export async function getGroupBudgetRollupAction(
         ownerId: row.ownerId,
         metadata: (row.metadata ?? {}) as Record<string, unknown>,
       };
-      const inputs = await gatherProjectCostInputs(project, { sinceEpoch });
+      const inputs = await gatherProjectCostInputs(project, { sinceEpoch, untilEpoch });
       summaries.push(computeProjectBudget(inputs));
     }
 
@@ -307,10 +343,10 @@ export async function getGroupBudgetRollupAction(
   }
 }
 
-/** Parses an ISO date into a Unix-seconds lower bound, or undefined. */
-function parseSinceEpoch(sinceIso?: string): number | undefined {
-  if (!sinceIso) return undefined;
-  const date = new Date(sinceIso);
+/** Parses an ISO date into a Unix-seconds bound, or undefined when absent/invalid. */
+function parseEpochBound(iso?: string): number | undefined {
+  if (!iso) return undefined;
+  const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return undefined;
   return Math.floor(date.getTime() / 1000);
 }

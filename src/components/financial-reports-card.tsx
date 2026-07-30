@@ -112,10 +112,12 @@ export function FinancialReportsCard({ groupId }: FinancialReportsCardProps) {
         ]),
       ]
       if (report.budget) {
-        lines.push(["Budget", "Committed", "", (report.budget.totals.committedCents / 100).toFixed(2)])
-        lines.push(["Budget", "Spent", "", (report.budget.totals.spentCents / 100).toFixed(2)])
+        // Same period-vs-lifetime distinction the UI makes (audit T1-5): an
+        // exported figure must carry the span it covers.
+        lines.push(["Budget", "Committed (all time)", "", (report.budget.totals.committedCents / 100).toFixed(2)])
+        lines.push(["Budget", "Spent (period)", "", (report.budget.totals.spentCents / 100).toFixed(2)])
         if (report.budget.totals.budgetCents !== null) {
-          lines.push(["Budget", "Target", (report.budget.totals.budgetCents / 100).toFixed(2), ""])
+          lines.push(["Budget", "Target (all time)", (report.budget.totals.budgetCents / 100).toFixed(2), ""])
         }
       }
       content = lines.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n")
@@ -220,10 +222,18 @@ export function FinancialReportsCard({ groupId }: FinancialReportsCardProps) {
             {report.budget && report.budget.totals.budgetCents !== null && (
               <div className="rounded-lg border bg-muted/30 p-3 text-sm">
                 <p className="mb-1 font-medium">Budget</p>
+                {/* Audit T1-5: Spent is now bounded to the report period, but
+                    Target and Committed are standing positions with no period —
+                    say so, instead of letting a "Last month" report imply the
+                    group spent nothing while showing a lifetime target. */}
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Spent covers the selected period; Target and Committed are the project&apos;s standing
+                  position (all time).
+                </p>
                 <div className="flex flex-wrap gap-x-6 gap-y-1">
-                  <span>Target: {usd(report.budget.totals.budgetCents)}</span>
-                  <span>Committed: {usd(report.budget.totals.committedCents)}</span>
-                  <span>Spent: {usd(report.budget.totals.spentCents)}</span>
+                  <span>Target (all time): {usd(report.budget.totals.budgetCents)}</span>
+                  <span>Committed (all time): {usd(report.budget.totals.committedCents)}</span>
+                  <span>Spent (period): {usd(report.budget.totals.spentCents)}</span>
                   <span className={report.budget.totals.overBudget ? "text-red-600" : "text-green-600"}>
                     {report.budget.totals.overBudget ? "Over budget" : `${usd(report.budget.totals.remainingCents ?? 0)} left`}
                   </span>

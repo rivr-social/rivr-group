@@ -441,14 +441,19 @@ export async function listIssuingCardsForCardholder(
 export async function sumIssuingSpendForCardholder(
   connectedAccountId: string,
   cardholderId: string,
-  options?: { createdGteEpoch?: number },
+  options?: { createdGteEpoch?: number; createdLteEpoch?: number },
 ): Promise<number> {
   if (!isIssuingEnabled()) return 0;
   const stripe = getStripe();
+  // Both bounds are honoured so a date-ranged budget report cannot mix a
+  // period-bounded lower edge with an unbounded upper one (audit T1-5).
+  const created: Stripe.RangeQueryParam = {};
+  if (options?.createdGteEpoch !== undefined) created.gte = options.createdGteEpoch;
+  if (options?.createdLteEpoch !== undefined) created.lte = options.createdLteEpoch;
   const params: Stripe.Issuing.TransactionListParams = {
     cardholder: cardholderId,
     limit: 100,
-    ...(options?.createdGteEpoch ? { created: { gte: options.createdGteEpoch } } : {}),
+    ...(Object.keys(created).length > 0 ? { created } : {}),
   };
 
   let totalCents = 0;

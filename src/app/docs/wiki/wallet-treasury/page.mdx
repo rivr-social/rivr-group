@@ -161,8 +161,32 @@ net-zero, so funding a project never double-counts as revenue.
 
 - **Treasury managers** see the full tree. **Members** see only the group
   settlement wallet's legs.
+- **One group, one P&L.** Which *rows* you can read depends on your role, but the
+  revenue/expense/net figures are always computed against the whole treasury
+  tree, so a member and an admin see the SAME monthly totals. (Previously a
+  member's shorter wallet list doubled as the internal/external test, so
+  transfers between the group's own pockets were booked as both revenue and
+  expense on the member's statement.)
 - This replaced an older version that read the *viewer's personal* wallet and
   therefore never showed job payouts (which debit the project wallet).
+
+### Exporting the ledger
+
+**Export CSV** downloads the transactions you are authorized to read, paging the
+full ledger rather than just the rows on screen (capped at 1,000 rows; a file
+that hits the cap says so in its first line, along with how many of the total it
+covers). Each row carries BOTH a **gross amount** — the real value moved,
+including internal allocations and sweeps — and a **treasury-signed amount**,
+which is `0.00` for internal moves because they net to zero for the treasury as
+a whole.
+
+### Reports and the budget half
+
+A report's **Profit & loss** is bounded to the period you pick. In the **Budget**
+half, *Spent* is bounded the same way, but *Target* and *Committed* are standing
+positions with no period — a project's budget and its outstanding commitments
+aren't monthly flows. Both the on-screen report and its CSV label which is
+which, so a "Last month" report can't be misread as claiming this month's spend.
 
 ## Moving money around inside the group
 

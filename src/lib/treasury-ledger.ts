@@ -37,6 +37,31 @@ export interface TreasuryWalletScope {
   ownerId: string;
 }
 
+/**
+ * The wallets whose individual ROWS a viewer may read.
+ *
+ * The counterpart to {@link classifyTreasuryLeg}'s scope map, and deliberately
+ * a DIFFERENT set (audit T1-1): a manager reads every leg in the tree, while an
+ * ordinary member reads only the group's own settlement-wallet legs — but BOTH
+ * lanes classify and total against the full tree, so one group reports one P&L.
+ *
+ * Collapsing the two concepts is what produced the defect: the member's
+ * truncated wallet list doubled as the internal/external predicate, so a
+ * group -> fund transfer looked external to a member (booked as revenue on the
+ * way in AND an expense on the way out) and internal to an admin.
+ *
+ * @param scopes Every wallet in the group's treasury tree.
+ * @param canManageTree Whether the viewer manages the group.
+ * @returns Wallet ids whose rows the viewer may see.
+ */
+export function resolveVisibleTreasuryWalletIds(
+  scopes: readonly TreasuryWalletScope[],
+  canManageTree: boolean,
+): string[] {
+  if (canManageTree) return scopes.map((scope) => scope.walletId);
+  return scopes.filter((scope) => scope.kind === 'group').map((scope) => scope.walletId);
+}
+
 /** Direction of a transaction leg relative to the treasury set. */
 export type TreasuryLegDirection = 'in' | 'out' | 'internal';
 
@@ -85,6 +110,99 @@ export function classifyTreasuryLeg(
   }
   // Neither side in-set: not a treasury leg. Net-zero so totals stay correct.
   return { direction: 'internal', signedAmountCents: 0, fromScope: null, toScope: null };
+}
+
+/**
+ * Hard ceiling on the rows a single treasury CSV export may contain.
+ *
+ * The export used to serialize whatever page was already on screen (20 rows)
+ * under a bare "Export" label, so an accountant reconciling off-platform
+ * silently lost everything older (audit T1-2). It now runs its own query over
+ * the selected range; this bounds that query so one click can never pull an
+ * unbounded table into memory. When a range exceeds it the UI must disclose the
+ * truncation rather than emit a short file that looks complete.
+ */
+export const EXPORT_MAX_ROWS = 10_000;
+
+/** Column order of the treasury CSV export. */
+export const TREASURY_CSV_HEADER = [
+  'Date',
+  'Type',
+  'Description',
+  'Direction',
+  'Treasury account',
+  'Counterparty',
+  'Amount (USD)',
+  'Treasury effect (USD)',
+  'Status',
+] as const;
+
+/** The fields the CSV export needs from a classified, labeled ledger entry. */
+export interface TreasuryCsvEntry {
+  createdAt: string;
+  type: string;
+  description: string | null;
+  direction: TreasuryLegDirection;
+  scopeLabel: string;
+  counterpartyLabel: string | null;
+  /** Always-positive transaction amount. */
+  grossAmountCents: number;
+  /** Treasury-signed contribution: `+` in, `-` out, `0` internal. */
+  signedAmountCents: number;
+  status: string;
+}
+
+/** Renders cents as a plain fixed-2 decimal string (no symbol, no grouping). */
+function usdCell(cents: number): string {
+  return (cents / 100).toFixed(2);
+}
+
+/**
+ * Builds the CSV matrix (header + one row per entry) for a treasury export.
+ *
+ * Carries TWO amount columns on purpose (audit T1-2). The export previously
+ * emitted only the treasury-signed amount, which is `0` for every internal leg
+ * BY DESIGN — funding a project is net-zero to the treasury as a whole — so
+ * allocations and sweeps exported as zero-value events while the UI showed
+ * their real value, and fund/project movement was unauditable off-platform.
+ * `Amount (USD)` is therefore the gross figure the UI shows for every row, and
+ * `Treasury effect (USD)` is the signed P&L contribution (`0.00` on an internal
+ * move, which the `Direction` column explains).
+ *
+ * @param entries Classified ledger entries, already ordered for display.
+ * @returns Header row followed by one string row per entry.
+ * @example
+ * ```ts
+ * const csv = toCsvText(buildTreasuryCsvRows(entries));
+ * ```
+ */
+export function buildTreasuryCsvRows(entries: readonly TreasuryCsvEntry[]): string[][] {
+  return [
+    [...TREASURY_CSV_HEADER],
+    ...entries.map((entry) => [
+      new Date(entry.createdAt).toISOString(),
+      entry.type,
+      entry.description ?? '',
+      entry.direction,
+      entry.scopeLabel,
+      entry.counterpartyLabel ?? '',
+      usdCell(entry.grossAmountCents),
+      usdCell(entry.signedAmountCents),
+      entry.status,
+    ]),
+  ];
+}
+
+/**
+ * Serializes a CSV matrix, quoting every cell and doubling embedded quotes.
+ *
+ * @param rows The matrix from {@link buildTreasuryCsvRows}.
+ * @returns Newline-joined CSV text.
+ */
+export function toCsvText(rows: readonly (readonly string[])[]): string {
+  return rows
+    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
 }
 
 /** Aggregate treasury totals over a set of classified legs. */

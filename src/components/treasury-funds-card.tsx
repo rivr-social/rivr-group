@@ -55,6 +55,16 @@ import {
   Plus,
   Users,
 } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { useToast } from "@/components/ui/use-toast"
 import {
   assignSubgroupToFundAction,
@@ -110,6 +120,18 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
   const [isSubmittingDialog, setIsSubmittingDialog] = useState(false)
 
   const { toast } = useToast()
+  // Audit T1-4: every one of these guards holds correctly server-side (an
+  // over-balance move, archiving a funded fund, a duplicate name) but the only
+  // feedback was a toast. A treasurer who misses it cannot tell "refused
+  // because the fund still holds $1.00" from "the button is broken". The
+  // refusal reason is now ALSO rendered inline, in the dialog that caused it,
+  // where it cannot be missed or scrolled past.
+  const [dialogError, setDialogError] = useState<string | null>(null)
+  /** Refusal reason for a row-level action (archive/restore), shown on the card. */
+  const [rowError, setRowError] = useState<string | null>(null)
+  /** Fund awaiting archive confirmation — Archive used to fire on click with no
+   *  prompt and no undo (audit T1-4). */
+  const [archiveTarget, setArchiveTarget] = useState<TreasuryFundRow | null>(null)
 
   const loadOverview = useCallback(async () => {
     setIsLoading(true)
@@ -130,6 +152,7 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
   const closeDialog = () => {
     setDialogMode(null)
     setDialogFund(null)
+    setDialogError(null)
     setRenameValue("")
     setAssignSubgroupId("")
     setMoveDirection("to_fund")
@@ -145,6 +168,7 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
   const handleCreateFund = async () => {
     const name = newFundName.trim()
     if (!name) {
+      setDialogError("Give the fund a name first.")
       toast({ title: "Fund name required", description: "Give the fund a name first.", variant: "destructive" })
       return
     }
@@ -160,7 +184,9 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
         setNewFundDescription("")
         setIsCreateOpen(false)
         await loadOverview()
+        onBalancesChanged?.()
       } else {
+        setDialogError(result.error ?? "Could not create this fund.")
         toast({ title: "Could not create fund", description: result.error, variant: "destructive" })
       }
     } finally {
@@ -172,9 +198,11 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
     if (!dialogFund) return
     const name = renameValue.trim()
     if (!name) {
+      setDialogError("The fund needs a name.")
       toast({ title: "Fund name required", description: "The fund needs a name.", variant: "destructive" })
       return
     }
+    setDialogError(null)
     setIsSubmittingDialog(true)
     try {
       const result = await updateFundAction(groupId, dialogFund.fundId, { name })
@@ -182,7 +210,9 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
         toast({ title: "Fund renamed", description: `The fund is now "${name}".` })
         closeDialog()
         await loadOverview()
+        onBalancesChanged?.()
       } else {
+        setDialogError(result.error ?? "Could not rename this fund.")
         toast({ title: "Could not rename fund", description: result.error, variant: "destructive" })
       }
     } finally {
@@ -191,6 +221,8 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
   }
 
   const handleToggleArchive = async (fund: TreasuryFundRow) => {
+    setRowError(null)
+    setArchiveTarget(null)
     setPendingFundId(fund.fundId)
     try {
       const result = await updateFundAction(groupId, fund.fundId, { archived: !fund.archived })
@@ -202,7 +234,11 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
             : `"${fund.name}" is archived. Its subgroups are unassigned.`,
         })
         await loadOverview()
+        onBalancesChanged?.()
       } else {
+        // Row-level action: no dialog to host an inline error, so the refusal
+        // is surfaced on the card itself (audit T1-4).
+        setRowError(result.error ?? "Could not archive this fund.")
         toast({
           title: fund.archived ? "Could not restore fund" : "Could not archive fund",
           description: result.error,
@@ -223,6 +259,7 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
         toast({ title: "Subgroup assigned", description: `The subgroup now belongs to "${dialogFund.name}".` })
         closeDialog()
         await loadOverview()
+        onBalancesChanged?.()
       } else {
         toast({ title: "Could not assign subgroup", description: result.error, variant: "destructive" })
       }
@@ -238,6 +275,7 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
       if (result.success) {
         toast({ title: "Subgroup unassigned", description: `Removed from "${fund.name}".` })
         await loadOverview()
+        onBalancesChanged?.()
       } else {
         toast({ title: "Could not unassign subgroup", description: result.error, variant: "destructive" })
       }
@@ -250,10 +288,12 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
     if (!dialogFund) return
     const amountDollars = Number.parseFloat(moveAmount)
     if (!Number.isFinite(amountDollars) || amountDollars <= 0) {
+      setDialogError("Enter a positive dollar amount.")
       toast({ title: "Invalid amount", description: "Enter a positive dollar amount.", variant: "destructive" })
       return
     }
     const amountCents = Math.round(amountDollars * 100)
+    setDialogError(null)
     setIsSubmittingDialog(true)
     try {
       const result = await transferFundBalanceAction(groupId, dialogFund.fundId, amountCents, moveDirection)
@@ -269,6 +309,7 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
         await loadOverview()
         onBalancesChanged?.()
       } else {
+        setDialogError(result.error ?? "Could not move this money.")
         toast({ title: "Could not move money", description: result.error, variant: "destructive" })
       }
     } finally {
@@ -411,7 +452,12 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
                   <DropdownMenuSeparator />
                 </>
               )}
-              <DropdownMenuItem onClick={() => handleToggleArchive(fund)}>
+              {/* Restoring is harmless and stays one click; ARCHIVING unassigns
+                  the fund's subgroups and has no undo, so it confirms first
+                  (audit T1-4: it used to fire the instant the item was clicked). */}
+              <DropdownMenuItem
+                onClick={() => (fund.archived ? void handleToggleArchive(fund) : setArchiveTarget(fund))}
+              >
                 {fund.archived ? (
                   <span className="flex items-center gap-2">
                     <ArchiveRestore className="h-4 w-4" /> Restore
@@ -442,12 +488,29 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
               Assign subgroups to a fund and move money with internal ledger transfers.
             </CardDescription>
           </div>
-          <Button size="sm" variant="outline" onClick={() => setIsCreateOpen((open) => !open)}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setDialogError(null)
+              setIsCreateOpen((open) => !open)
+            }}
+          >
             <Plus className="mr-1 h-3.5 w-3.5" /> New fund
           </Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* Refusal reason for a row-level action (archive/restore), which has no
+            dialog of its own to host an inline error (audit T1-4). */}
+        {rowError && (
+          <p
+            role="alert"
+            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {rowError}
+          </p>
+        )}
         {isCreateOpen && (
           <div className="space-y-2 rounded-lg border p-3">
             <div className="space-y-1">
@@ -469,6 +532,14 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
                 placeholder="What this fund pays for"
               />
             </div>
+            {dialogError && (
+              <p
+                role="alert"
+                className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                {dialogError}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={() => setIsCreateOpen(false)} disabled={isCreating}>
                 Cancel
@@ -519,6 +590,14 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
               maxLength={120}
             />
           </div>
+          {dialogError && (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {dialogError}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="ghost" onClick={closeDialog} disabled={isSubmittingDialog}>
               Cancel
@@ -558,6 +637,14 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
                 ))}
               </SelectContent>
             </Select>
+          )}
+          {dialogError && (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {dialogError}
+            </p>
           )}
           <DialogFooter>
             <Button variant="ghost" onClick={closeDialog} disabled={isSubmittingDialog}>
@@ -614,6 +701,14 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
               />
             </div>
           </div>
+          {dialogError && (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {dialogError}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="ghost" onClick={closeDialog} disabled={isSubmittingDialog}>
               Cancel
@@ -625,6 +720,31 @@ export function TreasuryFundsCard({ groupId, onBalancesChanged }: TreasuryFundsC
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Archive confirmation (audit T1-4). Archiving unassigns the fund's
+          subgroups and cannot be undone from this menu, so it must be a
+          deliberate act — it used to fire on the first click. The server still
+          refuses to archive a fund holding money; that refusal now surfaces on
+          the card instead of looking like a broken button. */}
+      <AlertDialog open={archiveTarget !== null} onOpenChange={(open) => !open && setArchiveTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive &ldquo;{archiveTarget?.name}&rdquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Archiving hides the fund and unassigns any subgroups from it. A fund still holding a
+              balance cannot be archived — return its money to the main treasury first.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => archiveTarget && void handleToggleArchive(archiveTarget)}
+            >
+              Archive fund
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }

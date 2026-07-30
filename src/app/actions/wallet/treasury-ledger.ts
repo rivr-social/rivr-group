@@ -20,13 +20,14 @@
  * with `getGroupWalletAction`, which lets members read the group balance).
  */
 
-import { and, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '@/db';
 import { agents, ledger, resources, wallets, walletTransactions } from '@/db/schema';
 import { getGroupSubtreeIds } from '@/lib/queries/stakes';
 import {
   classifyTreasuryLeg,
-  summarizeTreasuryLegs,
+  resolveVisibleTreasuryWalletIds,
+  EXPORT_MAX_ROWS,
   type ClassifiedTreasuryLeg,
   type TreasuryScopeKind,
   type TreasuryWalletScope,
@@ -36,6 +37,15 @@ import { isUuid } from './types';
 
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 100;
+
+/** Zeroed window aggregate, for the no-treasury-wallet short circuit. */
+const EMPTY_TOTALS = {
+  inflowCents: 0,
+  outflowCents: 0,
+  netCents: 0,
+  inflowCount: 0,
+  outflowCount: 0,
+} as const;
 
 /** One consolidated treasury transaction, attributed to the wallet that moved. */
 export interface TreasuryLedgerEntry {
@@ -68,8 +78,22 @@ export interface GroupTreasuryLedger {
   canManageTree: boolean;
   entries: TreasuryLedgerEntry[];
   total: number;
-  /** Aggregate over the whole matching window (not just this page). */
-  totals: { inflowCents: number; outflowCents: number; netCents: number };
+  /**
+   * Aggregate over the whole matching window (not just this page).
+   *
+   * `inflowCount`/`outflowCount` are window-wide too: the tab's "Based on N
+   * transactions" caption used to count the rendered PAGE, so a month with more
+   * activity than one page under-reported its own transaction count (audit
+   * T-03) — and for a member it counted only the rows they could see, next to a
+   * tree-wide dollar figure.
+   */
+  totals: {
+    inflowCents: number;
+    outflowCents: number;
+    netCents: number;
+    inflowCount: number;
+    outflowCount: number;
+  };
   /** Inflow/outflow broken down by transaction type over the whole window. */
   byType: TreasuryTypeTotal[];
 }
@@ -82,14 +106,22 @@ interface ScopeWalletRow {
 }
 
 /**
- * Resolves every wallet in the group's treasury tree with a display label.
- * For a member (no manage authority) this is JUST the group's own settlement
- * wallet; for a manager it is the group + all fund/project/subgroup wallets.
+ * Resolves every wallet in the group's treasury tree with a display label:
+ * the group's settlement wallet plus every fund, project, and subgroup wallet.
+ *
+ * This is the CLASSIFICATION set and is viewer-INDEPENDENT by design (audit
+ * T1-1). It used to be truncated to the group's own settlement wallet for
+ * non-managers, and because the same list doubled as the internal/external
+ * predicate, a treasury -> fund move had one side in-set for a member and both
+ * sides in-set for an admin. The member's P&L therefore booked internal
+ * transfers as BOTH revenue and expense (MAB, July 2026: the member saw
+ * -$41.15 where the admin saw +$1.21 — a sign-flipped statement on the only
+ * financial surface non-admins can see).
+ *
+ * Which wallets' ROWS a viewer may read is a separate decision — see
+ * `resolveVisibleTreasuryWalletIds`.
  */
-async function resolveTreasuryWalletScopes(
-  groupId: string,
-  canManageTree: boolean,
-): Promise<ScopeWalletRow[]> {
+async function resolveTreasuryWalletScopes(groupId: string): Promise<ScopeWalletRow[]> {
   // The group's own settlement wallet (owner-scoped, resource_id IS NULL).
   const groupAgent = await db
     .select({ name: agents.name })
@@ -107,10 +139,6 @@ async function resolveTreasuryWalletScopes(
     .limit(1);
   if (groupSettlement) {
     scopes.push({ walletId: groupSettlement.id, kind: 'group', label: `${groupName} treasury`, ownerId: groupId });
-  }
-
-  if (!canManageTree) {
-    return scopes;
   }
 
   // Full tree: the group + every descendant subgroup agent.
@@ -181,7 +209,14 @@ async function resolveTreasuryWalletScopes(
  */
 export async function getGroupTreasuryLedgerAction(
   groupId: string,
-  options?: { limit?: number; offset?: number; sinceIso?: string; untilIso?: string },
+  options?: {
+    limit?: number;
+    offset?: number;
+    sinceIso?: string;
+    untilIso?: string;
+    /** Raises the row ceiling to {@link EXPORT_MAX_ROWS} for a CSV export. */
+    forExport?: boolean;
+  },
 ): Promise<{ success: boolean; ledger?: GroupTreasuryLedger; error?: string }> {
   const userId = await getCurrentUserId();
   if (!userId) {
@@ -209,7 +244,7 @@ export async function getGroupTreasuryLedgerAction(
       }
     }
 
-    const scopes = await resolveTreasuryWalletScopes(groupId, canManageTree);
+    const scopes = await resolveTreasuryWalletScopes(groupId);
     if (scopes.length === 0) {
       return {
         success: true,
@@ -217,33 +252,50 @@ export async function getGroupTreasuryLedgerAction(
           canManageTree,
           entries: [],
           total: 0,
-          totals: { inflowCents: 0, outflowCents: 0, netCents: 0 },
+          totals: EMPTY_TOTALS,
           byType: [],
         },
       };
     }
 
+    // CLASSIFICATION set: the whole treasury tree, for EVERY viewer. This map
+    // is what `classifyTreasuryLeg` reads, so a group -> fund/project move is
+    // `internal` (net-zero) regardless of who is looking (audit T1-1).
     const scopeByWalletId = new Map<string, TreasuryWalletScope>(
       scopes.map((s) => [s.walletId, { walletId: s.walletId, kind: s.kind, label: s.label, ownerId: s.ownerId }]),
     );
-    const walletIds = scopes.map((s) => s.walletId);
+    const treasuryWalletIds = scopes.map((s) => s.walletId);
+    // VISIBILITY set: which wallets' individual rows this viewer may read. May
+    // be empty (a group with no settlement wallet yet, seen by a member) — that
+    // suppresses the ROW list only. Totals below still run over the whole tree,
+    // because one group has one P&L no matter who is asking (audit T1-1).
+    const walletIds = resolveVisibleTreasuryWalletIds(scopes, canManageTree);
+    const hasVisibleWallets = walletIds.length > 0;
 
-    const limit = Math.min(Math.max(1, options?.limit ?? DEFAULT_PAGE_LIMIT), MAX_PAGE_LIMIT);
+    // An export pulls the whole selected range in one request; the paged UI
+    // stays capped at MAX_PAGE_LIMIT (audit T1-2).
+    const rowCeiling = options?.forExport ? EXPORT_MAX_ROWS : MAX_PAGE_LIMIT;
+    const limit = Math.min(Math.max(1, options?.limit ?? DEFAULT_PAGE_LIMIT), rowCeiling);
     const offset = Math.max(0, options?.offset ?? 0);
     const since = options?.sinceIso ? new Date(options.sinceIso) : null;
     const sinceValid = since && !Number.isNaN(since.getTime()) ? since : null;
     const until = options?.untilIso ? new Date(options.untilIso) : null;
     const untilValid = until && !Number.isNaN(until.getTime()) ? until : null;
 
-    const touchesSet = or(
-      inArray(walletTransactions.fromWalletId, walletIds),
-      inArray(walletTransactions.toWalletId, walletIds),
+    // Date bounds apply identically to the row window and the totals window, so
+    // the rendered list and the P&L above it always describe the same period.
+    const dateFilters: SQL[] = [];
+    if (sinceValid) dateFilters.push(gte(walletTransactions.createdAt, sinceValid));
+    if (untilValid) dateFilters.push(lte(walletTransactions.createdAt, untilValid));
+
+    /** Rows this viewer may READ (visibility-scoped). */
+    const baseFilter = and(
+      or(
+        inArray(walletTransactions.fromWalletId, walletIds),
+        inArray(walletTransactions.toWalletId, walletIds),
+      ),
+      ...dateFilters,
     );
-    const dateFilters = [
-      sinceValid ? gte(walletTransactions.createdAt, sinceValid) : undefined,
-      untilValid ? lte(walletTransactions.createdAt, untilValid) : undefined,
-    ].filter(Boolean);
-    const baseFilter = dateFilters.length > 0 ? and(touchesSet, ...dateFilters) : touchesSet;
 
     // Owner-name joins for external counterparties (the non-treasury side).
     const fromWallets = db
@@ -257,64 +309,88 @@ export async function getGroupTreasuryLedgerAction(
     const fromOwner = db.select({ id: agents.id, name: agents.name }).from(agents).as('tl_from_owner');
     const toOwner = db.select({ id: agents.id, name: agents.name }).from(agents).as('tl_to_owner');
 
-    const [countRow] = await db
-      .select({ value: sql<number>`count(*)::int` })
-      .from(walletTransactions)
-      .where(baseFilter);
+    const [countRow] = hasVisibleWallets
+      ? await db
+          .select({ value: sql<number>`count(*)::int` })
+          .from(walletTransactions)
+          .where(baseFilter)
+      : [{ value: 0 }];
     const total = countRow?.value ?? 0;
 
     // Treasury inflow/outflow over the WHOLE window (internal moves excluded):
     // aggregated in SQL so the tab's revenue/expense cards are correct even
     // though only one page of rows is rendered.
-    const inSetFrom = inArray(walletTransactions.fromWalletId, walletIds);
-    const inSetTo = inArray(walletTransactions.toWalletId, walletIds);
+    //
+    // The in-set predicate is the FULL TREE for every viewer — a P&L is an
+    // aggregate and carries no payee detail, and a group must not report two
+    // different net incomes depending on who asks (audit T1-1). The row list
+    // above stays scoped to `walletIds`.
+    const inSetFrom = inArray(walletTransactions.fromWalletId, treasuryWalletIds);
+    const inSetTo = inArray(walletTransactions.toWalletId, treasuryWalletIds);
+    const totalsWindowFilter = and(
+      or(
+        inArray(walletTransactions.fromWalletId, treasuryWalletIds),
+        inArray(walletTransactions.toWalletId, treasuryWalletIds),
+      ),
+      ...dateFilters,
+    );
+    // One expression per direction, reused for the sums and the counts so a
+    // figure and its "based on N transactions" caption can never disagree.
+    const isInflow = sql`(${inSetTo}) AND (${walletTransactions.fromWalletId} IS NULL OR NOT (${inSetFrom}))`;
+    const isOutflow = sql`(${inSetFrom}) AND (${walletTransactions.toWalletId} IS NULL OR NOT (${inSetTo}))`;
     const [totalsRow] = await db
       .select({
-        inflow: sql<number>`COALESCE(SUM(CASE WHEN (${inSetTo}) AND (${walletTransactions.fromWalletId} IS NULL OR NOT (${inSetFrom})) THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
-        outflow: sql<number>`COALESCE(SUM(CASE WHEN (${inSetFrom}) AND (${walletTransactions.toWalletId} IS NULL OR NOT (${inSetTo})) THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
+        inflow: sql<number>`COALESCE(SUM(CASE WHEN ${isInflow} THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
+        outflow: sql<number>`COALESCE(SUM(CASE WHEN ${isOutflow} THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
+        inflowCount: sql<number>`COUNT(*) FILTER (WHERE ${isInflow})::int`,
+        outflowCount: sql<number>`COUNT(*) FILTER (WHERE ${isOutflow})::int`,
       })
       .from(walletTransactions)
-      .where(and(baseFilter, eq(walletTransactions.status, 'completed')));
+      .where(and(totalsWindowFilter, eq(walletTransactions.status, 'completed')));
     const inflowCents = Number(totalsRow?.inflow ?? 0);
     const outflowCents = Number(totalsRow?.outflow ?? 0);
+    const inflowCount = Number(totalsRow?.inflowCount ?? 0);
+    const outflowCount = Number(totalsRow?.outflowCount ?? 0);
 
     // Inflow/outflow split per transaction type — the P&L report's line items.
     const byTypeRows = await db
       .select({
         type: walletTransactions.type,
-        inflow: sql<number>`COALESCE(SUM(CASE WHEN (${inSetTo}) AND (${walletTransactions.fromWalletId} IS NULL OR NOT (${inSetFrom})) THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
-        outflow: sql<number>`COALESCE(SUM(CASE WHEN (${inSetFrom}) AND (${walletTransactions.toWalletId} IS NULL OR NOT (${inSetTo})) THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
+        inflow: sql<number>`COALESCE(SUM(CASE WHEN ${isInflow} THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
+        outflow: sql<number>`COALESCE(SUM(CASE WHEN ${isOutflow} THEN ${walletTransactions.amountCents} ELSE 0 END), 0)::int`,
       })
       .from(walletTransactions)
-      .where(and(baseFilter, eq(walletTransactions.status, 'completed')))
+      .where(and(totalsWindowFilter, eq(walletTransactions.status, 'completed')))
       .groupBy(walletTransactions.type);
     const byType: TreasuryTypeTotal[] = byTypeRows
       .map((r) => ({ type: r.type, inflowCents: Number(r.inflow ?? 0), outflowCents: Number(r.outflow ?? 0) }))
       .filter((r) => r.inflowCents > 0 || r.outflowCents > 0)
       .sort((a, b) => b.inflowCents + b.outflowCents - (a.inflowCents + a.outflowCents));
 
-    const rows = await db
-      .select({
-        id: walletTransactions.id,
-        type: walletTransactions.type,
-        amountCents: walletTransactions.amountCents,
-        description: walletTransactions.description,
-        status: walletTransactions.status,
-        createdAt: walletTransactions.createdAt,
-        fromWalletId: walletTransactions.fromWalletId,
-        toWalletId: walletTransactions.toWalletId,
-        fromOwnerName: fromOwner.name,
-        toOwnerName: toOwner.name,
-      })
-      .from(walletTransactions)
-      .leftJoin(fromWallets, eq(walletTransactions.fromWalletId, fromWallets.id))
-      .leftJoin(fromOwner, eq(fromWallets.ownerId, fromOwner.id))
-      .leftJoin(toWallets, eq(walletTransactions.toWalletId, toWallets.id))
-      .leftJoin(toOwner, eq(toWallets.ownerId, toOwner.id))
-      .where(baseFilter)
-      .orderBy(sql`${walletTransactions.createdAt} DESC`)
-      .limit(limit)
-      .offset(offset);
+    const rows = hasVisibleWallets
+      ? await db
+          .select({
+            id: walletTransactions.id,
+            type: walletTransactions.type,
+            amountCents: walletTransactions.amountCents,
+            description: walletTransactions.description,
+            status: walletTransactions.status,
+            createdAt: walletTransactions.createdAt,
+            fromWalletId: walletTransactions.fromWalletId,
+            toWalletId: walletTransactions.toWalletId,
+            fromOwnerName: fromOwner.name,
+            toOwnerName: toOwner.name,
+          })
+          .from(walletTransactions)
+          .leftJoin(fromWallets, eq(walletTransactions.fromWalletId, fromWallets.id))
+          .leftJoin(fromOwner, eq(fromWallets.ownerId, fromOwner.id))
+          .leftJoin(toWallets, eq(walletTransactions.toWalletId, toWallets.id))
+          .leftJoin(toOwner, eq(toWallets.ownerId, toOwner.id))
+          .where(baseFilter)
+          .orderBy(sql`${walletTransactions.createdAt} DESC`)
+          .limit(limit)
+          .offset(offset)
+      : [];
 
     const entries: TreasuryLedgerEntry[] = rows.map((r) => {
       const classified: ClassifiedTreasuryLeg = classifyTreasuryLeg(
@@ -357,7 +433,13 @@ export async function getGroupTreasuryLedgerAction(
         canManageTree,
         entries,
         total,
-        totals: { inflowCents, outflowCents, netCents: inflowCents - outflowCents },
+        totals: {
+          inflowCents,
+          outflowCents,
+          netCents: inflowCents - outflowCents,
+          inflowCount,
+          outflowCount,
+        },
         byType,
       },
     };

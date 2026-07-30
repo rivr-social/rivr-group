@@ -156,9 +156,25 @@ describe("getGroupFinancialReportAction", () => {
 
     // The ledger read is date-ranged (both bounds) and paginated to a single row.
     expect(ledgerMock).toHaveBeenCalledWith(GROUP_ID, { limit: 1, sinceIso, untilIso })
-    // The budget's card-spend component is date-bounded by sinceIso.
-    expect(budgetMock).toHaveBeenCalledWith(GROUP_ID, { sinceIso })
+    // Audit T1-5: the budget half gets the SAME window. `untilIso` used to be
+    // dropped here, so a "Last month" report paired a $0.00 P&L with the
+    // current month's spend.
+    expect(budgetMock).toHaveBeenCalledWith(GROUP_ID, { sinceIso, untilIso })
     expect(result.report?.periodStartIso).toBe(sinceIso)
     expect(result.report?.periodEndIso).toBe(untilIso)
+  })
+
+  it("flags that the budget target/committed figures are not period-bounded (T1-5)", async () => {
+    ledgerMock.mockResolvedValue(managerLedger())
+    budgetMock.mockResolvedValue(budgetRollup())
+
+    const result = await getGroupFinancialReportAction(GROUP_ID, {
+      sinceIso: "2026-06-01T00:00:00.000Z",
+      untilIso: "2026-07-01T00:00:00.000Z",
+    })
+
+    // Spend IS bounded; the authored target and committed position are standing
+    // amounts, so consumers must label them rather than implying a period.
+    expect(result.report?.budgetTargetIsLifetime).toBe(true)
   })
 })

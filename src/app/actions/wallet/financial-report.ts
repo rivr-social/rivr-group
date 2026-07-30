@@ -29,8 +29,16 @@ export interface GroupFinancialReport {
     netCents: number;
     byType: TreasuryTypeTotal[];
   };
-  /** Budget rollup for the same window (card spend is date-bounded; job/expense sums are lifetime). */
+  /** Budget rollup for the SAME window as the P&L above. */
   budget: BudgetRollupNode | null;
+  /**
+   * True when the budget half carries figures that cannot be period-bounded —
+   * the authored TARGET and the COMMITTED position are standing amounts, not
+   * period flows (audit T1-5: a "Last month" report showed a $0.00 P&L beside
+   * July's $33.50 spent, with nothing saying the two halves covered different
+   * spans). Spend figures ARE bounded; consumers must label the rest.
+   */
+  budgetTargetIsLifetime: boolean;
 }
 
 /**
@@ -55,7 +63,11 @@ export async function getGroupFinancialReportAction(
       sinceIso: options?.sinceIso,
       untilIso: options?.untilIso,
     }),
-    getGroupBudgetRollupAction(groupId, { sinceIso: options?.sinceIso }),
+    // Same window as the P&L — `untilIso` used to be dropped here entirely.
+    getGroupBudgetRollupAction(groupId, {
+      sinceIso: options?.sinceIso,
+      untilIso: options?.untilIso,
+    }),
   ]);
 
   if (!ledgerResult.success || !ledgerResult.ledger) {
@@ -80,6 +92,7 @@ export async function getGroupFinancialReportAction(
       },
       // Budget rollup only when the viewer can see it (manager) — absent otherwise.
       budget: budgetResult.success ? budgetResult.rollup ?? null : null,
+      budgetTargetIsLifetime: true,
     },
   };
 }
