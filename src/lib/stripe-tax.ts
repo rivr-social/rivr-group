@@ -160,9 +160,87 @@ export async function assertUntaxedChargePathAllowed(
   }
 }
 
+/**
+ * The EU member states one `oss_union` registration covers — a single OSS
+ * registration (in any member state) collects VAT for all of them.
+ */
+export const EU_OSS_COUNTRIES = [
+  'AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT',
+  'LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES','SE',
+] as const;
+
+/** The set of places RIVR's ACTIVE registrations cover. */
+export interface TaxRegistrationRegions {
+  /** ISO-2 countries with an active registration (EU expanded from OSS). */
+  countries: Set<string>;
+  /** US states with an active registration (empty when no US registration). */
+  usStates: Set<string>;
+}
+
+let regionCache: { activeAt: number; regions: TaxRegistrationRegions } | null = null;
+
+/**
+ * Lists the regions RIVR's active registrations cover, cached like
+ * {@link hasActiveTaxRegistrations}. Callers use this to SKIP paid tax
+ * calculations for buyers outside every registered jurisdiction — Stripe's
+ * standalone Tax API bills per calculation/transaction, and a calculation for
+ * an unregistered region can only ever return zero.
+ */
+export async function getActiveTaxRegistrationRegions(
+  stripe: Stripe,
+): Promise<TaxRegistrationRegions> {
+  const now = Date.now();
+  if (regionCache && now - regionCache.activeAt < REGISTRATION_CACHE_TTL_MS) {
+    return regionCache.regions;
+  }
+  const regions: TaxRegistrationRegions = { countries: new Set(), usStates: new Set() };
+  try {
+    const registrations = await stripe.tax.registrations.list({ status: 'active', limit: 100 });
+    for (const reg of registrations.data) {
+      const country = reg.country?.toUpperCase();
+      if (!country) continue;
+      const options = (reg.country_options ?? {}) as Record<string, { type?: string; state?: string }>;
+      const opt = options[country.toLowerCase()] ?? {};
+      if (opt.type === 'oss_union') {
+        for (const eu of EU_OSS_COUNTRIES) regions.countries.add(eu);
+        continue;
+      }
+      regions.countries.add(country);
+      if (country === 'US' && typeof opt.state === 'string' && opt.state) {
+        regions.usStates.add(opt.state.toUpperCase());
+      }
+    }
+    regionCache = { activeAt: now, regions };
+  } catch (error) {
+    console.error('[stripe-tax] Could not list tax registration regions:', error);
+    // No cache and no answer: return empty (skip paid calculations) but do
+    // not poison the cache — the next call retries.
+  }
+  return regions;
+}
+
+/**
+ * Whether a buyer address falls inside ANY registered region — the pure
+ * prefilter that decides if a paid tax calculation is worth making. A US
+ * address matches only its registered STATE (US collection is per-state).
+ */
+export function addressInRegisteredRegion(
+  regions: TaxRegistrationRegions,
+  address: { country: string; state?: string },
+): boolean {
+  const country = address.country.toUpperCase();
+  if (!regions.countries.has(country)) return false;
+  if (country === 'US') {
+    const state = address.state?.toUpperCase();
+    return !!state && regions.usStates.has(state);
+  }
+  return true;
+}
+
 /** Test seam — clears the memoized registration lookup. */
 export function resetTaxRegistrationCacheForTests(): void {
   registrationCache = null;
+  regionCache = null;
 }
 
 /**
