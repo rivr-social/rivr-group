@@ -18,7 +18,7 @@
  * Key exports: `LegacyFeeBreakdown`, `calculateLegacyCheckoutFeesCents`,
  * `calculateOfferingDestinationCharge`.
  */
-import { calculateCheckoutFees, estimateStripeProcessingFeeCents } from "@/lib/checkout-fees";
+import { calculateCheckoutFees, estimateStripeProcessingFeeCents , type SellerPayoutCorridor } from "@/lib/checkout-fees";
 
 /**
  * Fee output shape in cents for each fee component and final total.
@@ -55,7 +55,19 @@ export type LegacyFeeBreakdown = {
  * // => totalCents identical to the historical pipeline for the same subtotal
  * ```
  */
-export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyFeeBreakdown {
+export function calculateLegacyCheckoutFeesCents(
+  subtotalCents: number,
+  options?: {
+    /**
+     * The seller's payout corridor. Corridor costs used to gross into the
+     * MARKETPLACE lane only, so offerings, tickets and dues absorbed Stripe's
+     * cross-border payout costs entirely (audit PAY-22). Cameron, 2026-07-31:
+     * "RIVR should never absorb any costs" — every lane now passes it through,
+     * buyer-funded, so the seller still nets face value.
+     */
+    payoutCorridor?: SellerPayoutCorridor;
+  },
+): LegacyFeeBreakdown {
   if (!Number.isInteger(subtotalCents) || subtotalCents < 0) {
     throw new Error("subtotalCents must be a non-negative integer");
   }
@@ -78,7 +90,9 @@ export function calculateLegacyCheckoutFeesCents(subtotalCents: number): LegacyF
   // Boulder rate charged to everyone and kept as revenue — dropped; real sales
   // tax, if ever needed, is Stripe Tax remitted properly). Same breakdown shape
   // for callers/UI: `salesTaxCents` is now always 0.
-  const fees = calculateCheckoutFees(subtotalCents);
+  const fees = calculateCheckoutFees(subtotalCents, {
+    ...(options?.payoutCorridor ? { payoutCorridor: options.payoutCorridor } : {}),
+  });
   const totalCents = fees.buyerTotalCents;
   const paymentFeeCents = estimateStripeProcessingFeeCents(totalCents);
   const salesTaxCents = 0;
@@ -128,8 +142,9 @@ export type OfferingDestinationCharge = {
  */
 export function calculateOfferingDestinationCharge(
   subtotalCents: number,
+  options?: { payoutCorridor?: SellerPayoutCorridor },
 ): OfferingDestinationCharge {
-  const breakdown = calculateLegacyCheckoutFeesCents(subtotalCents);
+  const breakdown = calculateLegacyCheckoutFeesCents(subtotalCents, options);
   const applicationFeeCents = breakdown.totalCents - breakdown.subtotalCents;
   return {
     breakdown,
