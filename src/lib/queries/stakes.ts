@@ -250,6 +250,10 @@ export async function getMemberStakesForGroup(groupId: string): Promise<MemberSt
         AND task.owner_id IN (SELECT id FROM grp_tree)
       GROUP BY l.subject_id
     ),
+    -- Thanks a member RECEIVED for work in this group. Was unscoped: every
+    -- endorsement a member had ever received, anywhere on the platform,
+    -- counted toward their share of THIS group's stake (the same class of bug
+    -- member_contributions above already avoids via grp_tree/subtree).
     thanks_received AS (
       SELECT
         l.object_id as member_id,
@@ -257,6 +261,16 @@ export async function getMemberStakesForGroup(groupId: string): Promise<MemberSt
       FROM ledger l
       WHERE l.object_id IN (SELECT member_id FROM group_members)
         AND l.verb = 'endorse'
+        AND l.is_active = true
+        AND (
+          l.metadata->>'groupId' IN (SELECT id::text FROM grp_tree)
+          OR (
+            -- Guarded cast: contextId is free-form metadata and a non-uuid
+            -- value would abort the whole query rather than skip a row.
+            l.metadata->>'contextId' ~ '^[0-9a-fA-F-]{36}$'
+            AND (l.metadata->>'contextId')::uuid IN (SELECT id FROM subtree_resources)
+          )
+        )
       GROUP BY l.object_id
     )
     SELECT
