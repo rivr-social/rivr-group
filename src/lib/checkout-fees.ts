@@ -12,6 +12,16 @@ import { MARKETPLACE_FEE_BPS, BPS_DIVISOR } from "@/lib/wallet-constants";
 const STRIPE_CARD_PERCENT_BPS = 290;
 const STRIPE_CARD_FIXED_CENTS = 30;
 /**
+ * Stripe's US CARD-PRESENT pricing (2.7% + 5¢) — Terminal / Tap to Pay
+ * charges, where the physical card (or wallet) is read on the seller's
+ * device. Distinct from the 2.9% + 30¢ online rate above; the Tap to Pay
+ * lane grosses up with THESE constants so an in-person buyer covers the
+ * in-person cost, not the online one (tap-to-pay scope doc §"in-person
+ * Stripe rate differs from online").
+ */
+export const STRIPE_CARD_PRESENT_PERCENT_BPS = 270;
+export const STRIPE_CARD_PRESENT_FIXED_CENTS = 5;
+/**
  * International-card buffer (fee-audit #2b/#3). Stripe charges MORE on
  * cross-border cards (~+1.5% cross-border + ~+1% currency conversion) than the
  * 2.9%+30¢ domestic rate, and the card's origin isn't known at checkout. Applied
@@ -159,6 +169,28 @@ export function describeDepositCharge(creditCents: number): DepositChargeBreakdo
   };
 }
 
+/**
+ * The card-processing rate a checkout lane grosses up with. Online lanes use
+ * Stripe's 2.9% + 30¢; the Terminal/Tap to Pay lane uses the 2.7% + 5¢
+ * card-present rate. Kept internal — callers pick a lane via
+ * {@link calculateCheckoutFees} / {@link calculateCardPresentCheckoutFees},
+ * never by passing raw rates.
+ */
+interface CardPricing {
+  percentBps: number;
+  fixedCents: number;
+}
+
+const ONLINE_CARD_PRICING: CardPricing = {
+  percentBps: STRIPE_CARD_PERCENT_BPS,
+  fixedCents: STRIPE_CARD_FIXED_CENTS,
+};
+
+const CARD_PRESENT_PRICING: CardPricing = {
+  percentBps: STRIPE_CARD_PRESENT_PERCENT_BPS,
+  fixedCents: STRIPE_CARD_PRESENT_FIXED_CENTS,
+};
+
 export function calculateCheckoutFees(
   sellerPriceCents: number,
   options?: {
@@ -191,6 +223,28 @@ export function calculateCheckoutFees(
      */
     payoutCorridor?: SellerPayoutCorridor;
   },
+): CheckoutFeeResult {
+  return calculateCheckoutFeesAtCardPricing(sellerPriceCents, ONLINE_CARD_PRICING, options);
+}
+
+/**
+ * Card-present (Terminal / Tap to Pay) variant of {@link calculateCheckoutFees}:
+ * identical margin (3.3% + $1.49), org-commission, referral, and corridor
+ * layers, but grossed up at Stripe's IN-PERSON card rate (2.7% + 5¢) instead
+ * of the online 2.9% + 30¢. The philosophy is unchanged — the buyer covers
+ * every cost, the seller always nets face value.
+ */
+export function calculateCardPresentCheckoutFees(
+  sellerPriceCents: number,
+  options?: Parameters<typeof calculateCheckoutFees>[1],
+): CheckoutFeeResult {
+  return calculateCheckoutFeesAtCardPricing(sellerPriceCents, CARD_PRESENT_PRICING, options);
+}
+
+function calculateCheckoutFeesAtCardPricing(
+  sellerPriceCents: number,
+  cardPricing: CardPricing,
+  options?: Parameters<typeof calculateCheckoutFees>[1],
 ): CheckoutFeeResult {
   if (!Number.isInteger(sellerPriceCents) || sellerPriceCents < 0) {
     throw new Error("sellerPriceCents must be a non-negative integer");
@@ -276,14 +330,14 @@ export function calculateCheckoutFees(
     crossBorderFeeCents;
 
   const grossBeforeStripeFixedCents =
-    sellerPriceCents + targetPlatformNetCents + STRIPE_CARD_FIXED_CENTS;
+    sellerPriceCents + targetPlatformNetCents + cardPricing.fixedCents;
   const buyerTotalCents = Math.ceil(
-    grossBeforeStripeFixedCents / (1 - STRIPE_CARD_PERCENT_BPS / BPS_DIVISOR),
+    grossBeforeStripeFixedCents / (1 - cardPricing.percentBps / BPS_DIVISOR),
   );
 
   const stripeProcessingFeeEstimateCents =
-    Math.round((buyerTotalCents * STRIPE_CARD_PERCENT_BPS) / BPS_DIVISOR) +
-    STRIPE_CARD_FIXED_CENTS;
+    Math.round((buyerTotalCents * cardPricing.percentBps) / BPS_DIVISOR) +
+    cardPricing.fixedCents;
   const applicationFeeCents = buyerTotalCents - sellerPriceCents;
 
   return {
