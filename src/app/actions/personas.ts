@@ -20,6 +20,8 @@ import { db } from '@/db';
 import { agents } from '@/db/schema';
 import { eq, and, isNull } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
+import { emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
+import { buildRevocationPayload } from '@/lib/federation/revocation-contract';
 import {
   getActivePersonaId,
   setActivePersonaCookie,
@@ -292,6 +294,19 @@ export async function deletePersona(
     .update(agents)
     .set({ deletedAt: new Date(), updatedAt: new Date() })
     .where(eq(agents.id, personaId));
+
+  // Retract the persona from peers holding its projection (revocation-contract
+  // 2026-08-05 — persona deletes previously emitted nothing).
+  emitDomainEvent({
+    eventType: EVENT_TYPES.AGENT_DELETED,
+    entityType: 'agent',
+    entityId: personaId,
+    actorId: userId,
+    payload: buildRevocationPayload({ id: personaId, entityType: 'agent' }) as unknown as Record<
+      string,
+      unknown
+    >,
+  }).catch(() => {});
 
   // Clear active persona if it was the deleted one
   const activeId = await getActivePersonaId();

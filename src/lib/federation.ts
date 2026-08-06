@@ -1,6 +1,10 @@
-import { and, desc, eq, gt, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import crypto from "crypto";
+import {
+  AGENT_REVOCATION_EVENT_TYPES,
+  RESOURCE_REVOCATION_EVENT_TYPES,
+} from "@/lib/federation/revocation-contract";
 import {
   agents,
   federationEntityMap,
@@ -99,10 +103,11 @@ const RESOURCE_UPSERT_EVENT_TYPES = new Set<string>([
  * branch is a no-op so the row stays absent rather than getting
  * tombstoned out of order.
  */
-const RESOURCE_DELETE_EVENT_TYPES = new Set<string>([
-  "resource.deleted",
-  "event.deleted",
-]);
+// Shared revocation vocabulary (revocation-contract.ts) — includes
+// post.deleted/delete (previously missing here) and event.cancelled
+// (emitted by every repo, consumed by nobody until 2026-08-05).
+const RESOURCE_DELETE_EVENT_TYPES = new Set<string>(RESOURCE_REVOCATION_EVENT_TYPES);
+const AGENT_DELETE_EVENT_TYPES = new Set<string>(AGENT_REVOCATION_EVENT_TYPES);
 
 /**
  * Env var holding this instance's primary agent id (in the local
@@ -1815,6 +1820,79 @@ export async function importFederationEvents(params: {
           );
         }
       }
+    }
+
+    // Private/hidden retraction (ported from global/person 2026-08-05 — this
+    // repo lacked the branch): an upsert whose payload visibility is
+    // private/hidden retracts the reference pointer, since the origin no
+    // longer publishes it to us.
+    if (event.entityType === "resource" && event.eventType === "upsert") {
+      const payload = event.payload;
+      const visibility = typeof payload.visibility === "string" ? payload.visibility : null;
+      const externalId = typeof payload.id === "string" ? payload.id : eventEntityId;
+      if (externalId && (visibility === "private" || visibility === "hidden")) {
+        const mapping = await db.query.federationEntityMap.findFirst({
+          where: and(
+            eq(federationEntityMap.originNodeId, peerNode.id),
+            eq(federationEntityMap.externalEntityId, externalId),
+            eq(federationEntityMap.entityType, "resource"),
+          ),
+        });
+        if (mapping) {
+          await db
+            .update(resources)
+            .set({ deletedAt: new Date() })
+            .where(eq(resources.id, mapping.localEntityId));
+        }
+        await tombstoneManifestReference({
+          originNodeId: peerNode.id,
+          externalEntityId: externalId,
+          entityType: "resource",
+          manifestVersion: event.eventVersion ?? null,
+          sourceFederationEventId: null,
+        }).catch(() => undefined);
+        continue;
+      }
+    }
+
+    // AGENT retraction (revocation-contract): a home deleting an agent
+    // (persona/group/account) soft-deletes our projection and tombstones any
+    // agent-class reference. Only federated projections are ever touched.
+    if (event.entityType === "agent" && AGENT_DELETE_EVENT_TYPES.has(event.eventType)) {
+      const externalId = eventEntityId;
+      if (externalId) {
+        const mapping = await db.query.federationEntityMap.findFirst({
+          where: and(
+            eq(federationEntityMap.originNodeId, peerNode.id),
+            eq(federationEntityMap.externalEntityId, externalId),
+            eq(federationEntityMap.entityType, "agent"),
+          ),
+        });
+        const deleteIds = Array.from(
+          new Set(
+            [mapping?.localEntityId, externalId].filter((id): id is string => Boolean(id)),
+          ),
+        );
+        if (deleteIds.length > 0) {
+          await db
+            .update(agents)
+            .set({ deletedAt: new Date(), updatedAt: new Date() })
+            .where(
+              and(
+                inArray(agents.id, deleteIds),
+                sql`${agents.metadata}->>'federated' = 'true' OR ${agents.metadata}->>'federatedPlaceholder' = 'true'`,
+              ),
+            );
+        }
+        await tombstoneManifestReference({
+          originNodeId: peerNode.id,
+          externalEntityId: externalId,
+          entityType: "agent",
+          manifestVersion: event.eventVersion ?? null,
+          sourceFederationEventId: null,
+        }).catch(() => undefined);
+      }
+      continue;
     }
   }
 

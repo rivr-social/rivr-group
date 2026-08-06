@@ -25,6 +25,7 @@ import {
   createResourceWithLedger,
 } from "./helpers";
 import { updateFacade, emitDomainEvent, EVENT_TYPES } from "@/lib/federation/index";
+import { buildRevocationPayload } from "@/lib/federation/revocation-contract";
 import { routeWrite } from "@/lib/federation/write-router";
 import { resolveHomeInstance } from "@/lib/federation/resolution";
 import { syncResourceToGoogle } from "@/lib/google/calendar-sync";
@@ -483,7 +484,18 @@ export async function deleteResource(resourceId: string): Promise<ActionResult> 
       entityType: "resource",
       entityId: resourceId,
       actorId: userId,
-      payload: { resourceType: (verifiedDeleteResource.metadata as Record<string, unknown>)?.resourceKind ?? null },
+      // Standard revocation payload (revocation-contract.ts). `id` was
+      // MISSING here for months — receivers only survived via the envelope
+      // entityId fallback (the exact bug person's lifecycle comment names).
+      payload: buildRevocationPayload({
+        id: resourceId,
+        entityType: "resource",
+        resourceType:
+          typeof (verifiedDeleteResource.metadata as Record<string, unknown>)?.resourceKind ===
+          "string"
+            ? ((verifiedDeleteResource.metadata as Record<string, unknown>).resourceKind as string)
+            : null,
+      }) as unknown as Record<string, unknown>,
     }).catch(() => {});
   }
 

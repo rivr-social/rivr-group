@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { manifestReferences } from "@/db/schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 export type ManifestReferenceStatus = "active" | "tombstoned" | "revoked" | "expired";
 
@@ -254,6 +254,9 @@ export async function resolveActiveResourcePointer(
       eq(manifestReferences.entityType, "resource"),
       eq(manifestReferences.externalEntityId, externalEntityId),
       eq(manifestReferences.status, "active"),
+      // revoked_at symmetry (2026-08-05): the manual-purge lane stamps only
+      // this column; a pointer must not resolve a revoked reference.
+      isNull(manifestReferences.revokedAt),
     ),
     columns: { canonicalUrl: true, originNodeId: true },
   });
@@ -393,19 +396,12 @@ export async function tombstoneManifestReference(params: {
     ),
     columns: { id: true, manifestVersion: true },
   });
-  const incomingVersion = params.manifestVersion ?? null;
-  const currentVersion = existing?.manifestVersion ?? null;
-  if (
-    currentVersion != null &&
-    (incomingVersion == null || incomingVersion <= currentVersion)
-  ) {
-    return {
-      status: "stale",
-      reason: incomingVersion == null ? "missing_manifest_version" : "older_or_equal_manifest_version",
-      currentVersion,
-      incomingVersion,
-    };
-  }
+  // NO version guard here (2026-08-05, revocation-contract): a retraction is
+  // TERMINAL and MONOTONIC — there is no such thing as a stale delete. The
+  // old older-or-equal guard silently swallowed legitimate tombstones when
+  // the origin's upsert and delete lanes versioned under different node rows.
+  // upsertManifestReference keeps its guard.
+  void existing;
 
   const now = new Date();
   await db
@@ -416,6 +412,9 @@ export async function tombstoneManifestReference(params: {
       entityType: params.entityType,
       manifestVersion: params.manifestVersion ?? null,
       status: "tombstoned",
+      // revoked_at stamped alongside status — the two "gone" columns were
+      // only connected by convention before.
+      revokedAt: now,
       facetSummary: {},
       encryptedFacetSummary: {},
       sourceFederationEventId: params.sourceFederationEventId ?? null,
@@ -431,12 +430,12 @@ export async function tombstoneManifestReference(params: {
       set: {
         manifestVersion: params.manifestVersion ?? null,
         status: "tombstoned",
+        revokedAt: now,
         encryptedFacetSummary: {},
         sourceFederationEventId: params.sourceFederationEventId ?? null,
         lastSeenAt: now,
         updatedAt: now,
       },
-      setWhere: sql`${manifestReferences.manifestVersion} IS NULL OR excluded.manifest_version > ${manifestReferences.manifestVersion}`,
     });
   return { status: "upserted" };
 }

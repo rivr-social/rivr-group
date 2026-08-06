@@ -277,6 +277,8 @@ export async function POST(request: NextRequest) {
     const results: PeerDeliveryResult[] = [];
     const errors: string[] = [];
     let totalDelivered = 0;
+    /** Events delivered to ≥1 peer this run — marked exported AFTER the loop. */
+    const deliveredEventIds = new Set<string>();
 
     for (const peer of trustedPeers) {
       if (!peer.peerBaseUrl) {
@@ -360,7 +362,11 @@ export async function POST(request: NextRequest) {
       });
 
       if (outcome.ok) {
-        await markEventsExported(events.map((e) => e.id));
+        // Marking exported after the FIRST success starved later peers of the
+        // batch (their listExportableEvents requires status='queued') — a
+        // delete/revoke only ever pushed to one peer. Collect; mark after the
+        // loop (2026-08-05).
+        for (const e of events) deliveredEventIds.add(e.id);
         totalDelivered += events.length;
         results.push({
           peerSlug: peer.peerSlug,
@@ -377,6 +383,12 @@ export async function POST(request: NextRequest) {
           error: outcome.reason,
         });
       }
+    }
+
+    // Every peer attempted; events that reached ≥1 peer flip to exported
+    // (missed peers recover via their status-agnostic cursor pull).
+    if (deliveredEventIds.size > 0) {
+      await markEventsExported(Array.from(deliveredEventIds));
     }
 
     const response: DeliveryResponse = {

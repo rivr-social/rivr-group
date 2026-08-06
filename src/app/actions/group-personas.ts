@@ -31,6 +31,8 @@ import { MAX_PERSONAS_PER_ACCOUNT } from '@/lib/persona';
 import { serializeAgent } from '@/lib/graph-serializers';
 import type { SerializedAgent } from '@/lib/graph-serializers';
 import { getAuthenticatedActorId } from '@/lib/server-auth';
+import { emitDomainEvent, EVENT_TYPES } from '@/lib/federation';
+import { buildRevocationPayload } from '@/lib/federation/revocation-contract';
 import { isGroupAdmin } from '@/app/actions/group-admin';
 
 const UUID_RE =
@@ -300,6 +302,19 @@ export async function deleteGroupPersona(input: {
     .update(agents)
     .set({ deletedAt: new Date(), updatedAt: new Date() })
     .where(eq(agents.id, input.personaId));
+
+  // Retract the group persona from peers holding its projection
+  // (revocation-contract 2026-08-05).
+  emitDomainEvent({
+    eventType: EVENT_TYPES.AGENT_DELETED,
+    entityType: 'agent',
+    entityId: input.personaId,
+    actorId: auth.actorId,
+    payload: buildRevocationPayload({
+      id: input.personaId,
+      entityType: 'agent',
+    }) as unknown as Record<string, unknown>,
+  }).catch(() => {});
 
   return { success: true };
 }
