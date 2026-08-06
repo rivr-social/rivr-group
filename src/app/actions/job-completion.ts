@@ -45,6 +45,10 @@ import {
   settleConnectPayout,
   type ConnectPayoutStatus,
 } from "@/lib/connect-payout";
+import { CONNECT_PAYOUT_SCHEDULED } from "@/lib/job-payout-release";
+import { bankLegAmountCents, PAYROLL_RECEIPT_KEYS } from "@/lib/payroll-withholding";
+import { getPayoutScheduleConfig } from "@/lib/payroll-withholding-config";
+import { applyPayrollWithholding } from "@/lib/payroll-withholding-run";
 import { getCurrentUserId } from "@/app/actions/interactions/helpers";
 import { recordJobContributionAction } from "@/app/actions/interactions/project-team";
 import { computeVoucherThanksValue } from "@/lib/voucher-valuation";
@@ -383,6 +387,36 @@ async function payAssignee(input: {
     },
   } as NewLedgerEntry);
 
+  // Payroll withholding (org-configured, default OFF — ported from global
+  // 2026-08-05): the member was credited GROSS above; when the paying org has
+  // a withholding rate, the withheld share diverts into the org's
+  // payroll_withholding reserve and the split is stamped on the receipt. The
+  // bank leg (global, via the federation payout hop) pays the stamped NET.
+  // A failed divert stamps NOTHING (gross semantics stay consistent).
+  let payrollStamps: Record<string, number> = {};
+  try {
+    const withholding = await applyPayrollWithholding({
+      orgAgentId: input.groupId,
+      memberAgentId: input.assigneeId,
+      grossCents: input.amountCents,
+      jobId: input.jobId,
+      receiptId: receipt.id,
+    });
+    if (withholding.applied) {
+      payrollStamps = {
+        [PAYROLL_RECEIPT_KEYS.grossCents]: withholding.split.grossCents,
+        [PAYROLL_RECEIPT_KEYS.withheldCents]: withholding.split.withheldCents,
+        [PAYROLL_RECEIPT_KEYS.netCents]: withholding.split.netCents,
+        [PAYROLL_RECEIPT_KEYS.rateBps]: withholding.split.effectiveRateBps,
+      };
+    }
+  } catch (error) {
+    console.error(
+      `[payroll][withholding-failed] job=${input.jobId} receipt=${receipt.id} member=${input.assigneeId}:`,
+      error,
+    );
+  }
+
   // The real-money leg does NOT fire here. Marking a job done records the
   // internal-ledger obligation above (the worker's RIVR balance) and stamps the
   // receipt AWAITING ATTESTATION; a group admin must then attest the payout
@@ -393,6 +427,7 @@ async function payAssignee(input: {
     .set({
       metadata: sql`${resources.metadata} || ${JSON.stringify({
         connectPayoutStatus: CONNECT_PAYOUT_AWAITING_ATTESTATION,
+        ...payrollStamps,
       })}::jsonb`,
       updatedAt: new Date(),
     })
@@ -1076,13 +1111,40 @@ export async function attestJobPayoutAction(jobId: string): Promise<AttestJobPay
       AND metadata->>'jobId' = ${jobId}
   `)) as unknown as Array<{ id: string; owner_id: string; metadata: Record<string, unknown> }>;
 
+  // Org payout schedule (ported from global 2026-08-05): 'manual' (default)
+  // releases now; any other cadence parks attested receipts `scheduled` for
+  // the payday cron (/api/cron/payroll-release).
+  const schedule = await getPayoutScheduleConfig(job.ownerId);
+
   const entries: AttestPayoutEntry[] = [];
+  let scheduledCount = 0;
   for (const row of receiptRows) {
     const meta = row.metadata ?? {};
     const currentStatus = meta.connectPayoutStatus as ConnectPayoutStatus | undefined;
     // Skip already-paid receipts and any not in a releasable state.
     if (currentStatus && !RELEASABLE_PAYOUT_STATUSES.has(currentStatus)) continue;
-    const amountCents = typeof meta.amountCents === "number" ? meta.amountCents : 0;
+
+    if (schedule.cadence !== "manual") {
+      await db
+        .update(resources)
+        .set({
+          metadata: sql`${resources.metadata} || ${JSON.stringify({
+            connectPayoutStatus: CONNECT_PAYOUT_SCHEDULED,
+            payoutScheduledBy: userId,
+            payoutScheduledAt: new Date().toISOString(),
+            payoutScheduleCadence: schedule.cadence,
+          })}::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(eq(resources.id, row.id));
+      scheduledCount += 1;
+      continue;
+    }
+
+    // Bank leg pays the payroll-withheld NET when stamps exist (the single
+    // bankLegAmountCents resolver), else the receipt amount — same contract
+    // as global's release core.
+    const amountCents = bankLegAmountCents(meta);
     if (amountCents <= 0) continue;
 
     const result = await settleConnectPayout({
@@ -1121,6 +1183,14 @@ export async function attestJobPayoutAction(jobId: string): Promise<AttestJobPay
       transferId: result.transferId,
       detail: result.detail,
     });
+  }
+
+  if (scheduledCount > 0) {
+    return {
+      success: true,
+      message: `${scheduledCount} payout${scheduledCount === 1 ? "" : "s"} attested and scheduled for the organization's ${schedule.cadence} payout run.`,
+      entries: [],
+    };
   }
 
   const paid = entries.filter((e) => e.status === "paid").length;

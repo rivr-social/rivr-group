@@ -108,7 +108,9 @@ export async function canManageWalletOwner(currentUserId: string, ownerId: strin
 export async function resolveManagedWalletTarget(currentUserId: string, ownerId?: string): Promise<{
   ownerId: string;
   walletId: string;
-  walletType: 'personal' | 'group' | 'project';
+  /** Settlement wallets are only ever personal/group/project; the wider enum
+   * (payroll_withholding etc.) exists for reserve wallets that never settle. */
+  walletType: 'personal' | 'group' | 'project' | 'payroll_withholding';
   email: string | null;
   name: string;
 }> {

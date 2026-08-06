@@ -105,6 +105,27 @@ Each attempt records one of six verdicts on the receipt:
 best-effort — it never throws, so a slow global can never break a job payout.
 **GLOBAL holds every connected account; this instance holds none.**
 
+## Payroll withholding & payout schedules (org setting)
+
+Admins get a **Payroll withholding & payout schedule** card on the Treasury
+tab:
+
+- **Payroll withholding** — set a rate (up to 50%) and that share of every
+  member job payout is held back into the group's own withholding reserve at
+  pay time. The member's balance and their bank transfer both receive the
+  **net**; the payment stub records gross, withheld, and net. The reserve
+  belongs to the group — releasing or remitting it is the group's
+  responsibility, and RIVR never remits it. Whether this is true payroll
+  withholding or a contractor-style reserve depends on your relationship with
+  your members — ask your advisor.
+- **Payout schedule** — by default, attesting a payout releases the bank
+  transfer immediately. Pick a daily, weekly, or monthly cadence and attested
+  payouts park until payday, then release as a batch. Attestation stays the
+  human authorization either way.
+
+Off by default; a group that never touches the card behaves exactly as
+before.
+
 ## How to use the group treasury
 
 1. Open the group page and choose the **Treasury** tab

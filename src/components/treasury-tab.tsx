@@ -32,6 +32,7 @@ import {
   getGroupWalletAction,
 } from "@/app/actions/wallet"
 import type { TreasuryLedgerEntry, TreasuryTypeTotal } from "@/app/actions/wallet"
+import { PayrollSettingsCard } from "@/components/payroll-settings-card"
 import { TreasuryPaymentsCard } from "@/components/treasury-payments-card"
 import { SubgroupBankingCard } from "@/components/subgroup-banking-card"
 import { TreasuryFundsCard } from "@/components/treasury-funds-card"
@@ -330,6 +331,8 @@ export function TreasuryTab({ groupId, canManageStripe = false }: TreasuryTabPro
         canManage={canManageStripe}
         onBalancesChanged={fetchWalletData}
       />
+
+      {canManageStripe && <PayrollSettingsCard groupId={groupId} />}
 
       {canManageStripe && <SubgroupBankingCard groupId={groupId} onBalancesChanged={fetchWalletData} />}
 

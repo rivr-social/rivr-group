@@ -17,6 +17,7 @@ import { getGlobalUrl } from '@/lib/federation/global-url';
 /** Verdict of a connect-payout attempt, recorded on the payout receipt. */
 export type ConnectPayoutStatus =
   | 'awaiting_attestation' // job marked done; a group admin must attest to release the real payout
+  | 'scheduled' // attested, parked until the org's payday (lib/job-payout-release.ts)
   | 'paid' // global settled a real Stripe transfer to the payee's connected account
   | 'disabled' // a required Global/payout feature flag is off
   | 'needs_onboarding' // payee has a connected account on global but it can't receive transfers yet

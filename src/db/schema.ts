@@ -1251,7 +1251,13 @@ export const groupMembershipSubscriptionsRelations = relations(
 /**
  * Wallet enums
  */
-export const walletTypeEnum = pgEnum('wallet_type', ['personal', 'group', 'project']);
+export const walletTypeEnum = pgEnum('wallet_type', [
+  'personal',
+  'group',
+  'project',
+  // ORG-owned payroll-withholding reserve (lib/payroll-withholding-run.ts).
+  'payroll_withholding',
+]);
 
 export const walletTransactionTypeEnum = pgEnum('wallet_transaction_type', [
   'stripe_deposit',
@@ -1269,6 +1275,9 @@ export const walletTransactionTypeEnum = pgEnum('wallet_transaction_type', [
   'connect_payout',
   'project_expense',
   'project_distribution',
+  // Org payroll-withholding divert: member settlement wallet → the org's
+  // payroll_withholding reserve wallet (lib/payroll-withholding-run.ts).
+  'payroll_withholding',
 ]);
 
 export const capitalEntrySettlementStatusEnum = pgEnum('capital_entry_settlement_status', [

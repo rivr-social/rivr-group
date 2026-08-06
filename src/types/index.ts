@@ -784,7 +784,7 @@ export interface WalletBalance {
   walletId: string
   ownerId: string
   ownerName: string
-  type: "personal" | "group" | "project"
+  type: "personal" | "group" | "project" | "payroll_withholding"
   balanceCents: number
   balanceDollars: number
   currency: string
