@@ -86,6 +86,19 @@ export interface EntityStatusResponse {
   error?: string;
 }
 
+/**
+ * Both entity classes are uuid-keyed in every repo's schema, and both halves of
+ * this lane hand ids straight to a uuid column. A non-uuid id is therefore not
+ * "not found" — it is a query that would abort the whole batch with a Postgres
+ * cast error, so it is dropped at the boundary instead.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True when `value` can be handed to a uuid-typed column. */
+export function isEntityStatusId(value: unknown): value is string {
+  return typeof value === 'string' && UUID_PATTERN.test(value.trim());
+}
+
 /** Normalizes/validates a request body into the queries the receiver will answer. */
 export function parseEntityStatusRequest(body: unknown): {
   entities: EntityStatusQuery[];
@@ -110,7 +123,7 @@ export function parseEntityStatusRequest(body: unknown): {
     if (!item || typeof item !== 'object') continue;
     const entityType = (item as { entityType?: unknown }).entityType;
     const id = (item as { id?: unknown }).id;
-    if (typeof id !== 'string' || !id.trim()) continue;
+    if (!isEntityStatusId(id)) continue;
     if (!(ENTITY_STATUS_ENTITY_TYPES as readonly unknown[]).includes(entityType)) continue;
     const key = `${entityType as string}:${id.trim()}`;
     if (seen.has(key)) continue;
