@@ -69,6 +69,8 @@ import {
 } from '@/lib/google/calendar';
 import { googleEventToResourcePatch } from '@/lib/google/calendar-mapper';
 import { persistSyncRow } from '@/lib/google/calendar-sync';
+import { emitDomainEvent, EVENT_TYPES } from '@/lib/federation/index';
+import { buildRevocationPayload } from '@/lib/federation/revocation-contract';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -437,6 +439,23 @@ async function applyExistingMapping(
       .update(resources)
       .set({ deletedAt: new Date(), updatedAt: new Date() })
       .where(eq(resources.id, existing.resourceId));
+    // A cancellation that arrives from Google is still a DELETE of federated
+    // content: without this emit, instances holding a projection of the event
+    // kept a live card whose home answers "not found" (revocation-contract.ts).
+    emitDomainEvent({
+      eventType: EVENT_TYPES.RESOURCE_DELETED,
+      entityType: 'resource',
+      entityId: existing.resourceId,
+      // The admin who authorized the calendar link is the accountable actor
+      // for anything that link does on the group's behalf.
+      actorId: connection.connectedByUserId,
+      payload: buildRevocationPayload({
+        id: existing.resourceId,
+        entityType: 'resource',
+        resourceType: 'event',
+        reason: 'cancelled',
+      }) as unknown as Record<string, unknown>,
+    }).catch(() => {});
     await persistSyncRow({
       resourceId: existing.resourceId,
       calendarId,
