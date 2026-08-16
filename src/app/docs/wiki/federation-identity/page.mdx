@@ -177,7 +177,7 @@ The complete `src/app/api/federation` route set:
 | `/api/federation/remote-auth`, `/remote-session` | remote-viewer sessions |
 | `/api/federation/remote-assertion/issue`, `/verify` | signed actor assertions |
 | `/api/federation/status`, `/node-status` | health |
-| `/api/federation/bootstrap-owner` | instance owner bootstrap |
+| `/api/federation/bootstrap-owner` | first-run owner claim — operator credential required, and refused once the instance already has an owner |
 
 - **Shared contract:** `src/lib/federation/mutation-contract.ts`
   (`INTERACTION_MUTATION_TYPES`, `LEGACY_MUTATION_ALIASES`,
