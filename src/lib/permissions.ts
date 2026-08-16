@@ -1201,11 +1201,21 @@ async function evaluateAbacPolicies(
 
   if (!policies || (policies as unknown[]).length === 0) return null;
 
-  // Fetch the actor's attributes (from agent metadata and hierarchy)
+  // Fetch the actor's attributes (from agent metadata and hierarchy).
+  //
+  // XGC-SEC-006 (2026-08-15): an absent actor row — anonymous, deleted, or a
+  // remote identity with no local mapping — used to return `null` here, which
+  // `check()` reads as "no policy applies", so an explicit DENY policy could
+  // never fire against an anonymous reader while it restricted every signed-in
+  // one. The deny-precedence contract is advertised unconditionally, so it must
+  // hold for the weakest caller too. When the actor cannot be fetched we now
+  // evaluate DENY policies against an EMPTY attribute map (a condition-free or
+  // negative-operator deny still bites) and refuse to evaluate ALLOW policies
+  // at all — an unidentified caller can never satisfy an allow.
   const actor = await fetchAgent(actorId);
-  if (!actor) return null;
-
-  const actorAttributes = buildActorAttributes(actor);
+  const actorAttributes = actor
+    ? buildActorAttributes(actor)
+    : new Map<string, string | string[]>();
 
   // Authority-provenanced subset of the actor's attributes: only those keyed on
   // columns the actor cannot self-write. An ALLOW policy that grants an elevated
@@ -1227,6 +1237,10 @@ async function evaluateAbacPolicies(
     if (!policy.allowedActions.includes(verb)) continue;
 
     const effect = policy.effect === "deny" ? "deny" : "allow";
+
+    // No resolvable actor: deny policies still evaluate (against the empty
+    // attribute map above); allow policies are skipped outright. Fails closed.
+    if (!actor && effect === "allow") continue;
 
     // For an ALLOW policy conferring an elevated (mutating/authority) action,
     // only authority-provenanced attributes are trusted — self-asserted metadata

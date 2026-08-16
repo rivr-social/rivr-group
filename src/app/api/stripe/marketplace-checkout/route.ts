@@ -65,6 +65,17 @@ function getQuantityRemaining(metadata: Record<string, unknown>): number | null 
   return null;
 }
 
+/** Listing kinds whose unit price is per HOUR, i.e. the only kinds a non-1
+ * `hours` multiplier may legitimately apply to. Mirrors the client, which sends
+ * `hours` only for `type === "service"` (`marketplace/[id]/purchase/purchase-client.tsx`). */
+const HOURLY_LISTING_TYPES = new Set(['service']);
+
+/** True when the listing's own metadata declares it an hourly/service offering. */
+function isHourlyListing(listingMeta: Record<string, unknown>): boolean {
+  const listingType = typeof listingMeta.listingType === 'string' ? listingMeta.listingType.trim().toLowerCase() : '';
+  return HOURLY_LISTING_TYPES.has(listingType);
+}
+
 /**
  * POST handler to create a Stripe Checkout Session for a marketplace purchase.
  *
@@ -152,6 +163,19 @@ export async function POST(request: NextRequest) {
   if (quantity < 1 || !Number.isInteger(quantity)) {
     return NextResponse.json(
       { error: 'quantity must be a positive integer' },
+      { status: STATUS_BAD_REQUEST },
+    );
+  }
+
+  // `hours` multiplies the seller price exactly like `quantity` does, so it
+  // needs the SAME guard (finding GRP-SEC-002). Unvalidated, a fractional value
+  // (`hours: 0.01`) bought a $100 listing for $1 — the tampered base flowed all
+  // the way through the obligation record, so the settlement receiver's
+  // subtotal-equality check agreed with it. Whether the listing is even hourly
+  // is re-checked server-side below, once the listing metadata is loaded.
+  if (hours < 1 || !Number.isInteger(hours)) {
+    return NextResponse.json(
+      { error: 'hours must be a positive integer' },
       { status: STATUS_BAD_REQUEST },
     );
   }
@@ -246,6 +270,16 @@ export async function POST(request: NextRequest) {
       typeof dealPostId === 'string' && dealPostId.length > 0
         ? await resolvePostOfferingDeal(dealPostId, listingId)
         : null;
+    // Only an hourly/service offering may bill more than a single unit of time.
+    // Anything else is a fixed-price item, so a non-1 `hours` would silently
+    // multiply (or, before the integer guard above, divide) its price.
+    if (hours !== 1 && !isHourlyListing(listingMeta)) {
+      return NextResponse.json(
+        { error: 'hours is only valid for hourly service listings' },
+        { status: STATUS_BAD_REQUEST },
+      );
+    }
+
     const unitPriceCents = deal?.dealPriceCents ?? listingUnitPriceCents;
     const sellerPriceCents = unitPriceCents * quantity * hours;
     const marketplaceFeePolicy = await resolveMarketplaceFeePolicy({
