@@ -78,6 +78,25 @@ export class UpdateFacade {
     }
   }
 
+
+  /**
+   * Execute a RESOURCE-ANCHORED mutation locally, without owner routing.
+   *
+   * Authority for an UPDATE/DELETE of an EXISTING resource follows the
+   * RESOURCE's home, not the owner agent's. The caller has already
+   * established that the resource row is native to this instance (no
+   * `metadata.externalEntityId` mirror marker), so this instance is its
+   * single source of truth and the mutation must run here — `execute()`
+   * would re-resolve the OWNER's home and forward a sovereign-merged
+   * member's native edit to an instance that has no such resource, which
+   * answers FORBIDDEN (defect fixed on rivr-global 2026-08-24; same class
+   * here). Peers learn of the mutation from the RESOURCE_UPDATED /
+   * RESOURCE_DELETED domain events the action emits afterwards.
+   */
+  async executeResourceAnchored<R>(localExecutor: () => Promise<R>): Promise<MutationResult<R>> {
+    return this.executeLocally(localExecutor);
+  }
+
   private async executeLocally<R>(localExecutor: () => Promise<R>): Promise<MutationResult<R>> {
     try {
       const data = await localExecutor();

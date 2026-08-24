@@ -116,14 +116,10 @@ export async function updateResource(input: UpdateResourceInput): Promise<Action
   const verifiedResource = permission.resource!;
 
   // Update + audit entry stay in one transaction so history matches state.
-  const updateTargetAgentId = nextOwnerId;
-  const updateFacadeResult = await updateFacade.execute(
-    {
-      type: "updateResource",
-      actorId: userId,
-      targetAgentId: updateTargetAgentId,
-      payload: input,
-    },
+  // RESOURCE-ANCHORED: the cross-instance branch above already forwarded
+  // mirrors / no-local-row cases; a native row must execute here. `execute()`
+  // would owner-route it (see executeResourceAnchored).
+  const updateFacadeResult = await updateFacade.executeResourceAnchored(
     async () => {
       await db.transaction(async (tx) => {
         await tx
@@ -338,14 +334,23 @@ export async function deleteResource(resourceId: string): Promise<ActionResult> 
   // the entity-map-normalized actor, soft-deletes, and emits RESOURCE_DELETED.
   // On confirmed success the local mirror is retired immediately so this
   // viewer's surfaces update without waiting for the returning event.
+  // RESOURCE-ANCHORED: a remote-homed OWNER does not make this row a mirror. A
+  // sovereign-merged member authoring natively on this instance owns rows that
+  // are homed HERE; forwarding their delete to the owner's home instance sent
+  // it to a graph with no such resource, which returned FORBIDDEN (same defect
+  // class fixed on rivr-global, 2026-08-24). Only a row that carries
+  // `metadata.externalEntityId` — the mirror marker this branch already uses to
+  // key the home-side row — is actually a mirror; everything else deletes
+  // locally below and federates via RESOURCE_DELETED.
   const mirrorOwnerId = permission.resource.ownerId;
-  const mirrorHome = await resolveHomeInstance(mirrorOwnerId).catch(() => null);
+  const mirrorMetadata = (permission.resource.metadata ?? null) as Record<string, unknown> | null;
+  const mirrorExternalId =
+    mirrorMetadata && typeof mirrorMetadata.externalEntityId === "string" && mirrorMetadata.externalEntityId.trim()
+      ? mirrorMetadata.externalEntityId.trim()
+      : null;
+  const mirrorHome = mirrorExternalId ? await resolveHomeInstance(mirrorOwnerId).catch(() => null) : null;
   if (mirrorHome && !mirrorHome.isLocal) {
-    const mirrorMetadata = (permission.resource.metadata ?? null) as Record<string, unknown> | null;
-    const homeResourceId =
-      mirrorMetadata && typeof mirrorMetadata.externalEntityId === "string" && mirrorMetadata.externalEntityId.trim()
-        ? mirrorMetadata.externalEntityId.trim()
-        : resourceId;
+    const homeResourceId = mirrorExternalId ?? resourceId;
     const routedDelete = await routeWrite<{ resourceId: string }, ActionResult>(
       {
         type: "deleteResource",
@@ -369,14 +374,9 @@ export async function deleteResource(resourceId: string): Promise<ActionResult> 
   }
 
   const verifiedDeleteResource = permission.resource!;
-  const deleteTargetAgentId = verifiedDeleteResource.ownerId;
-  const deleteFacadeResult = await updateFacade.execute(
-    {
-      type: "deleteResource",
-      actorId: userId,
-      targetAgentId: deleteTargetAgentId,
-      payload: { resourceId },
-    },
+  // RESOURCE-ANCHORED: mirrors were forwarded above; a native row deletes
+  // here. `execute()` would owner-route it (see executeResourceAnchored).
+  const deleteFacadeResult = await updateFacade.executeResourceAnchored(
     async () => {
       const [hasReceiptHistory] = await db
         .select({ id: resources.id })
